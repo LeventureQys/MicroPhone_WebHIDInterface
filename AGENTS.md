@@ -4,7 +4,7 @@
 
 ## Workspace
 
-- 根：`D:\WorkShop\MicroPhone_WebHIDInterface`（git 仓库，remote `origin` = LeventureQys/MicroPhone_WebHIDInterface，`main` 当前无提交）
+- 根：`D:\WorkShop\MicroPhone_WebHIDInterface`（git 仓库，remote `origin` = LeventureQys/MicroPhone_WebHIDInterface，`main` 已建初始提交并跟踪 `origin/main`）
 - 版本工作目录：`Document/Update/Alpha/v1.0.0/`（需求 / 问题清单 / 设计 / 开发文档 / 验收文档 / 报告）
 - 代码目录：`src/`（main / preload / renderer / shared）、`tests/unit/`、`scripts/`
 - 产物目录：`out/`（构建）、`release/`（打包）、`artifacts/`（截图与日志）、`.userdata/`（运行数据）
@@ -277,6 +277,19 @@ Fix：用绝对路径 `C:\Program Files\Git\cmd\git.exe`；需要 `git` 在 PATH
 `gpu_process_host.cc(976) GPU process launch failed: error_code=18` → `FATAL:gpu_data_manager_impl_private.cc(423) GPU process isn't usable. Goodbye.`（退出码 `2147483651`）。
 根因：本机沙箱下 Electron 子进程拉起受限，与 `--no-sandbox` 同源（截图脚本一直带该参数所以没暴露）。
 Fix：把参数透传给 Electron：`& $node $pnpm run dev -- --no-sandbox`（实测渲染进程正常启动 `[vite] connected` / `[boot] renderer ready`）。仅本机开发需要，代码里不要写死。
+
+### 19. `git push` 连不上 `github.com:443`
+症状：`fatal: unable to access 'https://github.com/...': Failed to connect to github.com:443 after 21104 ms`；但 `curl https://api.github.com/...` 正常，`git ls-remote` 时好时坏。
+根因：本机 DNS 解析出的 github.com 边缘 IP（如 `20.205.243.166`）不通；同名其他边缘 IP 可用（实测 `140.82.112.3` 稳定，`140.82.113/114/200/4.237.*` 能连通但慢）。
+Fix（已实测）：把域名钉到可用边缘 IP 再推，HTTP/1.1 更稳：
+```powershell
+& $git -c http.curloptResolve=github.com:443:140.82.112.3 -c http.version=HTTP/1.1 push -u origin main
+```
+凭据：本机 Windows 凭据管理器里有 target `GitHub - https://api.github.com/LeventureQys`（OAuth token，可访问 api.github.com），GCM 默认不匹配这个 target 会一直要交互。临时注入即可，**不要**把 token 写进 remote URL 或 `.git/config`：
+```powershell
+& $git -c credential.helper= -c credential.helper='!f() { echo username=<user>; echo password=$TOKEN_ENV; }; f' push ...
+```
+验证：`git ls-remote origin refs/heads/main` 的 sha 与 `git rev-parse HEAD` 一致。
 
 ## Domain constants
 
