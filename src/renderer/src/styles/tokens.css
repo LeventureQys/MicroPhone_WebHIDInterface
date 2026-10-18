@@ -1,0 +1,42 @@
+:root {
+  --bg: #0e1118;
+  --panel: #171c26;
+  --panel-2: #1d2430;
+  --panel-3: #101721;
+  --border: #323947;
+  --border-soft: #2b3240;
+  --accent: #f0a65b;
+  --accent-strong: #f4aa5f;
+  --accent-dim: #503c30;
+  --text: #e7ebf2;
+  --text-dim: #b8c5d3;
+  --muted: #8592a7;
+  --ok: #86c7a5;
+  --warn: #e0a45e;
+  --danger: #f69a9a;
+  --curve: #f0a030;
+
+  --font-ui: system-ui, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif;
+  --font-mono: ui-monospace, 'Cascadia Mono', Consolas, monospace;
+
+  --fs-11: 11px;
+  --fs-12: 12px;
+  --fs-13: 13px;
+  --fs-16: 16px;
+  --fs-22: 22px;
+  --fs-34: 34px;
+
+  --radius-4: 4px;
+  --radius-6: 6px;
+  --radius-8: 8px;
+
+  --space-4: 4px;
+  --space-8: 8px;
+  --space-12: 12px;
+  --space-16: 16px;
+  --space-20: 20px;
+  --space-24: 24px;
+
+  --topbar-h: 64px;
+  --navrail-w: 84px;
+}

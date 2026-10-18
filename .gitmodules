@@ -1,0 +1,3 @@
+[submodule "third_party/web_hid_utils"]
+	path = third_party/web_hid_utils
+	url = https://github.com/LeventureQys/web_hid_utils.git
