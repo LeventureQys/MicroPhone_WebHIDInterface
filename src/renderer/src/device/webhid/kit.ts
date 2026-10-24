@@ -13,7 +13,7 @@ import {
   isNativeWebHidAvailable,
   requestNativeHidDevice,
 } from '@webhid-kit';
-import type { WebHidDeviceHandle, WebHidKit, WebHidKitBridge } from './types';
+import type { WebHidDeviceHandle, WebHidKit, WebHidKitBridge, WebHidUsageFilter } from './types';
 
 export function createWebHidKit(): WebHidKit {
   return {
@@ -33,6 +33,11 @@ export function createWebHidKit(): WebHidKit {
 
     nativeAvailable: () => isNativeWebHidAvailable(),
     nativeDevices: () => getNativeDevices() as Promise<WebHidDeviceHandle[]>,
-    requestNativeDevice: () => requestNativeHidDevice() as Promise<WebHidDeviceHandle[]>,
+    // 上游 native.js:98 的签名是 requestNativeDevice({ filters, exclusionFilters } = {})；
+    // filters 为空时退回不带参调用，保持与改动前逐字一致的行为
+    requestNativeDevice: (filters?: readonly WebHidUsageFilter[]) =>
+      requestNativeHidDevice(
+        filters && filters.length > 0 ? { filters: filters.map((item) => ({ ...item })) } : undefined,
+      ) as Promise<WebHidDeviceHandle[]>,
   };
 }

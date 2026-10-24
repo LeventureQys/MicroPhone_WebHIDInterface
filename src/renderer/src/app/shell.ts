@@ -1,81 +1,131 @@
 import type { AppStore } from '../domain/state';
-import { createRouter, type RouteId, type Router } from './router';
-import { createNavRail } from '../ui/navrail';
+import { t } from '../i18n';
+import { openModal, type ModalHandle } from '../ui/modal';
 import { createTopbar } from '../ui/topbar';
+
+export type PanelId = 'advanced' | 'device' | 'firmware' | 'settings';
+
+export interface ShellApi {
+  openAdvanced: () => void;
+  openDevice: () => void;
+  openFirmware: () => void;
+  openSettings: () => void;
+}
 
 export interface ShellOptions {
   store: AppStore;
-  views: Record<RouteId, () => HTMLElement>;
+  mock?: boolean;
+  /** 一屏工作台：所有主要逻辑都在这里 */
+  console: (api: ShellApi) => HTMLElement;
+  advanced: () => HTMLElement;
+  device: () => HTMLElement;
+  firmware: () => HTMLElement;
+  settings: () => HTMLElement;
 }
 
 export interface Shell {
   root: HTMLElement;
-  router: Router;
+  openPanel: (id: PanelId) => void;
+  closePanel: () => void;
 }
 
-type Disposable = HTMLElement & { destroy?: () => void };
-
-function disposeChildren(host: HTMLElement): void {
-  for (const child of Array.from(host.children)) {
-    (child as Disposable).destroy?.();
-  }
-}
+const PANEL_META: Record<PanelId, { title: string; subtitle: string; size: 'narrow' | 'medium' | 'wide' }> = {
+  advanced: { title: 'advanced.title', subtitle: 'advanced.desc', size: 'wide' },
+  device: { title: 'device.modalTitle', subtitle: 'device.subtitle', size: 'medium' },
+  firmware: { title: 'fw.title', subtitle: 'fw.subtitle', size: 'wide' },
+  settings: { title: 'settings.title', subtitle: 'settings.subtitle', size: 'medium' },
+};
 
 export function createShell(opts: ShellOptions): Shell {
   const root = document.createElement('div');
   root.className = 'app-shell';
 
-  const topbar = document.createElement('header');
-  topbar.className = 'topbar';
-  topbar.id = 'topbar';
+  const topbarHost = document.createElement('header');
+  topbarHost.className = 'topbar';
 
-  const body = document.createElement('div');
-  body.className = 'app-body';
+  const consoleHost = document.createElement('main');
+  consoleHost.className = 'console-host';
 
-  const navrail = document.createElement('nav');
-  navrail.className = 'navrail';
-  navrail.id = 'navrail';
+  root.append(topbarHost, consoleHost);
 
-  const content = document.createElement('main');
-  content.className = 'content';
-  content.id = 'view-root';
+  let panel: ModalHandle | null = null;
 
-  body.append(navrail, content);
-  root.append(topbar, body);
+  const closePanel = (): void => {
+    panel?.close();
+    panel = null;
+  };
+
+  const panelContent: Record<PanelId, () => HTMLElement> = {
+    advanced: opts.advanced,
+    device: opts.device,
+    firmware: opts.firmware,
+    settings: opts.settings,
+  };
+
+  const openPanel = (id: PanelId): void => {
+    closePanel();
+    const meta = PANEL_META[id];
+    panel = openModal({
+      title: t(meta.title),
+      subtitle: t(meta.subtitle),
+      size: meta.size,
+      content: panelContent[id](),
+    });
+  };
+
+  const api: ShellApi = {
+    openAdvanced: () => openPanel('advanced'),
+    openDevice: () => openPanel('device'),
+    openFirmware: () => openPanel('firmware'),
+    openSettings: () => openPanel('settings'),
+  };
+
+  const disposeChildren = (host: HTMLElement): void => {
+    for (const child of Array.from(host.children)) {
+      (child as HTMLElement & { destroy?: () => void }).destroy?.();
+    }
+  };
+
+  let currentConsole: HTMLElement | null = null;
+
+  const mountConsole = (): void => {
+    if (currentConsole) {
+      (currentConsole as HTMLElement & { destroy?: () => void }).destroy?.();
+      currentConsole.remove();
+    }
+    currentConsole = opts.console(api);
+    consoleHost.replaceChildren(currentConsole);
+  };
 
   const mountChrome = (): void => {
-    disposeChildren(topbar);
-    disposeChildren(navrail);
-    topbar.replaceChildren(createTopbar({ store: opts.store }));
-    navrail.replaceChildren(createNavRail({ store: opts.store }));
+    disposeChildren(topbarHost);
+    topbarHost.replaceChildren(
+      createTopbar({
+        store: opts.store,
+        mock: opts.mock,
+        onAdvanced: api.openAdvanced,
+        onDevice: api.openDevice,
+        onSettings: api.openSettings,
+      }),
+    );
   };
 
   mountChrome();
-
-  const router = createRouter({
-    mount: content,
-    store: opts.store,
-    views: opts.views,
-  });
+  mountConsole();
 
   let lastLang = opts.store.get().lang;
   opts.store.onChange((state) => {
-    if (state.lang !== lastLang) {
-      lastLang = state.lang;
-      // 语言变化需要重建顶栏、导轨与当前视图（文案由 t() 在构建时求值）
-      mountChrome();
-      router.reload();
-      return;
-    }
-    if (state.module !== router.current()) {
-      router.go(state.module as RouteId);
-    }
+    if (state.lang === lastLang) return;
+    lastLang = state.lang;
+    // 文案在构建时求值：重建顶栏与工作台，并关掉正在看的抽屉
+    closePanel();
+    mountChrome();
+    mountConsole();
   });
 
-  (root as Disposable).destroy = () => {
-    disposeChildren(topbar);
-    disposeChildren(navrail);
+  return {
+    root,
+    openPanel,
+    closePanel,
   };
-
-  return { root, router };
 }

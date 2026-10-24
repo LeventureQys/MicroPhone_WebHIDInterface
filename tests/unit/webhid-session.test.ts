@@ -206,6 +206,29 @@ describe('WebHidSession', () => {
     expect(session.getState().error).toBeNull();
   });
 
+  it('passes the usage filters through to the native picker', async () => {
+    const granted = new FakeHidDevice({ productName: 'Mic 9000', vendorId: 0x046d, productId: 0x0a01 });
+    const kit = new FakeKit({ nativeAvailable: true, nativeDevices: [], requestResult: [granted] });
+    const session = sessionWith(kit);
+    await session.connect('native');
+
+    const filters = [{ usagePage: 0xff01, usage: 0x01 }];
+    await session.requestNativeDevice(filters);
+
+    // Electron 33 的 HIDDevice 没有 collections，usage 过滤只能在渲染进程这一层做（R-9）
+    expect(kit.requestedFilters).toEqual([filters]);
+    expect(session.getState().devices).toHaveLength(1);
+  });
+
+  it('exposes device handles by summary id', async () => {
+    const device = new FakeHidDevice({ deviceId: 'vdevice' });
+    const session = sessionWith(new FakeKit({ devices: [device] }));
+    await session.connect('virtual');
+
+    expect(session.handleOf('vdevice')).toBe(device);
+    expect(session.handleOf('missing')).toBeNull();
+  });
+
   it('normalises the bridge URL and ignores blanks', () => {
     const session = sessionWith(new FakeKit());
 

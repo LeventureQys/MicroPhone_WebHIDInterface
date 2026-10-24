@@ -16,13 +16,13 @@ describe('value rules', () => {
   });
 
   it('clamps out-of-range input', () => {
-    expect(quantize(must('gain.Mic'), 999)).toBe(36);
-    expect(quantize(must('gain.Mic'), -999)).toBe(-27);
+    expect(quantize(must('gain.Mic'), 999)).toBe(100);
+    expect(quantize(must('gain.Mic'), -999)).toBe(0);
   });
 
   it('falls back to the default for non-finite input', () => {
-    expect(clampValue(must('gain.Mic'), Number.NaN)).toBe(5);
-    expect(clampValue(must('gain.Mic'), Number.POSITIVE_INFINITY)).toBe(36);
+    expect(clampValue(must('gain.Mic'), Number.NaN)).toBe(100);
+    expect(clampValue(must('gain.Mic'), Number.POSITIVE_INFINITY)).toBe(100);
   });
 
   it('formats without trailing zeros', () => {
@@ -37,28 +37,35 @@ describe('value rules', () => {
     expect(parseInput(must('comp.Rate'), '')).toBeNull();
     expect(parseInput(must('comp.Rate'), 'abc')).toBeNull();
     expect(parseInput(must('drc3.low.preGain'), '3.21')).toBe(3.21);
-    expect(parseInput(must('gain.Mic'), '500')).toBe(36);
+    expect(parseInput(must('gain.Mic'), '500')).toBe(100);
   });
 });
 
 describe('default bands', () => {
-  it('has 14 flat bands', () => {
+  it('has 14 bands with the register table defaults up front', () => {
     expect(DEFAULT_BANDS).toHaveLength(14);
+    // 前 7 段来自寄存器表（HPF 50 Hz / LPF 20 kHz / 第 3 段 −3.5 dB），后 7 段保持本地平直默认
+    expect(DEFAULT_BANDS.slice(0, 7).map((band) => band.type)).toEqual([4, 3, 0, 0, 0, 0, 0]);
+    expect(DEFAULT_BANDS.slice(0, 7).map((band) => band.freq)).toEqual([
+      50, 20000, 215, 1000, 2000, 5000, 10000,
+    ]);
+    expect(DEFAULT_BANDS.slice(7).map((band) => band.type)).toEqual([0, 0, 0, 0, 0, 0, 0]);
     for (const band of DEFAULT_BANDS) {
-      expect(band.gain).toBe(0);
-      expect(band.q).toBe(0.7);
-      expect(band.type).toBe(0);
+      expect(band.gain).toBeGreaterThanOrEqual(-32);
+      expect(band.gain).toBeLessThanOrEqual(12);
+      expect(band.q).toBeGreaterThanOrEqual(0.1);
+      expect(band.q).toBeLessThanOrEqual(12);
       expect(band.freq).toBeGreaterThanOrEqual(20);
       expect(band.freq).toBeLessThanOrEqual(20000);
     }
   });
 
-  it('spreads the editable bands logarithmically over the audio range', () => {
+  it('spreads the editable bands over the audio range', () => {
     const editable = DEFAULT_BANDS.slice(0, 7).map((band) => band.freq);
-    expect(editable[0]).toBe(20);
-    expect(editable[6]).toBe(20000);
+    expect(editable[0]).toBe(50);
+    expect(editable[6]).toBe(10000);
     for (let i = 1; i < editable.length; i += 1) {
-      expect(editable[i]).toBeGreaterThan(editable[i - 1]);
+      expect(editable[i]).not.toBe(editable[i - 1]);
     }
   });
 });

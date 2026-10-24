@@ -1,88 +1,127 @@
+import type { RegisterRegion, RegisterScale } from '../device/registers';
+import { defaultOf, findRegister } from '../device/registers';
+
 export type ModuleId = 'gain' | 'noisegate' | 'comp' | 'limit' | 'eq' | 'enc' | 'drc3';
 
 export type ParamUnit = 'dB' | 'Hz' | 'ms' | 's' | '';
 
 export interface ParamSpec {
   /** 形如 'noisegate.threshold_db'，全局唯一 */
-  id: string;
-  module: ModuleId;
+  readonly id: string;
+  readonly module: ModuleId;
   /** 协议字段名，原样展示，不翻译成语义标签 */
-  field: string;
-  unit: ParamUnit;
-  min: number;
-  max: number;
-  step: number;
-  default: number;
+  readonly field: string;
+  readonly unit: ParamUnit;
+  readonly min: number;
+  readonly max: number;
+  readonly step: number;
+  /** 工程量默认值，= defaultOf(寄存器) */
+  readonly default: number;
   /** true = 只读展示，不提供控件 */
-  readonly: boolean;
+  readonly readonly: boolean;
+  /** 寄存器地址（真值源：M001参数表V0.1.xlsx） */
+  readonly addr: number;
+  /** 工程量 ↔ 寄存器原始值的标定式 */
+  readonly scale: RegisterScale;
+  /** 所属寄存器区段 */
+  readonly block: RegisterRegion;
 }
 
-function spec(
-  id: string,
-  module: ModuleId,
-  field: string,
-  unit: ParamUnit,
-  min: number,
-  max: number,
-  step: number,
-  def: number,
-  readonly = false,
-): ParamSpec {
-  return { id, module, field, unit, min, max, step, default: def, readonly };
+interface ParamSeed {
+  readonly id: string;
+  readonly module: ModuleId;
+  readonly addr: number;
 }
 
-/** 36 项标量参数，来源 Document/Protocol/效果器参数范围.xlsx */
-export const PARAMS: readonly ParamSpec[] = Object.freeze([
-  spec('gain.Mic', 'gain', 'Mic', 'dB', -27, 36, 1, 5, true),
-  spec('gain.Hp', 'gain', 'Hp', 'dB', -40, 0, 1, 0, true),
+/**
+ * 42 项参数的 id → 地址映射。范围 / 步进 / 单位 / 默认值 / 权限 / 标定全部由
+ * `device/registers.ts` 按地址查表得到，这里不复制任何数值（需求 R2-2）。
+ * 顺序按设计文档 §5.3 定稿表，便于逐行人工比对。
+ */
+const SEEDS: readonly ParamSeed[] = Object.freeze([
+  { id: 'gain.Mic', module: 'gain', addr: 0x2023 },
+  { id: 'gain.Hp', module: 'gain', addr: 0x205a },
+  { id: 'mic.mute', module: 'gain', addr: 0x2022 },
+  { id: 'mic.sigMute', module: 'gain', addr: 0x2058 },
+  { id: 'hp.OnOff', module: 'gain', addr: 0x2059 },
 
-  spec('noisegate.threshold_db', 'noisegate', 'threshold_db', 'dB', -91, 0, 1, -70),
-  spec('noisegate.ratio', 'noisegate', 'ratio', '', 0.05, 0.999, 0.001, 0.333),
-  spec('noisegate.attack_ms', 'noisegate', 'attack_ms', 'ms', 5, 500, 1, 10),
-  spec('noisegate.release_ms', 'noisegate', 'release_ms', 'ms', 5, 500, 1, 200),
-  spec('noisegate.knee_width_db', 'noisegate', 'knee_width_db', 'dB', 6, 12, 1, 12),
-  spec('noisegate.hp_freq', 'noisegate', 'hp_freq', 'Hz', 60, 200, 1, 150),
+  { id: 'enc.OnOff', module: 'enc', addr: 0x2024 },
+  { id: 'enc.Level', module: 'enc', addr: 0x2025 },
 
-  spec('comp.MakeUpGain', 'comp', 'MakeUpGain', 'dB', 0, 60, 0.1, 0),
-  spec('comp.Threshold', 'comp', 'Threshold', 'dB', -60, 0, 0.1, -60),
-  spec('comp.Attack', 'comp', 'Attack', 's', 0.0001, 0.2, 0.0001, 0.0005),
-  spec('comp.Release', 'comp', 'Release', 's', 0.005, 2, 0.0001, 0.1),
-  spec('comp.Rate', 'comp', 'Rate', '', 1, 100, 0.1, 6),
-  spec('comp.KneeWidth', 'comp', 'KneeWidth', 'dB', 0, 60, 0.1, 1),
+  { id: 'eq.mode', module: 'eq', addr: 0x2026 },
 
-  spec('limit.Threshold', 'limit', 'Threshold', 'dB', -60, 0, 0.1, -60),
-  spec('limit.Attack', 'limit', 'Attack', 's', 0.0001, 0.2, 0.0001, 0.0005),
-  spec('limit.Release', 'limit', 'Release', 's', 0.005, 2, 0.0001, 0.05),
+  { id: 'comp.Enable', module: 'comp', addr: 0x204a },
+  { id: 'comp.MakeUpGain', module: 'comp', addr: 0x204b },
+  { id: 'comp.Threshold', module: 'comp', addr: 0x204c },
+  { id: 'comp.Attack', module: 'comp', addr: 0x204d },
+  { id: 'comp.Release', module: 'comp', addr: 0x204e },
+  { id: 'comp.Rate', module: 'comp', addr: 0x204f },
+  { id: 'comp.KneeWidth', module: 'comp', addr: 0x2050 },
 
-  spec('enc.OnOff', 'enc', 'OnOff', '', 0, 1, 1, 0),
-  spec('enc.Level', 'enc', 'Level', '', 0, 3, 1, 1),
+  { id: 'limit.Enable', module: 'limit', addr: 0x2051 },
+  { id: 'limit.Threshold', module: 'limit', addr: 0x2053 },
+  { id: 'limit.Attack', module: 'limit', addr: 0x2054 },
+  { id: 'limit.Release', module: 'limit', addr: 0x2055 },
 
-  spec('drc3.fc1', 'drc3', 'fc1', 'Hz', 50, 10000, 1, 1000),
-  spec('drc3.fc2', 'drc3', 'fc2', 'Hz', 50, 10000, 1, 3000),
+  { id: 'noisegate.threshold_db', module: 'noisegate', addr: 0x205b },
+  { id: 'noisegate.ratio', module: 'noisegate', addr: 0x205c },
+  { id: 'noisegate.attack_ms', module: 'noisegate', addr: 0x205d },
+  { id: 'noisegate.release_ms', module: 'noisegate', addr: 0x205e },
+  { id: 'noisegate.knee_width_db', module: 'noisegate', addr: 0x205f },
+  { id: 'noisegate.hp_freq', module: 'noisegate', addr: 0x2060 },
 
-  spec('drc3.low.preGain', 'drc3', 'preGain', '', 0, 4, 0.01, 1.28),
-  spec('drc3.low.threshold', 'drc3', 'threshold', 'dB', -80, 0, 0.1, 0),
-  spec('drc3.low.attackTime', 'drc3', 'attackTime', 'ms', 1, 400, 1, 10),
-  spec('drc3.low.releaseTime', 'drc3', 'releaseTime', 'ms', 5, 680, 1, 20),
-  spec('drc3.low.ratio', 'drc3', 'ratio', '', 1, 20, 0.1, 10),
-
-  spec('drc3.mid.preGain', 'drc3', 'preGain', '', 0, 4, 0.01, 1.28),
-  spec('drc3.mid.threshold', 'drc3', 'threshold', 'dB', -80, 0, 0.1, 0),
-  spec('drc3.mid.attackTime', 'drc3', 'attackTime', 'ms', 1, 400, 1, 10),
-  spec('drc3.mid.releaseTime', 'drc3', 'releaseTime', 'ms', 5, 680, 1, 20),
-  spec('drc3.mid.ratio', 'drc3', 'ratio', '', 1, 20, 0.1, 10),
-
-  spec('drc3.high.preGain', 'drc3', 'preGain', '', 0, 4, 0.01, 1.28),
-  spec('drc3.high.threshold', 'drc3', 'threshold', 'dB', -80, 0, 0.1, 0),
-  spec('drc3.high.attackTime', 'drc3', 'attackTime', 'ms', 1, 400, 1, 10),
-  spec('drc3.high.releaseTime', 'drc3', 'releaseTime', 'ms', 5, 680, 1, 20),
-  spec('drc3.high.ratio', 'drc3', 'ratio', '', 1, 20, 0.1, 10),
+  { id: 'drc3.fc1', module: 'drc3', addr: 0x2061 },
+  { id: 'drc3.fc2', module: 'drc3', addr: 0x2062 },
+  { id: 'drc3.low.preGain', module: 'drc3', addr: 0x2063 },
+  { id: 'drc3.low.threshold', module: 'drc3', addr: 0x2064 },
+  { id: 'drc3.low.attackTime', module: 'drc3', addr: 0x2065 },
+  { id: 'drc3.low.releaseTime', module: 'drc3', addr: 0x2066 },
+  { id: 'drc3.low.ratio', module: 'drc3', addr: 0x2067 },
+  { id: 'drc3.high.preGain', module: 'drc3', addr: 0x2068 },
+  { id: 'drc3.high.threshold', module: 'drc3', addr: 0x2069 },
+  { id: 'drc3.high.attackTime', module: 'drc3', addr: 0x206a },
+  { id: 'drc3.high.releaseTime', module: 'drc3', addr: 0x206b },
+  { id: 'drc3.high.ratio', module: 'drc3', addr: 0x206c },
+  { id: 'drc3.mid.preGain', module: 'drc3', addr: 0x206d },
+  { id: 'drc3.mid.threshold', module: 'drc3', addr: 0x206e },
+  { id: 'drc3.mid.attackTime', module: 'drc3', addr: 0x206f },
+  { id: 'drc3.mid.releaseTime', module: 'drc3', addr: 0x2070 },
+  { id: 'drc3.mid.ratio', module: 'drc3', addr: 0x2071 },
 ]);
 
+function toParam(seed: ParamSeed): ParamSpec {
+  const register = findRegister(seed.addr);
+  if (!register) {
+    throw new Error(`register 0x${seed.addr.toString(16)} missing for param ${seed.id}`);
+  }
+  return Object.freeze({
+    id: seed.id,
+    module: seed.module,
+    field: seed.id.slice(seed.id.lastIndexOf('.') + 1),
+    unit: register.unit,
+    min: register.min,
+    max: register.max,
+    step: register.step,
+    default: defaultOf(register),
+    readonly: register.access === 'r',
+    addr: register.addr,
+    scale: register.scale,
+    block: register.region,
+  });
+}
+
+/** 42 项标量参数，全部由 `REGISTERS` 派生 */
+export const PARAMS: readonly ParamSpec[] = Object.freeze(SEEDS.map(toParam));
+
 const BY_ID = new Map(PARAMS.map((item) => [item.id, item]));
+const BY_ADDR = new Map(PARAMS.map((item) => [item.addr, item]));
 
 export function findParam(id: string): ParamSpec | undefined {
   return BY_ID.get(id);
+}
+
+export function findParamByAddr(addr: number): ParamSpec | undefined {
+  return BY_ADDR.get(addr);
 }
 
 export function paramsOf(module: ModuleId): readonly ParamSpec[] {

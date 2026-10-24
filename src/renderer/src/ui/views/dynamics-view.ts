@@ -30,10 +30,12 @@ export function createDynamicsView(store: AppStore): HTMLElement {
   grid.append(compCard.root, limitCard.root);
   root.append(grid);
 
-  store.onChange((next) => {
+  const unsubscribe = store.onChange((next) => {
     compFields.sync(next);
     limitFields.sync(next);
   });
+
+  (root as HTMLElement & { destroy?: () => void }).destroy = () => unsubscribe();
 
   return root;
 }

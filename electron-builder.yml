@@ -9,20 +9,23 @@ files:
   - package.json
 asar: true
 win:
+  icon: build/icon.ico
+  requestedExecutionLevel: asInvoker
   target:
-    - target: nsis
-      arch: [x64]
     - target: portable
       arch: [x64]
-  # icon: build/icon.ico   # 品牌图标待提供；缺失时用 Electron 默认图标
+  # nsis 安装包按需单独出（pnpm run dist:installer），默认产物只保留单文件免安装包
+portable:
+  artifactName: ${productName}-${version}-portable.exe
+  requestExecutionLevel: user
 nsis:
   oneClick: false
   perMachine: false
   allowToChangeInstallationDirectory: true
   createDesktopShortcut: true
   shortcutName: MIC STUDIO
-portable:
-  artifactName: ${productName}-${version}-portable.exe
+  installerIcon: build/icon.ico
+  uninstallerIcon: build/icon.ico
 mac:
   target: [dmg]
   category: public.app-category.music

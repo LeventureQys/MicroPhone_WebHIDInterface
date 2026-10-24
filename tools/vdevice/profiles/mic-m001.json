@@ -1,0 +1,16 @@
+{
+  "server": { "host": "127.0.0.1", "port": 8765 },
+  "devices": [
+    {
+      "id": "mic-m001",
+      "description": "MIC M001 vendor HID channel (Usage Page 0xFF01 / Usage 0x01).",
+      "vendorId": 2663,
+      "productId": 16,
+      "productName": "Virtual MIC M001",
+      "serialNumber": "VHID-MIC-M001",
+      "reportDescriptor": "06 01 FF 09 01 A1 01 A1 02 15 80 25 7F 75 08 85 10 95 0F 09 44 81 22 85 11 95 3F 09 45 81 22 85 50 95 0F 09 54 91 22 85 51 95 3F 09 55 91 22 C0 C0",
+      "loopback": "none",
+      "initInput": [{ "reportId": 17, "data": "00" }, { "reportId": 16, "data": "00" }]
+    }
+  ]
+}

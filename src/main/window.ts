@@ -6,10 +6,15 @@ export interface WindowSize {
   height?: number;
 }
 
-export function createMainWindow(size: WindowSize = {}): BrowserWindow {
+export interface WindowOptions extends WindowSize {
+  /** 追加到渲染进程 argv，preload 用它接收主进程掌握的版本/区域信息 */
+  readonly additionalArguments?: readonly string[];
+}
+
+export function createMainWindow(options: WindowOptions = {}): BrowserWindow {
   const win = new BrowserWindow({
-    width: size.width ?? 1280,
-    height: size.height ?? 820,
+    width: options.width ?? 1280,
+    height: options.height ?? 820,
     minWidth: 1100,
     minHeight: 700,
     show: false,
@@ -21,6 +26,7 @@ export function createMainWindow(size: WindowSize = {}): BrowserWindow {
       contextIsolation: true,
       nodeIntegration: false,
       sandbox: true,
+      additionalArguments: [...(options.additionalArguments ?? [])],
     },
   });
 

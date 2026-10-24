@@ -7,6 +7,7 @@ import type {
   WebHidMode,
   WebHidReportSample,
   WebHidSessionState,
+  WebHidUsageFilter,
 } from './types';
 
 /** 状态/设备变化（低频：连接、枚举、开关设备） */
@@ -197,11 +198,17 @@ export class WebHidSession extends EventTarget {
     }
   }
 
-  /** 真机通道：唤起系统设备选择器（Electron 主进程目前直接取消，返回空） */
-  async requestNativeDevice(): Promise<void> {
+  /**
+   * 真机通道：唤起系统设备选择器。
+   *
+   * `filters` 一路透传到 `navigator.hid.requestDevice({ filters })`：Electron 33 的
+   * `HIDDevice` 没有 collections，usage 过滤只能在渲染进程这一层做（设计 R-9 / §9 B13）。
+   * 不传 = 不带过滤（与改动前一致）。Electron 主进程目前仍直接取消授权，返回空。
+   */
+  async requestNativeDevice(filters?: readonly WebHidUsageFilter[]): Promise<void> {
     if (this.#state.mode !== 'native' || this.#state.status !== 'ready') return;
     try {
-      const handles = await this.#kit.requestNativeDevice();
+      const handles = await this.#kit.requestNativeDevice(filters);
       if (handles.length === 0) {
         this.#patch({ error: 'requestDevice resolved with no device', errorCode: 'noSelection' });
         return;
@@ -211,6 +218,15 @@ export class WebHidSession extends EventTarget {
     } catch (error) {
       this.#patch({ error: messageOf(error), errorCode: 'device' });
     }
+  }
+
+  /**
+   * 按摘要 id 取回设备句柄：`getState().devices` 只有摘要（给界面画列表用），
+   * `DeviceLink` 要拿句柄构造 `WebHidTransport`，又不能自己持有句柄表，
+   * 因此由会话提供这个只读出口。找不到返回 null。
+   */
+  handleOf(id: string): WebHidDeviceHandle | null {
+    return this.#handles.get(id)?.handle ?? null;
   }
 
   async openDevice(id: string): Promise<void> {

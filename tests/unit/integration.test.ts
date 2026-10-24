@@ -1,10 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { createShell } from '../../src/renderer/src/app/shell';
-import type { RouteId } from '../../src/renderer/src/app/router';
 import { MockTransport } from '../../src/renderer/src/device/mock-transport';
 import { AppStore } from '../../src/renderer/src/domain/state';
-
-const ROUTES: RouteId[] = ['meter', 'input', 'eq', 'dynamics', 'drc', 'device', 'settings'];
 
 class FakeResizeObserver {
   observe(): void {}
@@ -12,46 +9,76 @@ class FakeResizeObserver {
   disconnect(): void {}
 }
 
-describe('shell integration', () => {
+function fakeView(name: string): HTMLElement {
+  const node = document.createElement('div');
+  node.className = `fake-${name}`;
+  node.textContent = name;
+  return node;
+}
+
+describe('shell', () => {
   beforeEach(() => {
     vi.stubGlobal('ResizeObserver', FakeResizeObserver);
     document.body.innerHTML = '<div id="app"></div>';
   });
 
-  it('mounts the shell and switches through all seven routes', async () => {
+  it('mounts the single-screen console and opens the three panels', async () => {
     const transport = new MockTransport({ hz: 1000 });
     const store = new AppStore(transport, { lang: 'zh' });
     await transport.open();
 
-    const built: string[] = [];
-    const views = {} as Record<RouteId, () => HTMLElement>;
-    for (const route of ROUTES) {
-      views[route] = () => {
-        built.push(route);
-        const node = document.createElement('div');
-        node.textContent = route;
-        return node;
-      };
-    }
+    const shell = createShell({
+      store,
+      mock: true,
+      console: () => fakeView('console'),
+      advanced: () => fakeView('advanced'),
+      device: () => fakeView('device'),
+      firmware: () => fakeView('firmware'),
+      settings: () => fakeView('settings'),
+    });
+    (document.getElementById('app') as HTMLElement).append(shell.root);
 
-    const { root, router } = createShell({ store, views });
-    const mount = document.getElementById('app') as HTMLElement;
-    mount.append(root);
+    expect(shell.root.querySelector('.fake-console')).not.toBeNull();
+    expect(shell.root.querySelector('.topbar')).not.toBeNull();
 
-    expect(root.querySelector('.topbar')).not.toBeNull();
-    expect(root.querySelector('.navrail')).not.toBeNull();
+    (shell.root.querySelector('#advanced-btn') as HTMLElement).click();
+    expect(document.querySelector('.modal .fake-advanced')).not.toBeNull();
 
-    router.go('meter');
-    expect(root.querySelector('.view--meter')).not.toBeNull();
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }));
+    expect(document.querySelector('.modal')).toBeNull();
 
-    for (const route of ROUTES) {
-      store.setModule(route);
-      expect(root.querySelector(`.view--${route}`)).not.toBeNull();
-    }
+    (shell.root.querySelector('#connect-btn') as HTMLElement).click();
+    expect(document.querySelector('.modal .fake-device')).not.toBeNull();
+    shell.closePanel();
 
-    expect(built).toContain('settings');
-    expect(store.get().module).toBe('settings');
-    store.get();
+    (shell.root.querySelector('#settings-btn') as HTMLElement).click();
+    expect(document.querySelector('.modal .fake-settings')).not.toBeNull();
+    shell.closePanel();
+
+    transport.close();
+  });
+
+  it('rebuilds the console when the language changes', async () => {
+    const transport = new MockTransport({ hz: 1000 });
+    const store = new AppStore(transport, { lang: 'zh' });
+    await transport.open();
+
+    const shell = createShell({
+      store,
+      console: () => fakeView('console'),
+      advanced: () => fakeView('advanced'),
+      device: () => fakeView('device'),
+      firmware: () => fakeView('firmware'),
+      settings: () => fakeView('settings'),
+    });
+    (document.getElementById('app') as HTMLElement).append(shell.root);
+
+    const before = shell.root.querySelector('.fake-console');
+    store.setLang('en');
+    const after = shell.root.querySelector('.fake-console');
+    expect(after).not.toBe(before);
+    expect(shell.root.querySelector('.topbar')).not.toBeNull();
+
     transport.close();
   });
 

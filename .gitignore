@@ -3,5 +3,13 @@ out/
 release/
 artifacts/
 .userdata/
+coverage/
 *.log
 .DS_Store
+
+# 厂商预编译静态库（ARM math / DSP），只作 DFU 实现参考，上位机不链接
+Document/Protocol/Bootloader/**/*.lib
+
+# 仓库里曾出现的协议表副本（真值在 Document/Protocol/）
+third_party/*.xlsx
+third_party/*.md

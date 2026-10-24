@@ -97,7 +97,7 @@ export function createDrcView(store: AppStore): HTMLElement {
   refreshConditionText();
   refreshConflict();
 
-  store.onChange((next) => {
+  const unsubscribe = store.onChange((next) => {
     for (const [id, node] of fieldMap) {
       const spec = findParam(id);
       if (!spec) continue;
@@ -106,6 +106,8 @@ export function createDrcView(store: AppStore): HTMLElement {
     refreshConditionText();
     refreshConflict();
   });
+
+  (root as HTMLElement & { destroy?: () => void }).destroy = () => unsubscribe();
 
   return root;
 }

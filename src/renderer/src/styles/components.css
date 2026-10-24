@@ -1,4 +1,11 @@
 /* ---------- 顶栏 ---------- */
+.topbar-inner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+}
+
 .brand {
   display: flex;
   align-items: center;
@@ -94,6 +101,11 @@
   color: var(--muted);
 }
 
+.state-pill--connecting {
+  color: var(--warn);
+  border-color: #4d3b28;
+}
+
 .state-pill--mock {
   color: var(--warn);
   border-color: #4d3b28;
@@ -107,6 +119,17 @@
 .state-pill--error {
   color: var(--danger);
   border-color: #57303a;
+}
+
+/* 模拟链路标识：让「已就绪」不会被误读成真机已连接 */
+.state-tag {
+  margin-left: 2px;
+  padding: 1px 4px;
+  border-radius: 3px;
+  background: rgba(224, 164, 94, 0.14);
+  color: var(--warn);
+  font-size: 8px;
+  letter-spacing: 0.08em;
 }
 
 /* ---------- 按钮 ---------- */
@@ -142,7 +165,23 @@
   background: transparent;
 }
 
+.btn--ghost.is-armed {
+  border-color: var(--warn);
+  color: var(--warn);
+}
+
+.btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
 /* ---------- 导轨 ---------- */
+.navrail-inner {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
 .nav-item {
   display: flex;
   flex-direction: column;
@@ -221,7 +260,7 @@
   border-radius: 3px;
   color: var(--muted);
   font-family: var(--font-mono);
-  font-size: 9px;
+  font-size: 10px;
   letter-spacing: 0.06em;
   white-space: nowrap;
 }
@@ -234,8 +273,8 @@
   margin-bottom: 6px;
   color: var(--accent);
   font-family: var(--font-mono);
-  font-size: 9px;
-  letter-spacing: 0.14em;
+  font-size: 11px;
+  letter-spacing: 0.12em;
   text-transform: uppercase;
 }
 
@@ -426,6 +465,149 @@
   color: var(--accent);
 }
 
+/* ---------- 简易模式的业务控件 ---------- */
+.pfield--macro .pfield-head {
+  margin-bottom: 10px;
+}
+
+.pfield-value--macro {
+  font-size: var(--fs-16);
+  font-weight: 600;
+}
+
+.macro-range {
+  width: 100%;
+  height: 24px;
+}
+
+.macro-scale {
+  display: flex;
+  justify-content: space-between;
+  margin-top: 2px;
+  color: var(--muted);
+  font-size: 10px;
+}
+
+.macro-hint {
+  margin-top: 8px;
+  color: var(--muted);
+  font-size: var(--fs-11);
+  line-height: 1.6;
+}
+
+/* 高级参数折叠：普通用户默认收起 */
+.advanced {
+  margin-top: 16px;
+  border-top: 1px solid var(--border-soft);
+}
+
+.advanced-summary {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 12px 0 2px;
+  color: var(--muted);
+  font-size: var(--fs-12);
+  cursor: pointer;
+  list-style: none;
+}
+
+.advanced-summary::-webkit-details-marker {
+  display: none;
+}
+
+.advanced-summary::before {
+  content: '';
+  width: 0;
+  height: 0;
+  border-left: 5px solid transparent;
+  border-right: 5px solid transparent;
+  border-top: 6px solid currentColor;
+  transition: transform 0.16s ease;
+}
+
+.advanced[open] .advanced-summary::before {
+  transform: rotate(180deg);
+}
+
+.advanced-summary:hover {
+  color: var(--text-dim);
+}
+
+.advanced-count {
+  padding: 1px 6px;
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  font-family: var(--font-mono);
+  font-size: 9px;
+}
+
+.advanced-body {
+  padding-top: 14px;
+}
+
+/* 折起来之后里面的卡片不再套一层边框，避免"卡中卡" */
+.advanced-body > .card {
+  border: 0;
+  background: transparent;
+}
+
+.advanced-body > .card > .card-head,
+.advanced-body > .card > .card-body {
+  padding-left: 0;
+  padding-right: 0;
+}
+
+/* 音色风格按钮 */
+.preset-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.preset-btn {
+  height: 28px;
+  padding: 0 12px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--panel-3);
+  color: var(--text-dim);
+  font-size: var(--fs-12);
+}
+
+.preset-btn:hover {
+  border-color: var(--accent-dim);
+  color: var(--text);
+}
+
+.preset-btn.is-active {
+  border-color: var(--accent);
+  background: var(--accent-dim);
+  color: var(--accent);
+}
+
+/* 首页使用建议 */
+.tips-list {
+  margin: 0;
+  padding-left: 18px;
+  color: var(--text-dim);
+  font-size: var(--fs-12);
+  line-height: 1.7;
+}
+
+.tips-list li + li {
+  margin-top: 8px;
+}
+
+/* 简易模式下 EQ 只有一栏，不要留空的侧栏（两条类名压过后面的 .eq-layout） */
+.eq-layout.eq-layout--simple {
+  display: block;
+}
+
+.segmented--mode .seg-btn {
+  min-width: 34px;
+}
+
 /* ---------- 通用布局块 ---------- */
 .panel-grid {
   display: grid;
@@ -456,7 +638,20 @@
   display: grid;
   grid-template-columns: minmax(0, 1fr) 320px;
   gap: 20px;
-  align-items: start;
+  align-items: stretch;
+}
+
+/* 电平卡跟随右栏高度，让电平柱吃掉页面剩余空间，不再留一大块空白 */
+.meter-layout > .card {
+  display: flex;
+  flex-direction: column;
+}
+
+.meter-layout > .card > .card-body {
+  display: flex;
+  flex: 1 1 auto;
+  min-height: 0;
+  padding-bottom: 12px;
 }
 
 .meter-side {
@@ -467,7 +662,9 @@
 
 .meter-canvas {
   display: block;
+  flex: 1 1 auto;
   width: 100%;
+  min-height: 340px;
 }
 
 /* ---------- EQ 页 ---------- */
@@ -622,6 +819,26 @@
 
 .view {
   display: block;
+}
+
+/* 分频页三区各 5 个参数，收紧垂直间距让 820 高窗口尽量一屏放下 */
+.view--drc .panel-grid {
+  gap: 16px;
+}
+
+.view--drc .card-body .pfield + .pfield {
+  margin-top: 11px;
+}
+
+/* 两个分频点是一对，并排放在同一行，给三区卡让出垂直空间 */
+.view--drc .panel-grid > .card:first-child .card-body {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px 24px;
+}
+
+.view--drc .panel-grid > .card:first-child .pfield + .pfield {
+  margin-top: 0;
 }
 
 @media (max-width: 1050px) {
@@ -864,3 +1081,549 @@
   font-size: 9px;
   overflow-wrap: anywhere;
 }
+
+/* ================= 一屏工作台 ================= */
+.console {
+  display: grid;
+  grid-template-columns: 318px minmax(0, 1fr);
+  gap: 16px;
+  width: 100%;
+  min-height: 0;
+}
+
+.console-left {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  min-height: 0;
+}
+
+.console-right {
+  display: grid;
+  grid-template-rows: auto auto minmax(0, 1fr) auto;
+  gap: 14px;
+  min-height: 0;
+}
+
+/* 控制台卡片更紧凑：同屏信息密度优先 */
+.card--compact .card-head {
+  padding: 11px 16px 10px;
+}
+
+.card--compact .card-body {
+  padding: 12px 16px 13px;
+}
+
+.card--compact .card-title {
+  font-size: 14px;
+}
+
+.card--compact .card-desc {
+  margin-top: 2px;
+  font-size: 11px;
+}
+
+.card--compact .eyebrow {
+  margin-bottom: 4px;
+  font-size: 9px;
+}
+
+/* ---- 电平 ---- */
+.console-meter,
+.console-eq {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.console-meter > .card-body,
+.console-eq > .card-body {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.console-meter-canvas {
+  flex: 1 1 auto;
+  width: 100%;
+  min-height: 240px;
+  height: auto;
+}
+
+.console-gain {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px solid var(--border-soft);
+}
+
+.console-gain-item {
+  display: flex;
+  align-items: baseline;
+  gap: 5px;
+  min-width: 0;
+}
+
+.console-gain-label {
+  flex: 1 1 auto;
+  color: var(--muted);
+  font-size: 11px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.console-gain-value {
+  color: var(--text);
+  font-family: var(--font-mono);
+  font-size: 18px;
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+}
+
+.console-gain-unit {
+  color: var(--muted);
+  font-family: var(--font-mono);
+  font-size: 10px;
+}
+
+/* ---- 设备摘要 ---- */
+.console-device .card-body {
+  display: flex;
+  flex-direction: column;
+}
+
+.console-info .pfield-head {
+  margin-bottom: 0;
+  padding: 3px 0;
+}
+
+.console-wide-btn {
+  width: 100%;
+  margin-top: 8px;
+}
+
+/* ---- 场景 ---- */
+.scene-row {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.scene-btn {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 9px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-6);
+  background: var(--panel-3);
+  color: var(--text-dim);
+  text-align: left;
+  transition: border-color 0.14s ease, background 0.14s ease;
+}
+
+.scene-btn:hover {
+  border-color: var(--accent-dim);
+}
+
+.scene-btn strong {
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.scene-btn .scene-desc {
+  color: var(--muted);
+  font-size: 10px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.scene-btn.is-active {
+  border-color: var(--accent);
+  background: var(--accent-dim);
+}
+
+.scene-btn.is-active strong {
+  color: var(--accent);
+}
+
+/* ---- 快速调音 ---- */
+.tune-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) minmax(0, 1.1fr);
+  gap: 22px;
+  align-items: start;
+}
+
+.tune-grid > .pfield + .pfield {
+  margin-top: 0;
+}
+
+.tone-block .pfield-head {
+  margin-bottom: 7px;
+}
+
+.tone-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.tone-chip {
+  height: 28px;
+  padding: 0 11px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-4);
+  background: var(--panel-3);
+  color: var(--text-dim);
+  font-size: var(--fs-12);
+}
+
+.tone-chip:hover {
+  border-color: var(--accent-dim);
+  color: var(--text);
+}
+
+.tone-chip.is-active {
+  border-color: var(--accent);
+  background: var(--accent-dim);
+  color: var(--accent);
+}
+
+/* ---- 音色曲线 ---- */
+.console-eq-wrap {
+  flex: 1 1 auto;
+  min-height: 0;
+  padding: 0;
+}
+
+.console-eq-canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+  min-height: 170px;
+}
+
+.console-eq .eq-hint {
+  padding: 6px 0 0;
+}
+
+.console-link {
+  align-self: flex-start;
+  padding: 2px 0 0;
+  border: 0;
+  background: none;
+  color: var(--accent);
+  font-size: var(--fs-11);
+  cursor: pointer;
+}
+
+.console-link:hover {
+  color: var(--accent-strong);
+  text-decoration: underline;
+}
+
+/* ---- 快捷开关 ---- */
+.switch-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 22px;
+}
+
+.switch-item {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+}
+
+.switch-item .macro-hint {
+  margin-top: 0;
+}
+
+.segmented--compact {
+  align-self: flex-start;
+}
+
+.segmented--compact .seg-btn {
+  min-width: 32px;
+  height: 24px;
+}
+
+/* ================= 抽屉 / 弹层 ================= */
+.modal-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  display: grid;
+  place-items: center;
+  padding: 28px;
+  background: rgba(5, 7, 11, 0.74);
+}
+
+.modal {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  max-height: calc(100vh - 56px);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--panel);
+  box-shadow: 0 24px 60px rgba(0, 0, 0, 0.55);
+}
+
+.modal--wide {
+  max-width: 1120px;
+}
+
+.modal--medium {
+  max-width: 960px;
+}
+
+.modal--narrow {
+  max-width: 720px;
+}
+
+.modal-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 16px 20px 14px;
+  border-bottom: 1px solid var(--border-soft);
+}
+
+.modal-title {
+  font-size: var(--fs-16);
+  font-weight: 600;
+}
+
+.modal-subtitle {
+  margin-top: 4px;
+  color: var(--muted);
+  font-size: var(--fs-11);
+}
+
+.modal-close {
+  flex: none;
+  width: 30px;
+  height: 30px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-4);
+  background: var(--panel-2);
+  color: var(--text-dim);
+  font-size: 18px;
+  line-height: 1;
+}
+
+.modal-close:hover {
+  border-color: var(--accent-dim);
+  color: var(--text);
+}
+
+.modal-body {
+  padding: 18px 20px 22px;
+  overflow: auto;
+}
+
+/* 高级参数：四个模块竖排在同一个可滚动面板里 */
+.advanced-view {
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+}
+
+.advanced-section-head {
+  margin-bottom: 10px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid var(--border-soft);
+}
+
+.advanced-section-title {
+  font-size: var(--fs-13);
+  font-weight: 600;
+}
+
+.advanced-section-desc {
+  margin-top: 3px;
+  color: var(--muted);
+  font-size: var(--fs-11);
+}
+
+.modal-body .panel-grid {
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: 16px;
+}
+
+.eq-table-toolbar {
+  display: flex;
+  justify-content: flex-end;
+  margin-bottom: 10px;
+}
+
+/* ================= 一屏工作台（三栏：电平 / 调音 / 曲线） ================= */
+.console {
+  grid-template-columns: 300px minmax(0, 410px) minmax(0, 1fr);
+  grid-template-rows: auto minmax(0, 1fr);
+  grid-template-areas:
+    'scene scene scene'
+    'meter middle eq';
+  gap: 14px 16px;
+  align-items: stretch;
+}
+
+.console-scene {
+  grid-area: scene;
+}
+
+.console-meter {
+  grid-area: meter;
+}
+
+.console-middle {
+  grid-area: middle;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  min-height: 0;
+}
+
+.console-eq {
+  grid-area: eq;
+}
+
+.console-middle > .card:first-child {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.console-middle > .card:first-child > .card-body {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.tune-grid {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  justify-content: space-between;
+  gap: 14px;
+}
+
+.tune-grid > .pfield + .pfield {
+  margin-top: 0;
+}
+
+.console-device-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px solid var(--border-soft);
+}
+
+.console-device-text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.console-device-name {
+  color: var(--text-dim);
+  font-size: var(--fs-12);
+}
+
+.console-device-state {
+  color: var(--muted);
+  font-size: 10px;
+}
+
+.btn--small {
+  height: 26px;
+  padding: 0 10px;
+  font-size: var(--fs-11);
+}
+
+.console-eq > .card-body {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.console-eq .console-eq-wrap {
+  min-height: 220px;
+}
+
+.card--compact .eyebrow:empty {
+  display: none;
+}
+
+@media (max-width: 1180px) {
+  .console {
+    grid-template-columns: 280px 360px minmax(0, 1fr);
+  }
+}
+
+/* 700 高窗口下先牺牲提示文字，保证一屏放得下 */
+@media (max-height: 780px) {
+  .console .tune-grid .macro-hint,
+  .console .tone-block .macro-hint,
+  .console .switch-item .macro-hint {
+    display: none;
+  }
+
+  .console .card--compact .card-head {
+    padding: 8px 13px 7px;
+  }
+
+  .console .card--compact .card-body {
+    padding: 10px 13px 11px;
+  }
+
+  .console .card--compact .card-desc {
+    display: none;
+  }
+
+  .console .tune-grid {
+    gap: 8px;
+  }
+
+  .console .tone-chip {
+    height: 24px;
+    padding: 0 9px;
+  }
+
+  .console .console-meter-canvas {
+    min-height: 150px;
+  }
+
+  .console .console-gain,
+  .console .console-device-row {
+    margin-top: 6px;
+    padding-top: 6px;
+  }
+
+  .console .switch-grid {
+    gap: 14px;
+  }
+
+  .console .switch-item {
+    gap: 4px;
+  }
+}
+
+

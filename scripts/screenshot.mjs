@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import process from 'node:process';
 
-const ROUTES = ['meter', 'input', 'eq', 'dynamics', 'drc', 'device', 'settings'];
+const ROUTES = ['console', 'advanced', 'device', 'settings'];
 const repoRoot = process.cwd();
 const outIndex = path.join(repoRoot, 'out', 'renderer', 'index.html');
 const artifactsDir = path.join(repoRoot, 'artifacts');

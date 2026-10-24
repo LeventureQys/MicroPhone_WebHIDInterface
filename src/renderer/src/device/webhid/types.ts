@@ -14,6 +14,17 @@ export type WebHidStatus = 'idle' | 'connecting' | 'ready' | 'error';
 /** 面向界面的失败分类；文案键 = `device.error.<code>`，原始 message 另外保留 */
 export type WebHidErrorCode = 'nativeUnavailable' | 'bridge' | 'device' | 'noSelection' | 'unknown';
 
+/**
+ * 真机设备选择器的 usage 过滤条件（W3C `HIDDeviceFilter` 的最小子集）。
+ *
+ * Electron 33 的 `HIDDevice` 不带 collections / usage page，主进程无法按 usage 复核，
+ * 所以 usage 过滤只能落在渲染进程的 `requestDevice({ filters })`（设计 R-9 / §9 B13）。
+ */
+export interface WebHidUsageFilter {
+  readonly usagePage: number;
+  readonly usage: number;
+}
+
 export interface WebHidDeviceHandle {
   /** 桥接设备自带；真机没有，由 session 合成 */
   readonly deviceId?: string;
@@ -23,6 +34,12 @@ export interface WebHidDeviceHandle {
   readonly opened: boolean;
   open(): Promise<void>;
   close(): Promise<void>;
+  /**
+   * 出站报告（`0x51`，63 B 载荷）。3.2 起参数协议经它出站：
+   * 桥接设备与 `NativeHidHandle` 都提供，但在本仓契约里保持可选，
+   * 由 `WebHidTransport.open()` 显式校验（缺了就当设备不可用）。
+   */
+  sendReport?(reportId: number, data: Uint8Array): Promise<void>;
   addEventListener(type: string, listener: (event: Event) => void): void;
   removeEventListener(type: string, listener: (event: Event) => void): void;
   /** 字段级解码；桥接设备与 NativeHidHandle 都有 */
@@ -69,5 +86,6 @@ export interface WebHidKit {
   installVirtualBridge(url: string): Promise<WebHidKitBridge>;
   nativeAvailable(): boolean;
   nativeDevices(): Promise<WebHidDeviceHandle[]>;
-  requestNativeDevice(): Promise<WebHidDeviceHandle[]>;
+  /** 传空 / 不传 = 不带过滤，行为与改动前一致 */
+  requestNativeDevice(filters?: readonly WebHidUsageFilter[]): Promise<WebHidDeviceHandle[]>;
 }

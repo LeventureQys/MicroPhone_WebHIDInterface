@@ -30,11 +30,22 @@ describe('eq curve', () => {
     expect(Math.abs(bandGainDb(peak, 20000, SAMPLE_RATE))).toBeLessThan(0.2);
   });
 
-  it('keeps the 14 default flat bands at 0 dB', () => {
+  it('renders the register table default bands instead of a flat curve', () => {
     expect(DEFAULT_BANDS).toHaveLength(14);
     const curve = computeCurve(DEFAULT_BANDS);
     expect(curve).toHaveLength(480);
-    expect(curve.every((point) => point.gainDb === 0)).toBe(true);
+    expect(curve.every((point) => Number.isFinite(point.gainDb))).toBe(true);
+    // 第 1 段是 50 Hz HPF，20 Hz 处应明显衰减
+    expect(curve[0].gainDb).toBeLessThan(-6);
+    // 第 2 段是 20 kHz LPF，20 kHz 处约 −3 dB
+    expect(curve[curve.length - 1].gainDb).toBeLessThan(-1.5);
+    // 第 3 段 215 Hz / −3.5 dB 凹陷
+    const dip = curve.reduce((best, point) =>
+      (Math.abs(point.freq - 215) < Math.abs(best.freq - 215) ? point : best), curve[0]);
+    expect(dip.freq).toBeGreaterThan(200);
+    expect(dip.freq).toBeLessThan(230);
+    expect(dip.gainDb).toBeLessThan(-3);
+    expect(dip.gainDb).toBeGreaterThan(-5);
   });
 
   it('rolls low pass and high pass off outside the cutoff', () => {

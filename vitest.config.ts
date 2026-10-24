@@ -12,5 +12,17 @@ export default defineConfig({
     environment: 'happy-dom',
     include: ['tests/unit/**/*.test.ts'],
     reporters: 'default',
+    // 覆盖率只统计协议层与镜像层（R10-2 的原文）；UI 层不在门禁范围
+    coverage: {
+      provider: 'v8',
+      all: false,
+      include: [
+        'src/renderer/src/device/proto/**/*.ts',
+        'src/renderer/src/device/dfu/**/*.ts',
+        'src/renderer/src/device/registers.ts',
+      ],
+      exclude: ['**/*.d.ts'],
+      thresholds: { lines: 90, functions: 85, branches: 80, statements: 90 },
+    },
   },
 });

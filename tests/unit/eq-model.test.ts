@@ -32,7 +32,7 @@ describe('eq model', () => {
     expect(bands).toHaveLength(14);
     expect(model.visibleCount()).toBe(7);
     expect(bands.map((band) => band.index)).toEqual(Array.from({ length: 14 }, (_, i) => i));
-    expect(requireBand(model, 0).freq).toBe(20);
+    expect(requireBand(model, 0).freq).toBe(50);
     expect(requireBand(model, 0).q).toBe(0.7);
   });
 
@@ -87,8 +87,8 @@ describe('eq model', () => {
     const events = listenBand(model);
     model.setBand(2, { gain: Number.NaN, freq: Number.POSITIVE_INFINITY });
     expect(events).toHaveLength(0);
-    expect(requireBand(model, 2).gain).toBe(0);
-    expect(requireBand(model, 2).freq).toBe(200);
+    expect(requireBand(model, 2).gain).toBe(-3.5);
+    expect(requireBand(model, 2).freq).toBe(215);
   });
 
   it('resets gain and q on resetBandGain', () => {
@@ -126,7 +126,7 @@ describe('eq model', () => {
     expect(requireBand(model, 0).gain).toBe(0);
     const bands = model.allBands() as EqBand[];
     bands[0].freq = 12345;
-    expect(requireBand(model, 0).freq).toBe(20);
+    expect(requireBand(model, 0).freq).toBe(50);
   });
 
   it('normalizes bands supplied by a caller', () => {

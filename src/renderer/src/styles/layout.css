@@ -16,27 +16,12 @@
   border-bottom: 1px solid var(--border-soft);
 }
 
-.app-body {
+/* 一屏工作台的外壳：顶栏以下全部交给 console */
+.console-host {
   display: flex;
   flex: 1 1 auto;
   min-height: 0;
-}
-
-.navrail {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  flex: 0 0 var(--navrail-w);
-  width: var(--navrail-w);
-  padding: var(--space-12) 0;
-  border-right: 1px solid var(--border-soft);
-}
-
-.content {
-  flex: 1 1 auto;
-  min-width: 0;
-  overflow: auto;
-  padding: var(--space-24);
+  padding: 18px 22px;
 }
 
 .boot-placeholder {
