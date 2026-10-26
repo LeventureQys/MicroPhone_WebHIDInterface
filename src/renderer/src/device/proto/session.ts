@@ -146,6 +146,16 @@ interface Inflight {
   readonly task: Task;
   attempts: number;
   timer: unknown;
+  /**
+   * 被新的 `sync()` 顶掉的在途请求。协议没有请求序号，帧一旦上了总线就不能丢弃：
+   * 它的应答会被下一条请求当成自己的应答（真机 2026-10-26 第二轮：电平轮询的 0x12
+   * 应答抢答了 sync 的 0x13）。因此只把它标记成"静默"——应答到达时吞掉、超时不重发，
+   * 槽位释放后新一轮 sync 才发帧。
+   */
+  abandoned: boolean;
+  /** `abandoned` 时等「总线回到空闲」的 Promise 与兑现函数 */
+  drain: Promise<void> | null;
+  releaseDrain: (() => void) | null;
 }
 
 interface WriteGroup {
@@ -260,6 +270,16 @@ function describeInbound(frame: ParamFrame): { summary: string; level: DiagEntry
       }
       return { summary: `读回 ${count} 项`, level: 'info' };
     }
+    // 设备主动上报（真机固件用它推实时电平）：不是"跑题帧"，按 info 记，别刷成 warn
+    case FUNC_RAND_WRITE: {
+      const count = Math.floor(data.length / 4);
+      if (count === 1) {
+        const addr = (data[0] << 8) | data[1];
+        const raw = (data[2] << 8) | data[3];
+        return { summary: `设备上报 0x${hex(addr, 4)} = ${raw}`, level: 'info' };
+      }
+      return { summary: `设备上报 ${count} 项`, level: 'info' };
+    }
     default:
       return { summary: `入站写帧 0x${hex(frame.func, 2)}（${data.length} B）`, level: 'warn' };
   }
@@ -310,6 +330,10 @@ export class ParamSession {
   private statsScheduled = false;
   /** error 相位下 `write()` 只派发一次 disconnected（S-j） */
   private errorNotified = false;
+  /** sync 代次：被新 sync 取代的旧 sync 不得再改相位 / 派发致命错误 */
+  private syncGeneration = 0;
+  /** sync 开头等老请求回包期间压住轮询：那时相位还是 ready，轮询会插进两轮之间 */
+  private drainingSync = false;
 
   constructor(options: ParamSessionOptions) {
     this.send = options.send;
@@ -353,7 +377,23 @@ export class ParamSession {
    */
   async sync(): Promise<{ readonly preset: PresetSnapshot; readonly device: DeviceSnapshot }> {
     if (this.disposed) throw new Error('参数会话已销毁');
-    this.cancelWork();
+    this.syncGeneration += 1;
+    const generation = this.syncGeneration;
+    // 总线空闲时 cancelWork 返回 null，sync 的开头保持同步执行（回读帧立刻发出）；
+    // 只有在途请求需要等回包时才让出一次微任务，避免它的应答被本轮请求认领。
+    this.drainingSync = true;
+    const drain = this.cancelWork();
+    if (drain !== null) {
+      try {
+        await drain;
+      } finally {
+        this.drainingSync = false;
+      }
+      if (this.disposed) throw new Error('参数会话已销毁');
+      if (generation !== this.syncGeneration) throw new Error('同步已被新的同步请求取代');
+    } else {
+      this.drainingSync = false;
+    }
     this.setPhase('syncing');
 
     let preset: PresetSnapshot | null = null;
@@ -443,7 +483,7 @@ export class ParamSession {
       // 非致命失败（应答解析不了 / 设备用 ACK 终止回读）：回读是连接门禁，失败必须
       // 落到 error，否则会话永远停在 'syncing'，轮询也永远起不来。致命路径已自己进过 error。
       // kind 跟随原始错误（ACK 0x0005 → range、0x0004 → readOnly），别一律报 'len' 带偏排查方向。
-      if (!this.disposed && this.phaseValue === 'syncing') {
+      if (!this.disposed && generation === this.syncGeneration && this.phaseValue === 'syncing') {
         const original = (error as { transportError?: TransportError }).transportError;
         this.failFatal(
           original ?? {
@@ -570,10 +610,11 @@ export class ParamSession {
     this.stopPolling();
     this.clearThrottle();
     const inflight = this.inflight;
-    this.inflight = null;
     if (inflight !== null) {
       this.clearInflightTimer(inflight);
-      inflight.task.onFail({ kind: 'disconnected', message: '参数会话已销毁' });
+      this.releaseInflight(inflight);
+      // 被 sync 顶掉的请求已静默，别再让它走 disconnected 回调（它的 Promise 已无人等待）
+      if (!inflight.abandoned) inflight.task.onFail({ kind: 'disconnected', message: '参数会话已销毁' });
     }
     const dropped = this.queue;
     this.queue = [];
@@ -614,7 +655,7 @@ export class ParamSession {
       return;
     }
     const task = this.queue.shift() as Task;
-    this.inflight = { task, attempts: 0, timer: null };
+    this.inflight = { task, attempts: 0, timer: null, abandoned: false, drain: null, releaseDrain: null };
     this.sendAttempt();
     this.emitStats();
   }
@@ -652,10 +693,17 @@ export class ParamSession {
   private onRequestTimeout(inflight: Inflight): void {
     if (this.disposed || this.inflight !== inflight) return;
     inflight.timer = null;
+    if (inflight.abandoned) {
+      // 被 sync 顶掉的请求：只释放槽位，不重发（重发会让下一轮 sync 再收一条迟到应答）
+      this.releaseInflight(inflight);
+      this.emitStats();
+      this.pump();
+      return;
+    }
     if (inflight.task.poll) {
       // S-f：轮询超时只丢本次，不重试、不改 phase
       this.counts.droppedPolls += 1;
-      this.inflight = null;
+      this.releaseInflight(inflight);
       this.pushDiag({
         at: this.clock.now(),
         dir: 'out',
@@ -681,6 +729,13 @@ export class ParamSession {
   private retryOrFail(error: TransportError): void {
     const inflight = this.inflight;
     if (inflight === null) return;
+    if (inflight.abandoned) {
+      // 已被 sync 顶掉：错误码也只当"总线回到空闲"，不重发、不派发
+      this.releaseInflight(inflight);
+      this.emitStats();
+      this.pump();
+      return;
+    }
     if (inflight.attempts <= this.timing.requestRetries) {
       this.counts.retries += 1;
       this.clearInflightTimer(inflight);
@@ -694,6 +749,12 @@ export class ParamSession {
   // ---- 入站与应答归属（S-g / S-h） ----
 
   private handleFrame(frame: ParamFrame): void {
+    // 设备主动上报（真机固件以 `0x10` 推 0x2057 实时电平）：它不属于任何在途请求，
+    // 若按"当前没有在途请求"丢掉，电平表在真机上永远是静止的。
+    if (frame.func === FUNC_RAND_WRITE) {
+      this.handlePush(frame);
+      return;
+    }
     const inflight = this.inflight;
     if (inflight === null) {
       this.unexpectedFrame(frame, '当前没有在途请求');
@@ -715,6 +776,31 @@ export class ParamSession {
       return;
     }
     this.settle(frame);
+  }
+
+  /**
+   * 设备主动上报帧：载荷与随机读应答同形（`addr + raw` 四字节一组），所以复用同一个解析器。
+   * 0x2057 走电平回调，其余地址按"设备侧值已变"走 echo，让界面跟上设备自己的改动。
+   */
+  private handlePush(frame: ParamFrame): void {
+    let parsed: ReadReply | RandReadReply | AckReply;
+    try {
+      parsed = parseReply({ unitId: frame.unitId, func: FUNC_RAND_READ, data: frame.data });
+    } catch (error) {
+      this.pushDiag({
+        at: this.clock.now(),
+        dir: 'in',
+        hex: hexBytes(frameBytes(frame)),
+        summary: `设备上报帧格式不符：${String(error)}`,
+        level: 'error',
+      });
+      return;
+    }
+    if (!isRandReadReply(parsed)) return;
+    for (const entry of parsed.entries) {
+      if (entry.addr === LEVEL_ADDR) this.onLevelCb?.({ raw: entry.raw, at: this.clock.now() });
+      else this.onEchoCb?.(entry.addr, entry.raw);
+    }
   }
 
   private unexpectedFrame(frame: ParamFrame, detail: string): void {
@@ -768,8 +854,9 @@ export class ParamSession {
     const inflight = this.inflight;
     if (inflight === null) return;
     this.clearInflightTimer(inflight);
-    this.inflight = null;
-    inflight.task.onOk(frame);
+    this.releaseInflight(inflight);
+    // 被 sync 顶掉的请求：应答归它，静默吞掉，别去 resolve 上一轮的 Promise
+    if (!inflight.abandoned) inflight.task.onOk(frame);
     this.emitStats();
     this.pump();
   }
@@ -783,7 +870,13 @@ export class ParamSession {
     const inflight = this.inflight;
     if (inflight === null) return;
     this.clearInflightTimer(inflight);
-    this.inflight = null;
+    this.releaseInflight(inflight);
+    if (inflight.abandoned) {
+      // 被 sync 顶掉：拒绝 / 只读 / 超范围都只意味着"这条请求结束了"，不通知上一轮
+      this.emitStats();
+      this.pump();
+      return;
+    }
     this.pushDiag({
       at: this.clock.now(),
       dir: 'out',
@@ -802,8 +895,10 @@ export class ParamSession {
   private failFatal(error: TransportError): void {
     if (this.disposed) return;
     const inflight = this.inflight;
-    this.inflight = null;
-    if (inflight !== null) this.clearInflightTimer(inflight);
+    if (inflight !== null) {
+      this.clearInflightTimer(inflight);
+      this.releaseInflight(inflight);
+    }
     this.clearThrottle();
     this.pendingWrites.clear();
     this.stopPolling();
@@ -818,7 +913,8 @@ export class ParamSession {
       level: 'error',
     });
     this.setPhase('error');
-    if (inflight !== null) inflight.task.onFail(error);
+    // 被 sync 顶掉的在途请求已经静默收尾，别让它的 Promise 再走一遍 error
+    if (inflight !== null && !inflight.abandoned) inflight.task.onFail(error);
     for (const task of dropped) task.onFail(error);
     this.dispatchError(error);
     this.emitStats();
@@ -890,7 +986,7 @@ export class ParamSession {
   }
 
   private pollTick(): void {
-    if (this.disposed || !this.pollingWanted || this.phaseValue !== 'ready') return;
+    if (this.disposed || !this.pollingWanted || this.phaseValue !== 'ready' || this.drainingSync) return;
     // S-f：有待发写、队列非空或在途请求时低优先级轮询让位
     if (this.inflight !== null || this.queue.length > 0 || this.pendingWrites.size > 0) {
       this.counts.droppedPolls += 1;
@@ -1031,22 +1127,43 @@ export class ParamSession {
     inflight.timer = null;
   }
 
-  /** 重新 sync 前清场：队列、待发表、在途请求与全部定时器（S-j 的"重连"语义） */
-  private cancelWork(): void {
+  /**
+   * 重新 sync 前清场（S-j 的"重连"语义）：尚未发出的队列、待发表与定时器可以直接丢，
+   * **但已经发到总线上的那一条不能丢**——协议帧里没有请求序号，丢掉在途请求会把它的
+   * 应答留给下一条请求认领。这里把在途请求标记为 abandoned，等它回包或超时释放槽位，
+   * 返回的 Promise 兑现时总线才是干净的，新 sync 的帧才能发；总线本来就空闲时返回 null。
+   */
+  private cancelWork(): Promise<void> | null {
     this.stopPolling();
     this.clearThrottle();
     this.pendingWrites.clear();
     const interrupted: TransportError = { kind: 'disconnected', message: '请求被新的同步请求中断' };
-    const inflight = this.inflight;
-    this.inflight = null;
-    if (inflight !== null) {
-      this.clearInflightTimer(inflight);
-      inflight.task.onFail(interrupted);
-    }
     const dropped = this.queue;
     this.queue = [];
     for (const task of dropped) task.onFail(interrupted);
+    const inflight = this.inflight;
+    if (inflight === null) {
+      this.emitStats();
+      return null;
+    }
+    if (inflight.drain !== null) return inflight.drain;
+    inflight.abandoned = true;
+    inflight.drain = new Promise<void>((resolve) => {
+      inflight.releaseDrain = resolve;
+    });
+    // 老请求的 Promise 现在就以"被中断"结束（S-j），但它的帧已经上了总线：
+    // 应答到达时只用来释放槽位、不回调 onOk，否则会把老一轮的数据写进新一轮。
+    inflight.task.onFail(interrupted);
     this.emitStats();
+    return inflight.drain;
+  }
+
+  /** 释放在途槽位；被 abandon 的请求在这里兑现「总线已空闲」的等待 */
+  private releaseInflight(inflight: Inflight): void {
+    if (this.inflight === inflight) this.inflight = null;
+    const release = inflight.releaseDrain;
+    inflight.releaseDrain = null;
+    release?.();
   }
 }
 

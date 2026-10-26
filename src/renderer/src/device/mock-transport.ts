@@ -3,6 +3,7 @@ import type {
   DiagEntry,
   EqBandWrite,
   LevelFrame,
+  ParamEcho,
   ParamReadResult,
   ParamWrite,
   SyncPhase,
@@ -75,7 +76,7 @@ export class MockTransport implements Transport {
   private readonly _levelListeners = new Set<(frame: LevelFrame) => void>();
   private readonly _stateListeners = new Set<(state: TransportState) => void>();
   private readonly _syncListeners = new Set<(phase: SyncPhase) => void>();
-  private readonly _echoListeners = new Set<(echo: { readonly id: string; readonly value: number }) => void>();
+  private readonly _echoListeners = new Set<(echo: ParamEcho) => void>();
   private readonly _errorListeners = new Set<(error: TransportError) => void>();
   private readonly _diagListeners = new Set<(entry: DiagEntry) => void>();
   private readonly _writes: ParamWrite[] = [];
@@ -199,7 +200,7 @@ export class MockTransport implements Transport {
     };
   }
 
-  onParamEcho(cb: (echo: { readonly id: string; readonly value: number }) => void): () => void {
+  onParamEcho(cb: (echo: ParamEcho) => void): () => void {
     this._echoListeners.add(cb);
     return () => {
       this._echoListeners.delete(cb);
@@ -264,7 +265,7 @@ export class MockTransport implements Transport {
     if (this._echoListeners.size === 0) return;
     const timer = setTimeout(() => {
       this._echoTimers.delete(timer);
-      for (const cb of [...this._echoListeners]) cb({ id: entry.id, value: entry.value });
+      for (const cb of [...this._echoListeners]) cb({ kind: 'param', id: entry.id, value: entry.value });
     }, ECHO_DELAY_MS);
     this._echoTimers.add(timer);
   }

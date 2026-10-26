@@ -14,7 +14,7 @@ import {
   type ParamFrame,
 } from '../../src/renderer/src/device/proto/frame';
 import { LEVEL_ADDR, PRESET_COUNT, PRESET_START } from '../../src/renderer/src/device/registers';
-import type { LevelFrame, SyncPhase, TransportError } from '../../src/renderer/src/device/transport';
+import type { LevelFrame, ParamEcho, SyncPhase, TransportError } from '../../src/renderer/src/device/transport';
 import { WebHidTransport } from '../../src/renderer/src/device/webhid-transport';
 import { FakeHidDevice, bindRegisterDevice, createFakeRegisters } from './helpers/webhid-fakes';
 
@@ -165,8 +165,8 @@ describe('MockTransport', () => {
 
   it('echoes the last written value of a batch after 5 ms', async () => {
     const transport = new MockTransport();
-    const echoes: Array<{ id: string; value: number }> = [];
-    transport.onParamEcho((echo) => echoes.push({ id: echo.id, value: echo.value }));
+    const echoes: ParamEcho[] = [];
+    transport.onParamEcho((echo) => echoes.push(echo));
     await transport.open();
 
     transport.write([
@@ -176,7 +176,7 @@ describe('MockTransport', () => {
     vi.advanceTimersByTime(4);
     expect(echoes).toHaveLength(0);
     vi.advanceTimersByTime(2);
-    expect(echoes).toEqual([{ id: 'enc.Level', value: 3 }]);
+    expect(echoes).toEqual([{ kind: 'param', id: 'enc.Level', value: 3 }]);
     await transport.close();
   });
 
@@ -500,6 +500,46 @@ describe('WebHidTransport', () => {
     expect(quiet.inputRms).toBeCloseTo(-96, 5);
     expect(quiet.inputPeak).toBeGreaterThan(-96);
     expect(quiet.inputPeak).toBeLessThan(0);
+  });
+
+  it('turns a device 0x10 report into param and EQ-band echoes, ignoring unknown models', async () => {
+    const { device, transport } = setup();
+    await transport.open();
+    // open() 里的回读本身会派发一遍回显（S-e 的 onEcho），这里只关心设备主动上报那一条
+    const echoes: ParamEcho[] = [];
+    transport.onParamEcho((echo) => echoes.push(echo));
+
+    // 协议 1026 §4：设备用 0x10（随机写）帧上报，数据段与随机读应答同形
+    const data = encodeRandWrite([
+      { addr: 0x2022, raw: 1 }, // MIC 静音 → mic.mute
+      { addr: 0x202a, raw: 300 }, // Band-1 gain：raw 300 → -2 dB
+      { addr: 0x2049, raw: 70 }, // Band-7 Q：raw 70 → 7
+      { addr: 0x2027, raw: 1 }, // 段使能不在本地模型里（B7），忽略
+      { addr: 0x2002, raw: 0x4142 }, // 预设名称：本版本没有本地模型，应忽略
+    ]);
+    device.emitInputReport(0x11, [...encodeFrame(FUNC_RAND_WRITE, data)]);
+
+    expect(echoes).toEqual([
+      { kind: 'param', id: 'mic.mute', value: 1 },
+      { kind: 'band', band: 1, field: 'gain', value: -2 },
+      { kind: 'band', band: 7, field: 'q', value: 7 },
+    ]);
+  });
+
+  it('routes a device-pushed 0x2057 to the level channel instead of the echo channel', async () => {
+    const { device, transport } = setup();
+    await transport.open();
+    const echoes: ParamEcho[] = [];
+    const frames: LevelFrame[] = [];
+    transport.onParamEcho((echo) => echoes.push(echo));
+    transport.onLevels((frame) => frames.push(frame));
+
+    device.emitInputReport(0x11, [
+      ...encodeFrame(FUNC_RAND_WRITE, encodeRandWrite([{ addr: LEVEL_ADDR, raw: 64 }])),
+    ]);
+
+    expect(echoes).toHaveLength(0);
+    expect(frames[frames.length - 1]?.inputRms).toBeCloseTo(-72, 5);
   });
 
   it('enters error on a device disconnect event', async () => {

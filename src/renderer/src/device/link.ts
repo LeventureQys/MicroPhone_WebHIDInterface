@@ -7,7 +7,14 @@ import type { MockTransport } from './mock-transport';
 import type { ReportIds } from './protocol';
 import type { Clock, Timers } from './proto/timing';
 import { EQ_BAND_COUNT, eqBandAddr, findRegister } from './registers';
-import type { DeviceSnapshot, DeviceBoundTransport, ParamReadResult, SyncPhase, Transport } from './transport';
+import type {
+  DeviceSnapshot,
+  DeviceBoundTransport,
+  ParamEcho,
+  ParamReadResult,
+  SyncPhase,
+  Transport,
+} from './transport';
 import { WebHidTransport } from './webhid-transport';
 import { errorKeyOf } from './webhid/session';
 import type { WebHidSession } from './webhid/session';
@@ -173,13 +180,17 @@ export class DeviceLink extends EventTarget {
         ? this._createTransport(handle)
         : new WebHidTransport({ device: handle, reportIds: reportIdsFromConfig() });
       this._transport = transport;
+      // 先接上通道与监听再 open()：`open()` 里要做全量回读，失败时 `ParamSession.failFatal`
+      // 会留下解释原因的诊断帧。若等 open() 之后再 `use()`，这些帧就没有订阅者，
+      // 联调时诊断卡是空的（真机联调实测）。写请求不受影响——回读期间在途请求占着队列，
+      // 写只能排队等它结束。
+      this._listen(transport);
+      this._channel.use(transport);
       await transport.open();
       if (transport.state() !== 'ready') {
         this._fail('device');
         return;
       }
-      this._listen(transport);
-      this._channel.use(transport);
       this._store.setSync('syncing');
       this._patch({ sync: 'syncing' });
 
@@ -286,6 +297,21 @@ export class DeviceLink extends EventTarget {
     if (result.bands) this._applyBands(result.bands);
   }
 
+  /**
+   * 设备主动上报回填：与回读同一语义（覆盖本地值、不发帧），只是可以发生在任意时刻。
+   *
+   * 走 `applyEcho` / `applyBands` 而不是 `setParam` / `setBands`——后两者是用户改动的入口，
+   * 会差异对比后写回设备，设备上报再触发写帧就成了写环。
+   */
+  private _applyEcho(echo: ParamEcho): void {
+    if (echo.kind === 'param') {
+      this._store.applyEcho(echo.id, echo.value);
+      return;
+    }
+    // `_applyBands` 认的是寄存器字段名（`band1.gain`），与回读同一条路径
+    this._applyBands({ [`band${echo.band}.${echo.field}`]: echo.value });
+  }
+
   /** EQ 可调段 1–7 覆盖本地段；7–13 是设备内部段，保持本地值（B7） */
   private _applyBands(values: Readonly<Record<string, number>>): void {
     const next: EqBand[] = this._store.get().bands.map((band) => ({ ...band }));
@@ -315,6 +341,8 @@ export class DeviceLink extends EventTarget {
   private _listen(transport: Transport): void {
     this._detachers = [
       transport.onSync((phase) => this._patch({ sync: phase })),
+      // 设备主动上报（协议 0x10 设备→主机）：按键 / Mute / 预设切换等设备侧改动要能回到界面
+      transport.onParamEcho((echo) => this._applyEcho(echo)),
       transport.onError((error) => {
         if (error.kind === 'disconnected') this._handleDrop();
       }),

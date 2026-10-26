@@ -209,7 +209,7 @@ export const zh = {
   'device.kit.protocol': '桥协议',
   'device.kit.path': '子模块',
   'device.kit.note': 'webhid-kit 以只读 git submodule 引入，不修改上游',
-  'device.alphaNotice': '参数读写与固件升级已接通（虚拟下位机验证过），真机通道尚未验证',
+  'device.alphaNotice': '参数读写已在真机 M001 上跑通（2026-10-26 第二轮联调）；固件升级仍未上真机',
   'fw.flow': '升级流程',
   'device.error.nativeUnavailable': '当前环境没有原生 WebHID（需要 Chromium 安全上下文）',
   'device.error.bridge': '无法连接桥接服务',

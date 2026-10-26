@@ -3,12 +3,23 @@ import { DEFAULT_REPORT_IDS, type ReportIds } from './protocol';
 import { ParamSession, levelToDb } from './proto/session';
 import type { WordPair } from './proto/codec';
 import { defaultClock, defaultTimers, TIMING, type Clock, type Timers } from './proto/timing';
-import { EQ_BAND_COUNT, EQ_FIELD_ORDER, eqBandAddr, findRegister, fromRaw, toRaw } from './registers';
+import {
+  EQ_BAND_BASE,
+  EQ_BAND_COUNT,
+  EQ_BAND_STRIDE,
+  EQ_FIELD_ORDER,
+  eqBandAddr,
+  findRegister,
+  fromRaw,
+  toRaw,
+} from './registers';
 import type {
   DeviceBoundTransport,
   DiagEntry,
+  EqBandField,
   EqBandWrite,
   LevelFrame,
+  ParamEcho,
   ParamReadResult,
   ParamWrite,
   SelfCheckResult,
@@ -70,6 +81,20 @@ function transportErrorOf(cause: unknown): TransportError {
 }
 
 /**
+ * EQ 段地址反查：`0x2027` 起每段 5 个，段内顺序 enable/type/freq/gain/q。
+ *
+ * 段使能（段内偏移 0）不算可回填字段——B7 规定设备不回填、上位机也不写；
+ * 返回 null 表示"这条上报没有本地模型"，调用方直接忽略。
+ */
+function bandFieldOf(addr: number): { readonly band: number; readonly field: EqBandField } | null {
+  if (addr < EQ_BAND_BASE || addr >= EQ_BAND_BASE + EQ_BAND_COUNT * EQ_BAND_STRIDE) return null;
+  const offset = addr - EQ_BAND_BASE;
+  const field = EQ_FIELD_ORDER[offset % EQ_BAND_STRIDE];
+  if (field === 'enable') return null;
+  return { band: Math.floor(offset / EQ_BAND_STRIDE) + 1, field };
+}
+
+/**
  * 真实设备的 Transport：把 `ParamSession`（纯协议）接到 WebHID 句柄上。
  *
  * 分工：超时、重试、写合并、轮询节流全在 3.1 的 `ParamSession` 里，
@@ -89,7 +114,7 @@ export class WebHidTransport implements DeviceBoundTransport {
   private readonly _levelListeners = new Set<(frame: LevelFrame) => void>();
   private readonly _stateListeners = new Set<(state: TransportState) => void>();
   private readonly _syncListeners = new Set<(phase: SyncPhase) => void>();
-  private readonly _echoListeners = new Set<(echo: { readonly id: string; readonly value: number }) => void>();
+  private readonly _echoListeners = new Set<(echo: ParamEcho) => void>();
   private readonly _errorListeners = new Set<(error: TransportError) => void>();
   private readonly _diagListeners = new Set<(entry: DiagEntry) => void>();
   private readonly _inputListeners = new Set<(bytes: Uint8Array) => void>();
@@ -292,7 +317,7 @@ export class WebHidTransport implements DeviceBoundTransport {
     };
   }
 
-  onParamEcho(cb: (echo: { readonly id: string; readonly value: number }) => void): () => void {
+  onParamEcho(cb: (echo: ParamEcho) => void): () => void {
     this._echoListeners.add(cb);
     return () => {
       this._echoListeners.delete(cb);
@@ -480,11 +505,24 @@ export class WebHidTransport implements DeviceBoundTransport {
     });
   }
 
+  /**
+   * 设备主动上报的一条 `(addr, raw)`（协议 0x10 的设备→主机方向）。
+   *
+   * 地址落在三处之一：42 项标量 → `param`；EQ 可调段 → `band`；其余（预设名、保留位、
+   * 设备内部段）本版本没有本地模型，直接忽略。0x2057 电平不走这里（会话先分流到 onLevel）。
+   */
   private _handleEcho(addr: number, raw: number): void {
-    const spec = findParamByAddr(addr);
     const register = findRegister(addr);
-    if (!spec || !register) return;
-    this._emit(this._echoListeners, { id: spec.id, value: fromRaw(register, raw) });
+    if (!register) return;
+    const value = fromRaw(register, raw);
+    const spec = findParamByAddr(addr);
+    if (spec) {
+      this._emit(this._echoListeners, { kind: 'param', id: spec.id, value });
+      return;
+    }
+    const band = bandFieldOf(addr);
+    if (!band) return;
+    this._emit(this._echoListeners, { kind: 'band', band: band.band, field: band.field, value });
   }
 
   /**

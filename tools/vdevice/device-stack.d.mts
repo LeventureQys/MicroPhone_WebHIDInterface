@@ -93,6 +93,8 @@ export declare class ParamStack {
   setMode(mode: string): void;
   readRegister(addr: number): number | undefined;
   writeRegister(addr: number, raw: number): void;
+  /** 设备主动上报（协议 1026 §4，0x10 设备→主机）；返回是否真的发了帧 */
+  pushParams(pairs: ReadonlyArray<{ addr: number; raw: number }>): boolean;
   snapshot(): Record<string, number>;
   info(): DeviceInfo;
   stats(): StackStats;

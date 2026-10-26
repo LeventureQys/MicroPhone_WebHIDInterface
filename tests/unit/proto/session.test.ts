@@ -666,6 +666,88 @@ describe('R4-2 回读期间写排队', () => {
   });
 });
 
+describe('S-e × S-f 竞态：sync() 不能丢掉已上总线的请求', () => {
+  /** 让 await 链推进到下一次真正发帧的位置 */
+  const flushMicrotasks = async (): Promise<void> => {
+    for (let round = 0; round < 4; round += 1) await Promise.resolve();
+  };
+
+  it('在途轮询的应答不得被新 sync 的 0x13 认领（真机 2026-10-26 第二轮）', async () => {
+    const harness = createHarness({ autoReply: false });
+    seedDeviceInfo(harness.device);
+
+    const first = harness.session.sync();
+    harness.device.deliverOne();
+    harness.device.deliverOne();
+    await first;
+    expect(harness.session.phase()).toBe('ready');
+
+    harness.session.setPolling(true);
+    harness.timers.advance(TIMING.pollIntervalMs);
+    expect(harness.device.requests).toHaveLength(3);
+    const poll = harness.device.requests[2];
+    expect(poll.func).toBe(FUNC_RAND_READ);
+    expect(poll.data).toHaveLength(2);
+    expect(((poll.data[0] << 8) | poll.data[1])).toBe(LEVEL_ADDR);
+
+    const second = harness.session.sync();
+    await flushMicrotasks();
+    // 关键断言：轮询还挂在总线上时，sync 的 0x13 一条都不能发出去。
+    // 修复前这里立刻发 0x13，随后轮询的 0x12 应答被它认领 → sync 以「不是连续读响应」失败。
+    expect(harness.device.requests).toHaveLength(3);
+    expect(harness.session.phase()).toBe('ready');
+    expect(harness.events.levels).toHaveLength(0);
+
+    harness.device.deliverOne(); // 轮询应答：只用来释放槽位，不再回调（老请求已中断）
+    await flushMicrotasks();
+    expect(harness.events.levels).toHaveLength(0);
+    expect(harness.device.requests).toHaveLength(4);
+    expect(harness.device.requests[3].func).toBe(FUNC_SEQ_READ);
+    expect(harness.session.phase()).toBe('syncing');
+
+    harness.device.deliverOne();
+    harness.device.deliverOne();
+    await expect(second).resolves.toBeTruthy();
+    expect(harness.session.phase()).toBe('ready');
+
+    // 回读完成后轮询重启，电平采样恢复
+    harness.timers.advance(TIMING.pollIntervalMs);
+    harness.device.deliverOne();
+    await flushMicrotasks();
+    expect(harness.events.levels).toHaveLength(1);
+  });
+
+  it('在途请求超时也不重发：只释放槽位让新 sync 继续', async () => {
+    const harness = createHarness({ autoReply: false });
+    seedDeviceInfo(harness.device);
+
+    const first = harness.session.sync();
+    harness.device.deliverOne();
+    harness.device.deliverOne();
+    await first;
+
+    harness.device.dropReply = (index) => index === 2; // 轮询应答丢失（第 3 条请求）
+    harness.session.setPolling(true);
+    harness.timers.advance(TIMING.pollIntervalMs);
+    expect(harness.device.requests).toHaveLength(3);
+
+    const second = harness.session.sync();
+    await flushMicrotasks();
+    expect(harness.device.requests).toHaveLength(3);
+
+    // 轮询应答不来 → 轮询超时（S-f）释放槽位；sync 不得因此重发轮询帧
+    harness.timers.advance(TIMING.pollTimeoutMs);
+    await flushMicrotasks();
+    expect(harness.device.requests).toHaveLength(4);
+    expect(harness.device.requests[3].func).toBe(FUNC_SEQ_READ);
+    expect(harness.session.stats().retries).toBe(0);
+
+    harness.device.deliverOne();
+    harness.device.deliverOne();
+    await expect(second).resolves.toBeTruthy();
+  });
+});
+
 describe('S-f 轮询 / R5-2', () => {
   it('ready 后 1000 ms 内轮询 45…55 次，onLevel 给出原始值', async () => {
     const harness = createHarness();
@@ -806,6 +888,39 @@ describe('S-g / S-h / S-i 入站与诊断', () => {
     harness.timers.advance(TIMING.requestTimeoutMs);
     expect(harness.device.requests).toHaveLength(2);
     expect(harness.session.stats().retries).toBe(1);
+  });
+
+  it('设备主动上报 0x2057（0x10 帧）：进电平回调、记 info、不改变 phase', () => {
+    const harness = createHarness({ autoReply: false });
+    harness.session.handleBytes(encodeFrame(FUNC_RAND_WRITE, encodeRandWrite([{ addr: LEVEL_ADDR, raw: 200 }])));
+
+    expect(harness.events.levels).toHaveLength(1);
+    expect(harness.events.levels[0].raw).toBe(200);
+    expect(harness.session.phase()).toBe('idle');
+    const inbound = diagOf(harness, 'in');
+    expect(inbound).toHaveLength(1);
+    expect(inbound[0].level).toBe('info');
+    expect(inbound[0].summary).toContain('设备上报');
+    expect(inbound.some((entry) => entry.summary.includes('unexpected'))).toBe(false);
+  });
+
+  it('设备主动上报非电平地址：走 echo，不进电平回调', () => {
+    const harness = createHarness({ autoReply: false });
+    harness.session.handleBytes(encodeFrame(FUNC_RAND_WRITE, encodeRandWrite([{ addr: 0x2024, raw: 1 }])));
+
+    expect(harness.events.echoes).toEqual([[0x2024, 1]]);
+    expect(harness.events.levels).toHaveLength(0);
+  });
+
+  it('设备主动上报帧载荷不合法：记 error 诊断，不抛异常', () => {
+    const harness = createHarness({ autoReply: false });
+    harness.session.handleBytes(encodeFrame(FUNC_RAND_WRITE, Uint8Array.from([0x20, 0x57, 0x01])));
+
+    // 入站帧描述（info）与解析失败（error）各一条：这里只关心后者
+    const errors = diagOf(harness, 'in').filter((entry) => entry.level === 'error');
+    expect(errors).toHaveLength(1);
+    expect(errors[0].summary).toContain('格式不符');
+    expect(harness.events.levels).toHaveLength(0);
   });
 
   it('诊断环形缓冲按 ringSize 限长且时间升序', () => {

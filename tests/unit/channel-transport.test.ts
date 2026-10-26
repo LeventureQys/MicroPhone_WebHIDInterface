@@ -119,23 +119,29 @@ describe('ChannelTransport', () => {
     const device = new FakeTransport('webhid');
     const channel = new ChannelTransport(device);
     const syncs: string[] = [];
-    const echoes: Array<{ id: string; value: number }> = [];
+    const echoes: string[] = [];
     const errors: string[] = [];
     const diags: string[] = [];
     channel.onSync((phase) => syncs.push(phase));
-    channel.onParamEcho((echo) => echoes.push({ id: echo.id, value: echo.value }));
+    channel.onParamEcho((echo) =>
+      echoes.push(
+        echo.kind === 'param'
+          ? `${echo.id}=${echo.value}`
+          : `band${echo.band}.${echo.field}=${echo.value}`,
+      ),
+    );
     channel.onError((error) => errors.push(error.kind));
     channel.onDiag((entry) => diags.push(entry.summary));
 
     channel.write([{ id: 'enc.Level', value: 2 }]);
     device.emitSync('syncing');
-    device.emitEcho({ id: 'enc.Level', value: 2 });
+    device.emitEcho({ kind: 'param', id: 'enc.Level', value: 2 });
     device.emitError({ kind: 'readOnly', message: '只读' });
     device.emitDiag({ at: 1, dir: 'out', hex: '', summary: '写 0x2025', level: 'info' });
 
     expect(device.writes).toEqual([[{ id: 'enc.Level', value: 2 }]]);
     expect(syncs).toEqual(['syncing']);
-    expect(echoes).toEqual([{ id: 'enc.Level', value: 2 }]);
+    expect(echoes).toEqual(['enc.Level=2']);
     expect(errors).toEqual(['readOnly']);
     expect(diags).toEqual(['写 0x2025']);
   });

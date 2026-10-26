@@ -308,4 +308,44 @@ describe('设备侧参数协议栈（SubStage 2.1）', () => {
       firmware: { x: 1, y: 0, z: 0, build: 0, type: 1 },
     });
   });
+
+  it('17. 未映射参数地址回 0x0005（0x0001 只留给 UnitID 失配）', () => {
+    // 协议 1026 §6：地址/区间超出参数表 → CP_ACK_DATA_ERR；CP_ACK_DEV_ADDR_ERR 只表示设备地址不匹配
+    const write = createSink();
+    write.stack.feed(oneReport(buildFrame(0x10, [0x90, 0x00, 0x00, 0x01])));
+    expect(frameList(write)).toEqual([ACK_LITERAL[ACK_DATA_ERR]]);
+
+    const seqWrite = createSink();
+    seqWrite.stack.feed(oneReport(buildFrame(0x11, [0x90, 0x00, 0x00, 0x01, 0x00, 0x01])));
+    expect(frameList(seqWrite)).toEqual([ACK_LITERAL[ACK_DATA_ERR]]);
+
+    const randRead = createSink();
+    randRead.stack.feed(oneReport(buildFrame(0x12, [0x90, 0x00])));
+    expect(frameList(randRead)).toEqual([ACK_LITERAL[ACK_DATA_ERR]]);
+
+    // 0x2071 是参数表最后一项，再往后一个就出界
+    const seqRead = createSink();
+    seqRead.stack.feed(oneReport(buildFrame(0x13, [0x20, 0x71, 0x00, 0x02])));
+    expect(frameList(seqRead)).toEqual([ACK_LITERAL[ACK_DATA_ERR]]);
+  });
+
+  it('18. pushParams 发一帧 0x10 设备上报，不改寄存器、bootloader 下不发', () => {
+    const sink = createSink();
+    const ok = sink.stack.pushParams([
+      { addr: 0x2022, raw: 1 },
+      { addr: 0x2057, raw: 200 },
+    ]);
+
+    expect(ok).toBe(true);
+    // 上报帧与随机读应答同形：(Addr, Val) 4 B 一组，func 仍是 0x10
+    expect(frameList(sink)).toEqual([
+      hex(buildFrame(0x10, [0x20, 0x22, 0x00, 0x01, 0x20, 0x57, 0x00, 0xc8])),
+    ]);
+    // 只发帧，设备侧寄存器由调用方自己先改
+    expect(sink.stack.readRegister(0x2022)).toBe(0);
+    expect(sink.stack.stats().framesOut).toBe(1);
+
+    sink.stack.setMode(MODE_BOOTLOADER);
+    expect(sink.stack.pushParams([{ addr: 0x2022, raw: 1 }])).toBe(false);
+  });
 });

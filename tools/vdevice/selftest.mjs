@@ -640,6 +640,8 @@ class ParamClient {
     this.stats = { outFrames: 0, inFrames: 0, crcErrors: 0, timeouts: 0, retries: 0, droppedPolls: 0 };
     this.errors = [];
     this.level = { raw: null, at: 0 };
+    /** 设备主动上报（0x10）收到的帧数：协议 1026 §4 的双向复用 */
+    this.pushes = 0;
     this.inflight = null;
     this.queue = [];
     this.pendingWrites = new Map();
@@ -785,6 +787,11 @@ class ParamClient {
 
   handleFrame(frame) {
     if (this.phase === 'error') return;
+    // 协议 1026 §4：0x10 是设备主动上报，不属于任何在途请求，也不回 ACK
+    if (frame.func === FUNC_RAND_WRITE) {
+      this.handlePush(frame);
+      return;
+    }
     const inflight = this.inflight;
     if (inflight === null) {
       this.channel.pushDiag('in', hexBytes(encodeParamFrame(frame.func, frame.data)), `unexpected 帧：当前没有在途请求`, 'warn');
@@ -916,6 +923,22 @@ class ParamClient {
     const entry = reply.entries.find((item) => item.addr === LEVEL_ADDR);
     if (!entry) return;
     this.level = { raw: entry.raw, at: Date.now() };
+  }
+
+  /** 设备主动上报：载荷与随机读应答同形；本脚本只建模电平，其它地址计数不发散 */
+  handlePush(frame) {
+    let parsed;
+    try {
+      parsed = parseParamReply({ func: FUNC_RAND_READ, data: frame.data });
+    } catch (error) {
+      this.channel.pushDiag('in', hexBytes(encodeParamFrame(frame.func, frame.data)), `上报帧格式不符：${error.message}`, 'error');
+      return;
+    }
+    if (parsed.kind !== 'rand') return;
+    this.pushes += 1;
+    for (const entry of parsed.entries) {
+      if (entry.addr === LEVEL_ADDR) this.level = { raw: entry.raw, at: Date.now() };
+    }
   }
 
   /** 电平状态：1 s 没有新采样就判失效（R5-3 的可观测面） */
@@ -1582,7 +1605,25 @@ const CASES = [
         assert(samples[0].inputRmsDb <= -90, `raw=0 的 inputRms ${samples[0].inputRmsDb} > -90`);
         assert(Math.abs(samples[1].inputRmsDb + 48) <= 6, `raw=128 的 inputRms ${samples[1].inputRmsDb} 不在 -48±6`);
         assert(samples[2].inputRmsDb >= -6, `raw=256 的 inputRms ${samples[2].inputRmsDb} < -6`);
-        return { samples, levelAddr: `0x${hex4(LEVEL_ADDR)}` };
+
+        // 协议 1026 §4：设备用 0x10 主动上报，上位机不回 ACK、也不依赖轮询 —— 停轮询后靠推送拿电平
+        client.setPolling(false);
+        await ctx.post('/control/report', { addr: LEVEL_ADDR, raw: 200 });
+        const pushed = await waitFor(
+          () => {
+            const state = client.levelState();
+            return state.raw === 200 ? state : null;
+          },
+          2000,
+          '等待设备主动上报的电平',
+        );
+        assert(client.pushes > 0, '没有收到设备主动上报帧');
+
+        return {
+          samples,
+          levelAddr: `0x${hex4(LEVEL_ADDR)}`,
+          push: { frames: client.pushes, raw: pushed.raw, inputRmsDb: Number(pushed.db.toFixed(3)), acked: false },
+        };
       } finally {
         client.dispose();
         channel.close();

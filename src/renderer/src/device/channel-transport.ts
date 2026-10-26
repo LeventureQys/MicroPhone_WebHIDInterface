@@ -2,6 +2,7 @@ import type {
   DiagEntry,
   EqBandWrite,
   LevelFrame,
+  ParamEcho,
   ParamReadResult,
   ParamWrite,
   SyncPhase,
@@ -24,7 +25,7 @@ export class ChannelTransport implements Transport {
   private readonly _levelListeners = new Set<(frame: LevelFrame) => void>();
   private readonly _stateListeners = new Set<(state: TransportState) => void>();
   private readonly _syncListeners = new Set<(phase: SyncPhase) => void>();
-  private readonly _echoListeners = new Set<(echo: { readonly id: string; readonly value: number }) => void>();
+  private readonly _echoListeners = new Set<(echo: ParamEcho) => void>();
   private readonly _errorListeners = new Set<(error: TransportError) => void>();
   private readonly _diagListeners = new Set<(entry: DiagEntry) => void>();
 
@@ -105,7 +106,7 @@ export class ChannelTransport implements Transport {
     };
   }
 
-  onParamEcho(cb: (echo: { readonly id: string; readonly value: number }) => void): () => void {
+  onParamEcho(cb: (echo: ParamEcho) => void): () => void {
     this._echoListeners.add(cb);
     return () => {
       this._echoListeners.delete(cb);

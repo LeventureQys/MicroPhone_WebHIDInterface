@@ -347,6 +347,36 @@ export class ParamStack {
     this.#registers.set(addr, raw & WORD_MAX);
   }
 
+  /**
+   * 设备主动上报（协议 1026 §4：0x10 双向复用里的设备→主机方向）。
+   *
+   * 帧结构与随机读应答同形——`(Addr, Val)` 4 B 一组，一次可带多组；走 `onReplies` 这条
+   * 既有出口，侧车按普通回执一样切片、记录、下发。地址不校验：设备推一个上位机没有模型的
+   * 地址是合法场景（上位机应忽略，见 §5「更新本地镜像」）。
+   *
+   * 只负责发帧，不改寄存器；调用方要造"设备值已变"就自己先 `writeRegister`。
+   */
+  pushParams(pairs) {
+    if (this.#mode !== MODE_APP) return false;
+    const list = (Array.isArray(pairs) ? pairs : []).filter(
+      (pair) => Number.isInteger(pair?.addr) && Number.isInteger(pair?.raw),
+    );
+    if (list.length === 0) return false;
+    const data = new Uint8Array(list.length * 4);
+    list.forEach((pair, index) => {
+      const addr = pair.addr & WORD_MAX;
+      const raw = pair.raw & WORD_MAX;
+      data[index * 4] = (addr >> 8) & 0xff;
+      data[index * 4 + 1] = addr & 0xff;
+      data[index * 4 + 2] = (raw >> 8) & 0xff;
+      data[index * 4 + 3] = raw & 0xff;
+    });
+    const replies = [];
+    this.#pushFrame(replies, FUNC_RAND_WRITE, data);
+    this.#publish(replies);
+    return true;
+  }
+
   snapshot() {
     const out = {};
     for (const [addr, raw] of this.#registers) {
@@ -512,7 +542,8 @@ export class ParamStack {
     for (const item of items) {
       const entry = SPEC_BY_ADDR.get(item.addr);
       if (!entry) {
-        this.#pushAck(replies, ACK_DEV_ADDR_ERR);
+        // 协议 1026 §6：参数地址超出参数表回 DATA_ERR；DEV_ADDR_ERR 只表示 UnitID 失配
+        this.#pushAck(replies, ACK_DATA_ERR);
         return;
       }
       if (entry.kind === 'live') continue;
@@ -543,7 +574,8 @@ export class ParamStack {
     for (let index = 0; index < data.length; index += 2) {
       const addr = (data[index] << 8) | data[index + 1];
       if (!SPEC_BY_ADDR.has(addr)) {
-        this.#pushAck(replies, ACK_DEV_ADDR_ERR);
+        // 协议 1026 §6：未映射参数地址回 DATA_ERR（不是 UnitID 失配）
+        this.#pushAck(replies, ACK_DATA_ERR);
         return;
       }
       const value = this.#registers.get(addr) ?? 0;
@@ -575,7 +607,8 @@ export class ParamStack {
     for (let index = 0; index < count; index += 1) {
       const current = addr + index;
       if (!SPEC_BY_ADDR.has(current)) {
-        this.#pushAck(replies, ACK_DEV_ADDR_ERR);
+        // 协议 1026 §6：读区间越界回 DATA_ERR（不是 UnitID 失配）
+        this.#pushAck(replies, ACK_DATA_ERR);
         return;
       }
       const value = this.#registers.get(current) ?? 0;

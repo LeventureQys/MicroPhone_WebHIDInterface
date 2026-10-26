@@ -760,6 +760,7 @@ function main() {
     '/control/faults': 'POST',
     '/control/mode': 'POST',
     '/control/level': 'POST',
+    '/control/report': 'POST',
   });
 
   async function handleHttp(req, res) {
@@ -844,6 +845,35 @@ function main() {
       }
       paramStack.writeRegister(LEVEL_ADDR, levelSource.value(Date.now()));
       sendJson(res, 200, { ok: true, level: snapshot });
+      return;
+    }
+    if (url.pathname === '/control/report') {
+      const pairs = Array.isArray(body?.pairs)
+        ? body.pairs
+        : body && body.addr !== undefined
+          ? [{ addr: body.addr, raw: body.raw }]
+          : null;
+      if (!pairs || pairs.length === 0) {
+        sendJson(res, 400, {
+          ok: false,
+          error: 'body must be {"addr":0x2057,"raw":200} or {"pairs":[{"addr":…,"raw":…}]}',
+        });
+        return;
+      }
+      for (const pair of pairs) {
+        if (!Number.isInteger(pair?.addr) || pair.addr < 0 || pair.addr > 0xffff) {
+          sendJson(res, 400, { ok: false, error: `invalid address ${JSON.stringify(pair?.addr)}` });
+          return;
+        }
+        if (!Number.isInteger(pair?.raw) || pair.raw < 0 || pair.raw > 0xffff) {
+          sendJson(res, 400, { ok: false, error: `invalid raw ${JSON.stringify(pair?.raw)}` });
+          return;
+        }
+      }
+      // 设备侧值先变再上报：与真机"值变了才推"一致；静默改值走 /control/registers
+      for (const pair of pairs) paramStack.writeRegister(pair.addr, pair.raw);
+      const pushed = paramStack.pushParams(pairs);
+      sendJson(res, 200, { ok: true, pushed });
       return;
     }
     resetAll();

@@ -424,3 +424,87 @@ describe('parseImage', () => {
     }
   });
 });
+
+/**
+ * 《DFU固件升级通讯协议说明_20261026》§3.1：2026-10-26 起打包脚本把包首的「进入 DFU」帧
+ * 从 SigmaBus 换成参数协议帧 `00 10 00 0A 10 08 00 01 8D 09`。两种形态都要能解析。
+ */
+const MODBUS_ENTER_DFU = new Uint8Array([0x00, 0x10, 0x00, 0x0a, 0x10, 0x08, 0x00, 0x01, 0x8d, 0x09]);
+
+function buildPackageWithHeader(header: Uint8Array, infoHeaderBytes: number = 81): Uint8Array {
+  const plain = plainBytes(1024);
+  const cipher = gammaEncrypt(plain);
+  const blocks: Uint8Array[] = [];
+  for (let offset = 0; offset < cipher.length; offset += BLOCK_BYTES) {
+    blocks.push(cipher.slice(offset, Math.min(offset + BLOCK_BYTES, cipher.length)));
+  }
+  const info = encodeInfoFrame({
+    modelCode: 'JYM001',
+    modelName: 'MIC M001',
+    version: { x: 1, y: 2, z: 3 },
+    length: cipher.length,
+    checksum: sum32LittleEndianWords(plain),
+  });
+  let infoFrame = info;
+  if (infoHeaderBytes !== 81) {
+    // 把 81 B 的固件头扩到 infoHeaderBytes 字节（尾部补 0），再按新长度重封 LEN/CRC
+    const length = 7 + 2 + infoHeaderBytes;
+    const enlarged = new Uint8Array(length);
+    enlarged.set(info.subarray(0, 5), 0);
+    enlarged.set(info.subarray(5, info.length - 2), 5);
+    enlarged[1] = length & 0xff;
+    enlarged[2] = (length >> 8) & 0xff;
+    const crc = sigmaCrc(enlarged.subarray(0, length - 2));
+    enlarged[length - 2] = crc & 0xff;
+    enlarged[length - 1] = (crc >> 8) & 0xff;
+    infoFrame = enlarged;
+  }
+  return concat([header, infoFrame, ...blocks.map((block) => encodeBlockFrame(block))]);
+}
+
+describe('package header forms (协议 1026 §3.1)', () => {
+  it('accepts the new Modbus EnterDfu header and keeps it as frames[0]', () => {
+    const bytes = buildPackageWithHeader(MODBUS_ENTER_DFU);
+    const image = expectImage(parseImage(bytes));
+    expect(image.headerKind).toBe('modbus');
+    expect(Array.from(image.frames[0])).toEqual(Array.from(MODBUS_ENTER_DFU));
+    expect(image.frames).toHaveLength(6); // 头 + info + 4 块
+    expect(image.info.modelCode).toBe('JYM001');
+    expect(image.info.version).toEqual({ x: 1, y: 2, z: 3 });
+    expect(image.blocks).toHaveLength(4);
+    expect(Array.from(image.plain)).toEqual(Array.from(plainBytes(1024)));
+  });
+
+  it('still accepts the legacy SigmaBus EnterDfu header', () => {
+    const bytes = buildPackageWithHeader(encodeSigmaFrame(0x03, ENTER_DFU_DATA));
+    const image = expectImage(parseImage(bytes));
+    expect(image.headerKind).toBe('sigma');
+    expect(Array.from(image.frames[0])).toEqual(Array.from(encodeSigmaFrame(0x03, ENTER_DFU_DATA)));
+  });
+
+  it('rejects a Modbus header with a bad crc instead of scanning past it', () => {
+    const broken = Uint8Array.from(MODBUS_ENTER_DFU);
+    broken[broken.length - 1] ^= 0xff;
+    const image = parseImage(buildPackageWithHeader(broken));
+    expect(image.ok).toBe(false);
+    if (image.ok) return;
+    expect(image.rejection.problem).toBe('frame');
+    expect(image.rejection.message).toContain('EnterDfu header');
+  });
+
+  it('accepts the 85 byte info body the protocol doc describes (firmware only reads 81)', () => {
+    const bytes = buildPackageWithHeader(MODBUS_ENTER_DFU, 85);
+    const image = expectImage(parseImage(bytes));
+    expect(image.info.modelCode).toBe('JYM001');
+    expect(image.info.length).toBe(1024);
+    expect(image.blocks).toHaveLength(4);
+  });
+
+  it('still rejects an info body that is neither 81 nor 85 bytes', () => {
+    const image = parseImage(buildPackageWithHeader(MODBUS_ENTER_DFU, 79));
+    expect(image.ok).toBe(false);
+    if (image.ok) return;
+    expect(image.rejection.problem).toBe('infoCount');
+    expect(image.rejection.detail).toEqual({ length: 79 });
+  });
+});

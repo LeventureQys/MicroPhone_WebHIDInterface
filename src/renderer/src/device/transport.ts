@@ -52,6 +52,24 @@ export interface EqBandWrite {
   readonly value: number;
 }
 
+/**
+ * 设备主动上报（协议 0x10 的「设备→主机」方向）回填给界面的一次变化。
+ *
+ * 一个联合而不是两个回调：协议上它就是同一条 0x10 帧里的 `(Addr, Val)` 序列，
+ * 地址落在两套模型上——42 项标量进 `params`，EQ 可调段进 `bands`。
+ * 上位机收到后只更新本地镜像，**不回 ACK、不发帧**（协议 1026 §4/§5）。
+ */
+export type ParamEcho =
+  | { readonly kind: 'param'; readonly id: string; readonly value: number }
+  | {
+      readonly kind: 'band';
+      /** 段号 1..7，与 `EqBandWrite.band` 同口径 */
+      readonly band: number;
+      readonly field: EqBandField;
+      /** 工程量（Hz / dB / Q / 枚举 0..4） */
+      readonly value: number;
+    };
+
 export interface ParamReadResult {
   /** paramId → 工程量，只含 42 项标量（EQ 段另见 `bands`） */
   readonly preset: Readonly<Record<string, number>>;
@@ -86,7 +104,13 @@ export interface Transport {
   /** 全量回读；失败时 reject，调用方（DeviceLink）负责降级 */
   readAll(): Promise<ParamReadResult>;
   onSync(cb: (phase: SyncPhase) => void): () => void;
-  onParamEcho(cb: (echo: { readonly id: string; readonly value: number }) => void): () => void;
+  /**
+   * 设备主动上报的参数变化（0x10 双向复用里的设备→主机方向）。
+   *
+   * 通道只负责把 `(addr, raw)` 换算成工程量；落到 `params` 还是 `bands`、要不要提示，
+   * 由订阅方（`DeviceLink`）决定。设备可能在任意时刻上报，与在途请求无关。
+   */
+  onParamEcho(cb: (echo: ParamEcho) => void): () => void;
   onError(cb: (error: TransportError) => void): () => void;
   onDiag(cb: (entry: DiagEntry) => void): () => void;
 }

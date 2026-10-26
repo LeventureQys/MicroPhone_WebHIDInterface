@@ -63,13 +63,35 @@ declare module '@webhid-kit' {
     WebSocketImpl?: unknown;
   }): Promise<InstalledVirtualHid>;
 
+  /**
+   * 上游 `native.js` 的 `NativeHidHandle`：与 `BridgedHIDDevice` 不同，它**不转发**
+   * `vendorId / productId / productName / serialNumber`，身份信息只在 `device` 本体上。
+   * 本仓的句柄契约要求这三项，因此 `./device/webhid/kit.ts` 负责补适配。
+   */
+  export interface KitNativeHIDDevice extends EventTarget {
+    readonly device: {
+      readonly vendorId: number;
+      readonly productId: number;
+      readonly productName?: string;
+      readonly serialNumber?: string;
+    };
+    readonly opened: boolean;
+    open(): Promise<void>;
+    close(): Promise<void>;
+    forget?(): Promise<void>;
+    sendReport(reportId: number, data: Uint8Array): Promise<void>;
+    sendFeatureReport(reportId: number, data: Uint8Array): Promise<void>;
+    receiveFeatureReport(reportId: number): Promise<DataView>;
+    decode?(reportType: string, reportId: number, data: Uint8Array | DataView): KitDecodedReport;
+  }
+
   export function restoreNativeHid(options?: { target?: object }): boolean;
   export function isNativeWebHidAvailable(target?: object): boolean;
-  export function getNativeDevices(target?: object): Promise<KitHIDDevice[]>;
+  export function getNativeDevices(target?: object): Promise<KitNativeHIDDevice[]>;
   export function requestNativeHidDevice(options?: {
     filters?: ReadonlyArray<Record<string, number>>;
     exclusionFilters?: ReadonlyArray<Record<string, number>>;
-  }): Promise<KitHIDDevice[]>;
+  }): Promise<KitNativeHIDDevice[]>;
 
   export interface KitReportSpec {
     readonly reportId: number;

@@ -211,7 +211,7 @@ export const en: Record<DictKey, string> = {
   'device.kit.protocol': 'Bridge protocol',
   'device.kit.path': 'Submodule',
   'device.kit.note': 'webhid-kit is vendored as a read-only git submodule',
-  'device.alphaNotice': 'Parameter I/O and firmware update are wired up (verified against the virtual device); the hardware path is still unverified',
+  'device.alphaNotice': 'Parameter I/O is verified on the M001 hardware (round 2, 2026-10-26); firmware update is still virtual-device only',
   'fw.flow': 'Update flow',
   'device.error.nativeUnavailable': 'Native WebHID is unavailable here (needs a Chromium secure context)',
   'device.error.bridge': 'Cannot reach the bridge service',

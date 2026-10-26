@@ -237,6 +237,22 @@ describe('DeviceLink', () => {
     expect(bands.slice(7, 14)).toEqual(DEFAULT_BANDS.slice(7, 14));
   });
 
+  it('applies device-pushed params and EQ bands without writing them back', async () => {
+    const { link, store, transport } = setup();
+    await link.attach('vdevice');
+    expect(store.get().params['enc.Level']).toBe(3);
+
+    // 协议 1026 §4：设备→主机的 0x10 上报，上位机只更新本地镜像、不回 ACK、不发帧
+    transport.emitEcho({ kind: 'param', id: 'enc.Level', value: 1 });
+    transport.emitEcho({ kind: 'band', band: 2, field: 'gain', value: 4.5 });
+
+    expect(store.get().params['enc.Level']).toBe(1);
+    expect(store.get().bands[1].gain).toBe(4.5);
+    // 回填走 applyEcho / applyBands，绝不能反过来触发写帧（否则设备上报会变成写环）
+    expect(transport.writes).toHaveLength(0);
+    expect(transport.bandWrites).toHaveLength(0);
+  });
+
   it('detaches back to the mock channel', async () => {
     const { link, channel, store, session } = setup();
     await link.attach('vdevice');
