@@ -343,6 +343,33 @@ Fix（已实测）：把域名钉到可用边缘 IP 再推，HTTP/1.1 更稳：
 ```
 验证：`git ls-remote origin refs/heads/main` 的 sha 与 `git rev-parse HEAD` 一致。
 
+**2026-10-27 补充：HTTPS 这条路已经不通，改用「临时 deploy key + SSH push」（已实测跑通）。**
+实测：`github.com` 的 DNS（`20.205.243.166`）连不上；钉 `4.237.22.38` 能建 TLS 但 40 s 后 `Recv failure: Connection was reset`；`140.82.112/113/114` 全部超时；只有 `api.github.com` 稳定 200。SSH 侧 `github.com:22` 与 `ssh.github.com:443` 都通。步骤：
+
+```powershell
+# 1) 取 token（Credential Manager 里已有，GIT_TERMINAL_PROMPT=0 时静默返回 40 位 gho_ token）
+$env:GIT_TERMINAL_PROMPT='0'
+$token = ("protocol=https`nhost=github.com`n`n" | & $git credential fill) -match '^password=' | % { $_ -replace '^password=','' }
+$env:GIT_TERMINAL_PROMPT='1'
+
+# 2) 本地生成临时密钥（放 D:\Temp，别碰用户的 ~/.ssh）
+& 'C:\Program Files\Git\usr\bin\ssh-keygen.exe' -t ed25519 -N '' -C 'dsh-upload' -f D:\Temp\dsh-git-ssh\id_ed25519
+
+# 3) 用 token 通过 API 把它加成仓库的临时 deploy key（read_only=false）
+#    POST https://api.github.com/repos/LeventureQys/MicroPhone_WebHIDInterface/keys
+#    body: {"title":"dsh-upload-<date>","key":"<id_ed25519.pub 内容>","read_only":false}
+
+# 4) SSH push（GIT_SSH_COMMAND 里的路径必须用**正斜杠**，反斜杠会被 git 的参数解析吃掉）
+$env:GIT_SSH_COMMAND = '"C:/Program Files/Git/usr/bin/ssh.exe" -i D:/Temp/dsh-git-ssh/id_ed25519 -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new -o UserKnownHostsFile=D:/Temp/dsh-git-ssh/known_hosts -o BatchMode=yes'
+& $git push "ssh://git@github.com/LeventureQys/MicroPhone_WebHIDInterface.git" main:main
+
+# 5) 收尾：更新本地跟踪分支、删 deploy key、删临时密钥
+& $git update-ref refs/remotes/origin/main (git rev-parse HEAD)
+#    DELETE https://api.github.com/repos/LeventureQys/MicroPhone_WebHIDInterface/keys/<id>
+```
+
+坑：用 `%TEMP%` 之外的相对路径写 known_hosts 时，若 `GIT_SSH_COMMAND` 里的反斜杠被吃，会在**仓库根目录**生成一个 `D：Temp…known_hosts` 的怪文件（全角冒号），记得删。验证同上：`GET /repos/.../git/ref/heads/main` 的 sha == `git rev-parse HEAD`。
+
 ### 20. `electron-builder` 报 `No JSON content found in output`（pnpm 不在 PATH）
 症状：`pnpm run dist:win` 走到 `searching for node modules pm=pnpm` 后失败：
 `⨯ No JSON content found in output  failedTask=build`。
