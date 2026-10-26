@@ -13,3 +13,6 @@ Document/Protocol/Bootloader/**/*.lib
 # 仓库里曾出现的协议表副本（真值在 Document/Protocol/）
 third_party/*.xlsx
 third_party/*.md
+
+# 厂商 J-Link 安装包（51 MB 二进制，按 third_party/设备相关/Release/下载说明.docx 自行获取）
+third_party/设备相关/Release/JLink_Windows_V696.exe

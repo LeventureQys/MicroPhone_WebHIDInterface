@@ -1,6 +1,6 @@
 # AGENTS.md — MicroPhone_WebHIDInterface
 
-麦克风上位机（Electron + WebHID 方向）。Alpha v1.0.0 交付界面层（设备数据由 Mock 提供）；Alpha v1.1.0 接上参数协议与固件升级（虚拟下位机可跑通全流程，真机未验证）。
+麦克风上位机（Electron + WebHID 方向）。Alpha v1.0.0 交付界面层（设备数据由 Mock 提供）；Alpha v1.1.0 接上参数协议与固件升级（虚拟下位机可跑通全流程；真机首轮联调 2026-10-26 已完成，链路卡在固件侧，见 `Document/Update/Alpha/v1.1.0/真机联调报告.md`）。
 
 ## Workspace
 
@@ -84,14 +84,15 @@ Ground truth（地址 / 标定 / 权限 / 默认值，唯一权威）：`Documen
 | 参照 | 本仓 | 备注 |
 |---|---|---|
 | `Document/Protocol/M001参数表V0.1.xlsx` | `src/renderer/src/device/registers.ts`、`src/renderer/src/domain/params.ts` | 地址 / 原始值域 / 标定 / 读写权限 / 默认值 |
+| `Document/Protocol/Modbus通讯协议说明_20261026.md` | `src/renderer/src/device/protocol.ts`、`device/proto/**`、`tools/vdevice/device-stack.mjs` | 帧结构 / CRC / 功能码 / Report ID / 0x10 双向复用（2026-10-26 换版，协议层唯一权威；评审见 `协议评审-Modbus协议_20261026.md`） |
 | `Document/Protocol/效果器参数范围.xlsx` | `src/renderer/src/domain/params.ts` | 仅中文标签与单位；数值以寄存器表为准 |
 | `Document/Update/Alpha/v1.0.0/需求文档.md` | 全部功能范围 | 需求边界 |
 | `Document/Update/Alpha/v1.0.0/设计文档.md` | 全部实现契约 | 接口签名与视觉规范 |
-| `Document/Update/Alpha/v1.1.0/设计文档.md` | v1.1.0 契约与 §12 变更记录 R-1…R-21 | 与 v1.0.0 冲突时以本文件为准 |
+| `Document/Update/Alpha/v1.1.0/设计文档.md` | v1.1.0 契约与 §12 变更记录 R-1…R-23 | 与 v1.0.0 冲突时以本文件为准 |
 | 参照实现 AudioEQ_Visualized_Web（MIT） | `src/renderer/src/eq/**` | 频响算法与 Canvas 分层渲染 |
 | `third_party/web_hid_utils/docs/*.md`、`packages/webhid-kit/README.md` | `src/renderer/src/device/webhid/**` | WebHID 强制约束、桥接协议、套件 API |
 
-裁决：地址 / 标定 / 权限 / 默认值以 `M001参数表V0.1.xlsx` 为准（实现即 `device/registers.ts`）；中文标签与单位可参考 `效果器参数范围.xlsx`，但数值冲突时以寄存器表为准；曲线渲染细节以参照实现为准并做渲染适配。
+裁决：地址 / 标定 / 权限 / 默认值以 `M001参数表V0.1.xlsx` 为准（实现即 `device/registers.ts`）；帧结构 / CRC / 功能码 / Report ID / 上报语义以 `Modbus通讯协议说明_20261026.md` 为准（实现即 `device/proto/**` + `device/protocol.ts`）；中文标签与单位可参考 `效果器参数范围.xlsx`，但数值冲突时以寄存器表为准；曲线渲染细节以参照实现为准并做渲染适配。
 
 ## Architecture
 
@@ -174,9 +175,19 @@ Remove-Item Env:ELECTRON_RUN_AS_NODE -ErrorAction SilentlyContinue
 
 **边界（本次不做，别当成 bug）**：
 
-1. 参数 ↔ 字节映射已由 `device/proto/**`（参数协议）与 `device/dfu/**`（SigmaBus/DFU）实现；`device/webhid-transport.ts` 是真实实现，不再是 Alpha 桩。真机通道仍只验证到"逻辑正确、不崩、不误弹、错误可读"（无硬件）。
-2. 真机通道的 `select-hid-device` 改为**按 `Usage Page 0xFF01 / Usage 0x01` 白名单放行**（`shared/webhid-whitelist.ts` 的 `shouldAllowSelection`：空白名单→拒；entries 非空→放；vids/pids 全空→放；否则按 VID/PID 复核）。usage 过滤实际发生在渲染进程 `requestDevice({ filters })`（Electron 的 `HIDDevice` 不含 `collections`，主进程只能粗筛），**真机未验证**。
+1. 参数 ↔ 字节映射已由 `device/proto/**`（参数协议）与 `device/dfu/**`（SigmaBus/DFU）实现；`device/webhid-transport.ts` 是真实实现，不再是 Alpha 桩。
+2. 真机通道的 `select-hid-device` 改为**按 `Usage Page 0xFF01 / Usage 0x01` 白名单放行**（`shared/webhid-whitelist.ts` 的 `shouldAllowSelection`：空白名单→拒；entries 非空→放；vids/pids 全空→放；否则按 VID/PID 复核）。usage 过滤实际发生在渲染进程 `requestDevice({ filters })`。
 3. 上游 `forget()` 只撤销本会话授权，不等于操作系统级撤销。
+
+**首轮真机联调（2026-10-26，M001 `0x0A67/0x0010`）**：路径全部打通到「第 1 条回读成功、第 2 条被固件假 ACK 抢答」，参数链路卡在固件侧（补位零 + 解析器闭锁），详见 `Document/Update/Alpha/v1.1.0/真机联调报告.md`，取证在 `artifacts/real/`。实测三条与旧笔记冲突、已作废的假设：
+
+1. **Electron 33.4.11 的 `HIDDevice` 带 `collections`**（含 `usagePage`/`usage`/报告数），`getDevices()` 与 `requestDevice()` 都有，所以 `shouldAllowSelection` 的 usage 复核在真机上可用；原「不含 collections、主进程只能粗筛」的结论作废。
+2. 原生句柄 `NativeHidHandle` **不透出** `vendorId/productId/productName`（身份在 `handle.device` 上），必须经 `device/webhid/kit.ts` 的 `adaptNativeHandle()` 补齐，否则真机在枚举阶段就抛 `Cannot read properties of undefined`。
+3. `getDevices()` 会列出系统里所有 HID 设备（键盘/鼠标/灯效），因为主进程 `setDevicePermissionHandler` 对 `hid` 一律放行；真机列表需要按 `collections` 过滤（遗留项 R2）。
+
+**第二轮真机联调（2026-10-26 23:00，固件 V0.0.2）**：**参数链路已跑通**——`sync()`、诊断自检 3/3、场景写入 → 设备回读一致；补位零与解析器闭锁在正常请求路径上已修，`0x0001`/`0x0002` 只出现在拒绝路径。仍留 7 条固件问题（拒绝路径喷 ACK、读路径不校验地址、只读/范围不校验、`0x12` 超容量返回 514 B 帧、区间是 `0x2075`(118) 不是 `0x2071`(114)、`0x2057` 恒 0 且无周期上报、信息区/预设区无默认值），详见 `Document/Update/Alpha/v1.1.0/真机联调报告-第二轮.md`，取证在 `artifacts/real2/`，探针 `scripts/probes/real2-*.js`。
+
+**DFU 包格式（协议《DFU固件升级通讯协议说明_20261026》）**：包首「进入 DFU」帧有两种形态——旧 SigmaBus `C4 0B 00 00 03 08 10 01 00 15 FF`，或 2026-10-26 起的新 Modbus 帧 `00 10 00 0A 10 08 00 01 8D 09`；`device/dfu/image.ts` 的 `detectPackageHeader()` 两种都收，`ParsedImage.headerKind` 记录形态，`frames[0]` 仍是包首帧。信息帧体固件只读前 81 B（出厂包 = 81 / 整帧 90），协议文档写的 85 / 94 是笔误，解析器两种长度都接受。**真机 DFU 尚未做过**：进 DFU 后设备会复位重枚举，主机当前不重开句柄（P0），评审与修复顺序见 `Document/Protocol/DFU协议符合性评审_20261026.md`。
 
 升级子模块：
 
@@ -352,6 +363,25 @@ Fix：掉线用"不答（超时）"表达：`POST /control/faults` 注入 `{"act
 症状：装成别的版本后 `vitest run --coverage` 报 `Cannot find module '@vitest/coverage-v8'` 或覆盖率全是 0/工具内部抛错。
 根因：`@vitest/coverage-v8` 与 `vitest` 是配套发布的，跨版本时 provider 与核心的 provider API 不匹配。
 Fix：锁同版本安装 `& $node $pnpm add -D @vitest/coverage-v8@1.6.1`（本仓 vitest 冻结在 1.6.1）。升级 vitest 必须同时升级它。
+
+### 24. 真机固件不丢弃 63 B 报文尾部补位 → 假 ACK 抢答 + 解析器闭锁
+症状（M001 真机，2026-10-26）：`sync()` 第 1 条回读正常、第 2 条立刻 `ACK 0x0002 长度错` → 顶栏「同步失败」；诊断卡里每个请求之后都夹着 `floor(补位字节/4)` 条 `ACK 0x0002`（偶发 `0x0001`）；再往后每次请求只收到每 9–15 ms 一条的 ACK，**没有任何数据帧**，静默约 1.5 s 后自愈。
+根因：固件按 `Len` 取帧后**保留**报文尾部的 `0x00` 补位并继续按 4 B 步进解析，`Len = 0` 被判成长度错；残留字节让下一次解析错位，进而闭锁。需求 C1 要求上位机每帧发满 63 B（补位不可避免），所以接收侧必须丢弃补位——虚拟下位机早已实现（`tools/vdevice/device-stack.mjs` 的 `#drain`，设计 §12 R-14、SubStage_2.1 §256）。
+Fix（固件侧）：`Len === 0` → 整段丢弃；帧尾不足 4 B 且全 `0x00` → 丢弃；`Len` 非法 → 清累积器后回 `ACK_LEN_ERR`；再加 20–50 ms 帧间超时清累积器。
+诊断方法：`--exec-file=scripts/probes/real-hid-raw-inbound.js`（看原始入站报文）与 `real-hid-gap.js`（量可用请求间隔）。**别把它误判成上位机 bug**：`ParamSession` 按 `S-h` 用 `0x02` 终止在途请求是协议要求，协议没有请求序号，补位产生的假 ACK 无法归因。
+
+**2026-10-26 第二轮更新（固件 V0.0.2）**：正常请求路径已修好——补位 0–62 B 10 档全部「一请求一应答」，间隔 0 ms 可用。但**拒绝路径没修**：`UnitID = 0x01` 的一次读仍会回 18 条 ACK（4 ms 一条，`0x0001`/`0x0002` 交替），随后一条合法请求被这串 ACK 吞掉；`0x11`/`0x12` 超容量、未知功能码也会静默。所以：再看到「一次请求多条 ACK」先确认是不是拒绝路径（UnitID/长度错/CRC 错），别直接怀疑补位逻辑没改。复测用 `scripts/probes/real2-defects.js` 的 D1/D1b。
+
+### 25. `pnpm run test:device` 的 T07 在本机稳定失败（定时器粒度）
+症状：20 例里 `T07 写合并（R3-6）` 报 `120 次写产生 23 帧，超过 20`，用例耗时 3.2–3.3 s（预期 ≈1.9 s）。
+根因：T07 的循环是 `client.write()` + `await delay(16)` 共 120 次；本机没有 Chromium 进程把系统定时器精度抬到 1 ms 时，Windows 的 15.6 ms 粒度让每次 `delay(16)` 实际 ≈27 ms，墙钟拉到 3.2 s，而写合并窗口 `writeThrottleMs = 120`，帧数 ≈ `ceil(T/120)+1` 就是 23。
+已验证与代码无关：`git stash push -- src tests` 后重跑仍失败（3273 ms）。要它变绿：把 `writeThrottleMs` 调大或把用例的 `delay(16)` 改成按墙钟校准的写法，不要靠"跑着 Electron 顺带提高定时器精度"。
+
+### 26. `sync()` 抢发 `0x13`，被在途电平轮询的 `0x12` 应答认领 →「预设回读应答不是连续读响应」
+症状（M001 真机，2026-10-26 第二轮）：连上设备后第一次 `sync()` 成功，点「一键自检」再 `sync()` 就失败，顶栏「同步失败」、提示「设备没有应答，参数未写入」；诊断日志里 `0x13` 刚发出 2 ms 就收到一条 `00 12 00 0A 20 57 …`（轮询应答）。
+根因：`ParamSession.cancelWork()` 把**已经发到总线上**的在途轮询直接丢弃（只调 `onFail`），但协议没有请求序号；poll 的 `0x12` 回包到达时，会话把它当成新一轮 `0x13` 的应答，`link.ts` 判定"不是连续读响应"。
+Fix（已落盘，`device/proto/session.ts`）：**已上总线的请求不能丢**——`cancelWork()` 把在途任务标记 `abandoned` 并返回一个"等它回包/超时"的 Promise（总线空闲时返回 `null`，`sync()` 开头保持同步执行），`sync()` 等它兑现后才发新帧；遗弃任务的应答只释放槽位不回调；超时不重发；另加 `syncGeneration`（旧 sync 不得改相位）与 `drainingSync`（等回包期间压住轮询）。单测见 `tests/unit/proto/session.test.ts` 的「S-e × S-f 竞态」两条。
+排查口径：**这不再是固件问题**。若协议将来加请求序号，可把 `abandoned` 逻辑换成按序号配对。复测用 `scripts/probes/real2-app-check-shot.js`（自检三步应全绿）。
 
 ## Domain constants
 

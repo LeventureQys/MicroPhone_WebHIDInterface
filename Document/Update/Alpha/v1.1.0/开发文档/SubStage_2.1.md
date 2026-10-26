@@ -148,15 +148,16 @@ export class ParamStack {
 | P1 | 入站报告累积不足一帧 | 不出任何回执；半帧保留到下次 |
 | P2 | 一帧跨多条报告 | 收齐后一次性应答 |
 | P3 | 一条报告里含两帧（帧粘连） | 两条回执分别发出，顺序与入站一致 |
-| P4 | `0x12` 随机读 | 每条地址 `(Addr,Val)` 4 B 大端，func 回 `0x12`；地址不存在 → 回 `0x02` ACK `0x0001`（地址错） |
-| P5 | `0x13` 连续读 | `首址 + 数目 + 数据（2B×N 大端）`，func 回 `0x13`；越界（`首址+N > 0x2071` 且不在设备信息/配置区）→ ACK `0x0001` |
-| P6 | `0x10` 随机写 / `0x11` 连续写 | 逐项校验：只读 → 回 `0x02` ACK `0x0004`（**整帧不落地**）；超范围 → ACK `0x0005`（整帧不落地）；地址不存在 → ACK `0x0001`；全部合法 → 落地并回 ACK `0x0000` |
+| P4 | `0x12` 随机读 | 每条地址 `(Addr,Val)` 4 B 大端，func 回 `0x12`；地址不存在 → 回 `0x02` ACK `0x0005`（协议 1026 §6：参数地址越界一律 DATA_ERR，`0x0001` 只给 UnitID 失配） |
+| P5 | `0x13` 连续读 | `首址 + 数目 + 数据（2B×N 大端）`，func 回 `0x13`；越界（`首址+N > 0x2071` 且不在设备信息/配置区）→ ACK `0x0005` |
+| P6 | `0x10` 随机写 / `0x11` 连续写 | 逐项校验：只读 → 回 `0x02` ACK `0x0004`（**整帧不落地**）；超范围 → ACK `0x0005`（整帧不落地）；地址不存在 → ACK `0x0005`；全部合法 → 落地并回 ACK `0x0000` |
 | P7 | `len % 4 != 0`（`0x10`）/ `N*2+4 != len`（`0x11`）/ 未知 func | 回 ACK `0x0002`（长度错） |
 | P8 | UnitID ≠ `0x00` | 回 ACK `0x0001` |
 | P9 | CRC 错 | 不回任何回执（真实设备回 `0x0003`，但为避免把"错帧"当成有效触发，这里也回 `0x02 ACK 0x0003`；**实现时回 ACK 0x0003**，与协议一致） |
 | P10 | 写入 `0x1008 = 1` | 先回 ACK `0x0000`，再置 `dfuRequested=true`（模式切换留给 2.2 的 hooks） |
 | P11 | 写 `0x2057`（电平） | 忽略写入但回 ACK `0x0000`（`kind:'live'` 寄存器） |
 | P12 | 写保留项 `0x2052`/`0x2056` | 回 ACK `0x0004`（视为只读） |
+| P13 | 设备主动上报（`POST /control/report`） | 发一帧 `0x10`，数据段 `(Addr,Val)` 4 B 一组；不占在途请求、不产生 ACK；侧车先改寄存器再上报 |
 
 ### 4.3 `tools/vdevice/sidecar.mjs`
 
@@ -173,6 +174,7 @@ export class ParamStack {
 4. 控制面 HTTP 服务（`--control-port`，仅 `127.0.0.1`）：
    - `GET /control/stats` → `{ mode, framesIn, framesOut, byFunc, unknownFunc, rejectedReadOnly, rejectedRange, dfuRequested, levelRaw, firmwareVersion }`
    - `POST /control/registers` body `{ values: { "0x2024": 1 } }` → 写入并回 `{ ok: true }`
+   - `POST /control/report` body `{ addr, raw }` 或 `{ pairs: [{ addr, raw }] }` → 先写寄存器，再发一帧设备主动上报（协议 1026 §4 的 `0x10` 设备→主机），回 `{ ok: true, pushed }`
    - `POST /control/reset` → 重建默认寄存器、清累积器、回 `{ ok: true }`
    - `GET /control/log` → 最近 200 条 `{ at, dir, hex }`
    - 其它路径 `404`，方法不符 `405`；
