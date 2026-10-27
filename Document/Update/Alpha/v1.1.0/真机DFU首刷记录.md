@@ -2,6 +2,9 @@
 
 > 目的：用厂商新给的 `Document/Protocol/dfu_M001 MCU V0.0.2_2026-10-26_Rev0.bin` 在真机上跑通 DFU。
 > 结果：**协议链路打通到"设备开始写 Flash"，但 Bootloader 在写入过程中反复挂死，三次尝试全部中断，设备停在 Bootloader。**
+>
+> **后续（2026-10-27）：已刷通。** 见 `真机DFU刷写成功记录.md`——挂死未再复现，改为 4 KB 扇区擦除偶发 `0x02`（重发可过），并解决了重发导致的 `DataCount` 多算（`0x04`）。本文件保留首刷现场与对固件的三个问题。
+>
 > 探针：`scripts/probes/real3-dfu-flash.js`（完整流程）、`real3-ping.js`（连通性）、`real3-wait.js`（挂死后观察）、`real3-dev-info.js`（读 DevInfo）
 > 取证：`artifacts/real3/`
 

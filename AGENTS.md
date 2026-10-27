@@ -187,7 +187,9 @@ Remove-Item Env:ELECTRON_RUN_AS_NODE -ErrorAction SilentlyContinue
 
 **第二轮真机联调（2026-10-26 23:00，固件 V0.0.2）**：**参数链路已跑通**——`sync()`、诊断自检 3/3、场景写入 → 设备回读一致；补位零与解析器闭锁在正常请求路径上已修，`0x0001`/`0x0002` 只出现在拒绝路径。仍留 7 条固件问题（拒绝路径喷 ACK、读路径不校验地址、只读/范围不校验、`0x12` 超容量返回 514 B 帧、区间是 `0x2075`(118) 不是 `0x2071`(114)、`0x2057` 恒 0 且无周期上报、信息区/预设区无默认值），详见 `Document/Update/Alpha/v1.1.0/真机联调报告-第二轮.md`，取证在 `artifacts/real2/`，探针 `scripts/probes/real2-*.js`。
 
-**DFU 包格式（协议《DFU固件升级通讯协议说明_20261026》）**：包首「进入 DFU」帧有两种形态——旧 SigmaBus `C4 0B 00 00 03 08 10 01 00 15 FF`，或 2026-10-26 起的新 Modbus 帧 `00 10 00 0A 10 08 00 01 8D 09`；`device/dfu/image.ts` 的 `detectPackageHeader()` 两种都收，`ParsedImage.headerKind` 记录形态，`frames[0]` 仍是包首帧。信息帧体固件只读前 81 B（出厂包 = 81 / 整帧 90），协议文档写的 85 / 94 是笔误，解析器两种长度都接受。**真机 DFU 尚未做过**：进 DFU 后设备会复位重枚举，主机当前不重开句柄（P0），评审与修复顺序见 `Document/Protocol/DFU协议符合性评审_20261026.md`。
+**DFU 包格式（协议《DFU固件升级通讯协议说明_20261026》）**：包首「进入 DFU」帧有两种形态——旧 SigmaBus `C4 0B 00 00 03 08 10 01 00 15 FF`，或 2026-10-26 起的新 Modbus 帧 `00 10 00 0A 10 08 00 01 8D 09`；`device/dfu/image.ts` 的 `detectPackageHeader()` 两种都收，`ParsedImage.headerKind` 记录形态，`frames[0]` 仍是包首帧。信息帧体固件只读前 81 B（出厂包 = 81 / 整帧 90），协议文档写的 85 / 94 是笔误，解析器两种长度都接受。
+
+**真机 DFU 已刷通（2026-10-27 21:11，M001 `0x0A67/0x0010`）**：`JYM001` 信息帧被 `0x01` 拒（设备信息区为空）→ 内存改 `000000` 重封 CRC → `0x03` → 64 B/块 × 2564 + 末块 896 B → **`0x05`**，120.6 s；设备写 `{A5,FF,00,02}` 复位后重新枚举为 `USB Audio Device`（`MI_00` 音频 + `MI_03` HID），Modbus 正常。整轮不依赖 Electron：`tools/dfu/m001-dfu.py` + `hidwin.py`（ctypes 直连 HID）。App 内 DFU 仍缺「等重枚举 + 重开句柄」（评审 P0-1/P0-2），救砖通道（P1-1）未做；详细过程、失败模式与主机侧三条修正见 `Document/Update/Alpha/v1.1.0/真机DFU刷写成功记录.md`，符合性评审见 `Document/Protocol/DFU协议符合性评审_20261026.md`。
 
 升级子模块：
 
@@ -409,6 +411,16 @@ Fix（固件侧）：`Len === 0` → 整段丢弃；帧尾不足 4 B 且全 `0x0
 根因：`ParamSession.cancelWork()` 把**已经发到总线上**的在途轮询直接丢弃（只调 `onFail`），但协议没有请求序号；poll 的 `0x12` 回包到达时，会话把它当成新一轮 `0x13` 的应答，`link.ts` 判定"不是连续读响应"。
 Fix（已落盘，`device/proto/session.ts`）：**已上总线的请求不能丢**——`cancelWork()` 把在途任务标记 `abandoned` 并返回一个"等它回包/超时"的 Promise（总线空闲时返回 `null`，`sync()` 开头保持同步执行），`sync()` 等它兑现后才发新帧；遗弃任务的应答只释放槽位不回调；超时不重发；另加 `syncGeneration`（旧 sync 不得改相位）与 `drainingSync`（等回包期间压住轮询）。单测见 `tests/unit/proto/session.test.ts` 的「S-e × S-f 竞态」两条。
 排查口径：**这不再是固件问题**。若协议将来加请求序号，可把 `abandoned` 逻辑换成按序号配对。复测用 `scripts/probes/real2-app-check-shot.js`（自检三步应全绿）。
+
+### 27. 真机 DFU 写 Flash 的三个坑（M001 V0.0.2，2026-10-27 实刷）
+
+症状与处置（都已在 `tools/dfu/m001-dfu.py` 里落地）：
+
+1. **4 KB 扇区擦除偶发 `0x02`，回执约 1028 ms**（普通块 9–14 ms、扇区首块 ~30 ms）。落在 `Iap.Write → HalFlashErase` 内部 3 次「擦除+写+回读」全失败 + 设备 1 s 断流定时器。**重发同一块**即可过（设备在 `IapAddress += len` 之前就 return，地址没前进，重发安全）。
+2. **重发会让设备 `DataCount` 多算**：`DfuProgram()` 先 `DataCount += len` 再写 Flash，写失败时 `IapAddress` 不前进。重发 N 次后设备提前 64·N 字节判定"收齐"，拿不足的累加和比整包校验和 → **`0x04`**。补偿：最后一块一次发完 896 B（`0x30480-896 = 0x30100` 是 256 对齐，`HalSpiFlashWrite` 页切分不回绕），`DataCount` 变成 `164992+64N` 仍 ≥ 长度，写入与校验和完整。
+3. **进 DFU 后要等 1.2 s 再重开句柄**：MainApp 收到 ACK 后还要静音/关 UI 才写状态字节复位，抢在 200 ms 窗口里重开会拿到正在掉线的旧句柄（`ReadFile` 报 1167 `ERROR_DEVICE_NOT_CONNECTED`）。
+
+另：**本机沙箱里 Electron 跑不起来**（子进程建不了命名管道 → `FATAL:platform_channel`），所以真机 DFU 取证走 ctypes 直连 HID（`tools/dfu/hidwin.py`）；`scripts/probes/real3-*.js` 那套 `--exec-file` 探针在本机只能用于不碰硬件的界面取证。设备信息区（`0x39000`）为空时 `JYM001` 信息帧必被 `0x01` 拒，只能改内存帧走 `000000` 通用升级。
 
 ## Domain constants
 
