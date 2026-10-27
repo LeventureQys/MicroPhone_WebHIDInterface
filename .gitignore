@@ -3,6 +3,8 @@ out/
 release/
 artifacts/
 .userdata/
+# 真机 DFU 刷写的工作目录（工具 + 逐块 JSONL 日志，见 Document/Update/Alpha/v1.1.0/真机DFU刷写成功记录.md）
+zzwork/
 coverage/
 *.log
 .DS_Store
