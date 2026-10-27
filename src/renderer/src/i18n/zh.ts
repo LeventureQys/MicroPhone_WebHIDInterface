@@ -1,4 +1,4 @@
-/** 中文字典：扁平键值，键集合由 SubStage_2.3 §3.1 规定，en.ts 必须逐字对齐 */
+﻿/** 中文字典：扁平键值，键集合由 SubStage_2.3 §3.1 规定，en.ts 必须逐字对齐 */
 export const zh = {
   'nav.meter': '电平',
   'nav.input': '输入',
@@ -217,6 +217,7 @@ export const zh = {
   'device.error.noSelection': '没有选中设备（Electron 设备选择器尚未开放）',
   'device.error.unknown': '连接异常',
   'device.warn.modelMismatch': '设备型号不匹配：{code}',
+  'device.warn.modelMissing': '设备未返回型号信息（信息区为空）',
   'device.sync.note': '连接后参数以设备回读值为准；未就绪时的改动只在本机生效',
   'device.saveNote': '写入立即生效；掉电是否保留取决于固件（待确认）',
 

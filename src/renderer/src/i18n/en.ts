@@ -1,4 +1,4 @@
-import type { DictKey } from './zh';
+﻿import type { DictKey } from './zh';
 
 /** 英文字典：键集合由 Record<DictKey, string> 在编译期与 zh.ts 对齐 */
 export const en: Record<DictKey, string> = {
@@ -219,6 +219,7 @@ export const en: Record<DictKey, string> = {
   'device.error.noSelection': 'No device selected (the Electron picker is not open yet)',
   'device.error.unknown': 'Link error',
   'device.warn.modelMismatch': 'Device model mismatch: {code}',
+  'device.warn.modelMissing': 'Device returned no model code (info area is empty)',
   'device.sync.note': 'After connecting, parameter values come from the device readback; edits made before sync stay local',
   'device.saveNote':
     'Writes take effect immediately; whether they survive a power cycle depends on the firmware (to be confirmed).',

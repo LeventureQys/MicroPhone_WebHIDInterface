@@ -332,6 +332,9 @@ export class DeviceLink extends EventTarget {
 
   private _mismatchWarning(device: DeviceSnapshot | null): LinkText | null {
     if (device === null) return null;
+    // 信息区为空时 modelCode 是空串：真机 V0.0.2 就是这样，此时说「不匹配」会在界面上
+    // 挂一句没有型号的警告，用户与现场都无从判断，所以单独给一条「未返回型号」。
+    if (device.modelCode.trim() === '') return { key: 'device.warn.modelMissing' };
     if (device.modelCode === EXPECTED_MODEL_CODE) return null;
     return { key: 'device.warn.modelMismatch', vars: { code: device.modelCode } };
   }

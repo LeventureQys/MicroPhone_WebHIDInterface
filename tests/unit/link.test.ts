@@ -162,6 +162,18 @@ describe('DeviceLink', () => {
     expect(state.warning).toEqual({ key: 'device.warn.modelMismatch', vars: { code: 'ABC123' } });
   });
 
+  it('warns about a missing model code when the info area is blank', async () => {
+    // 真机 V0.0.2 的信息区全 0，modelCode 读出来是空串；不能显示成「设备型号不匹配：」加空值
+    const { link } = setup({
+      readResult: { ...READBACK, device: { ...SNAPSHOT, modelCode: '' } },
+    });
+
+    await link.attach('vdevice');
+
+    expect(link.getState().status).toBe('ready');
+    expect(link.getState().warning).toEqual({ key: 'device.warn.modelMissing' });
+  });
+
   it('falls back to the mock channel and reports error when attach fails', async () => {
     const { link, channel, store } = setup({ failOpen: true });
 

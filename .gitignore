@@ -18,3 +18,6 @@ third_party/*.md
 
 # 厂商 J-Link 安装包（51 MB 二进制，按 third_party/设备相关/Release/下载说明.docx 自行获取）
 third_party/设备相关/Release/JLink_Windows_V696.exe
+
+# Python 运行 tools/ 下的脚本时产生的字节码缓存
+__pycache__/

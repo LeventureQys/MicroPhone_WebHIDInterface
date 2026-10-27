@@ -191,6 +191,15 @@ Remove-Item Env:ELECTRON_RUN_AS_NODE -ErrorAction SilentlyContinue
 
 **真机 DFU 已刷通（2026-10-27 21:11，M001 `0x0A67/0x0010`）**：`JYM001` 信息帧被 `0x01` 拒（设备信息区为空）→ 内存改 `000000` 重封 CRC → `0x03` → 64 B/块 × 2564 + 末块 896 B → **`0x05`**，120.6 s；设备写 `{A5,FF,00,02}` 复位后重新枚举为 `USB Audio Device`（`MI_00` 音频 + `MI_03` HID），Modbus 正常。整轮不依赖 Electron：`tools/dfu/m001-dfu.py` + `hidwin.py`（ctypes 直连 HID）。App 内 DFU 仍缺「等重枚举 + 重开句柄」（评审 P0-1/P0-2），救砖通道（P1-1）未做；详细过程、失败模式与主机侧三条修正见 `Document/Update/Alpha/v1.1.0/真机DFU刷写成功记录.md`，符合性评审见 `Document/Protocol/DFU协议符合性评审_20261026.md`。
 
+**第三轮真机联调（2026-10-27 21:20–21:35，刷完 V0.0.2 后）**：这是**刷完机之后**第一次完整跑参数链路 + 逐条协议一致性，报告 `Document/Update/Alpha/v1.1.0/真机联调报告-第三轮.md`，探针 `scripts/probes/real4-*.js`，取证 `artifacts/real4/`。要点：
+
+- **上位机侧全绿**：连接 → `sync()` → 诊断自检连跑 3 轮（3/3 全绿）→ 场景「播客/会议」写入 → 原始 HID 整段读回一致；`crc/timeout/retry` 全 0，已知坑 24（正常路径）与坑 26（`0x12`/`0x13` 竞态）都不复发。
+- **协议矩阵 24 条：17 通过 / 6 失败**（`real4-conformance.js`）。框架层（`Len`、CRC-16、多报文 246 B、补位零、越界 `0x05`、坏 CRC `0x03`、长度类 `0x02`）全部符合。
+- **仍不合格**：① 拒绝路径一请求 3 条 ACK（`UnitID=1` 回 `0x01,0x01,0x03`；SigmaBus 帧回 17 条）；② 只读 `0x2023` 可写且回 `0x0000`；③ 越界值 `0x2025=9` 被接受；④ 信息区 62 字全 0（界面 `0.0.0.0`/`0x0000/0x0000`）；⑤ 配置区心跳 0（表默认 700）、预设区全 0（`0x2001` 有效标志 0）；⑥ `0x2057` 恒 0（播放 440 Hz 14 s 采样 17 次仍 0）且无周期上报。
+- **`0x10` 设备→主机上报的实测语义**（协议文档未写）：只有 `0x2024`/`0x2025` 真的变化时，设备才在 ACK 后约 5 ms 推一条 `0x10`，内容固定是这两个字；与用 `0x10` 还是 `0x11` 写无关；写同值/其它参数/空闲都不报（`real4-report.js` 8 组）。上位机 `_applyEcho` 已按「镜像更新、不回写」处理，不形成写环。
+- **口径冲突待裁决**：协议 §五 写预设区 `0x2000~0x2075`(118)，参数表只有 114 项（止于 `0x2071`），固件按 118 放行（读 `0x2072..0x2075` 回 0 而不报错）。建议以参数表为准。
+- 上位机小修：信息区为空时抽屉原本显示「设备型号不匹配：」加空值，已改为 `device.warn.modelMissing`（`设备未返回型号信息（信息区为空）`），`link.test.ts` 补例，重编后截图验证。
+
 升级子模块：
 
 ```powershell
@@ -420,7 +429,7 @@ Fix（已落盘，`device/proto/session.ts`）：**已上总线的请求不能�
 2. **重发会让设备 `DataCount` 多算**：`DfuProgram()` 先 `DataCount += len` 再写 Flash，写失败时 `IapAddress` 不前进。重发 N 次后设备提前 64·N 字节判定"收齐"，拿不足的累加和比整包校验和 → **`0x04`**。补偿：最后一块一次发完 896 B（`0x30480-896 = 0x30100` 是 256 对齐，`HalSpiFlashWrite` 页切分不回绕），`DataCount` 变成 `164992+64N` 仍 ≥ 长度，写入与校验和完整。
 3. **进 DFU 后要等 1.2 s 再重开句柄**：MainApp 收到 ACK 后还要静音/关 UI 才写状态字节复位，抢在 200 ms 窗口里重开会拿到正在掉线的旧句柄（`ReadFile` 报 1167 `ERROR_DEVICE_NOT_CONNECTED`）。
 
-另：**本机沙箱里 Electron 跑不起来**（子进程建不了命名管道 → `FATAL:platform_channel`），所以真机 DFU 取证走 ctypes 直连 HID（`tools/dfu/hidwin.py`）；`scripts/probes/real3-*.js` 那套 `--exec-file` 探针在本机只能用于不碰硬件的界面取证。设备信息区（`0x39000`）为空时 `JYM001` 信息帧必被 `0x01` 拒，只能改内存帧走 `000000` 通用升级。
+另：**DSH 以 `workspace-write` 运行时 Electron 起不来**（子进程建不了命名管道 → `FATAL:platform_channel`），此时真机取证只能走 ctypes 直连 HID（`tools/dfu/hidwin.py`）。把文件策略放到 `danger-full-access` 后 `electron.exe . --no-sandbox` 可正常起窗口，`--exec-file` 探针能直接碰硬件（2026-10-27 第三轮联调即以此取证，见 `Document/Update/Alpha/v1.1.0/真机联调报告-第三轮.md`）。设备信息区（`0x39000`）为空时 `JYM001` 信息帧必被 `0x01` 拒，只能改内存帧走 `000000` 通用升级。
 
 ## Domain constants
 
