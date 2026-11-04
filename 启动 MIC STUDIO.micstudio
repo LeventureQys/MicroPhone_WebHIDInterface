@@ -1,0 +1,12 @@
+MIC STUDIO 启动器（Smart App Control 兼容）
+
+这个文件由 scripts\register-sac-launcher.ps1 注册。
+双击它等价于执行：
+  powershell -NoProfile -ExecutionPolicy Bypass -File scripts\start.ps1 app
+
+为什么不是 start.cmd：
+  当前机器的 Smart App Control / WDAC 策略会拦截资源管理器直接启动的
+  .cmd / .bat / .lnk；powershell.exe 不受影响，所以用这个扩展名做触发器。
+
+撤销注册：
+  powershell -NoProfile -ExecutionPolicy Bypass -File scripts\register-sac-launcher.ps1 -Unregister

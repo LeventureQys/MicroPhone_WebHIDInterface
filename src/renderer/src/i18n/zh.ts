@@ -1,4 +1,4 @@
-﻿/** 中文字典：扁平键值，键集合由 SubStage_2.3 §3.1 规定，en.ts 必须逐字对齐 */
+/** 中文字典：扁平键值，键集合由 SubStage_2.3 §3.1 规定，en.ts 必须逐字对齐 */
 export const zh = {
   'nav.meter': '电平',
   'nav.input': '输入',
@@ -214,10 +214,12 @@ export const zh = {
   'device.error.nativeUnavailable': '当前环境没有原生 WebHID（需要 Chromium 安全上下文）',
   'device.error.bridge': '无法连接桥接服务',
   'device.error.device': '设备操作失败',
+  'device.error.sync': '设备没有回应参数同步，可能停在升级模式；可直接打开「固件升级」继续',
   'device.error.noSelection': '没有选中设备（Electron 设备选择器尚未开放）',
   'device.error.unknown': '连接异常',
   'device.warn.modelMismatch': '设备型号不匹配：{code}',
   'device.warn.modelMissing': '设备未返回型号信息（信息区为空）',
+  'device.warn.bootloader': '参数同步失败，但设备句柄仍可用：如果它停在升级模式，去「固件升级」继续刷写',
   'device.sync.note': '连接后参数以设备回读值为准；未就绪时的改动只在本机生效',
   'device.saveNote': '写入立即生效；掉电是否保留取决于固件（待确认）',
 
@@ -314,6 +316,7 @@ export const zh = {
   'fw.close': '关闭',
   'fw.error.preflight': '固件包校验失败，未向设备发送任何数据',
   'fw.error.enterTimeout': '设备没有回应进入升级模式的请求，请重插设备后再试',
+  'fw.error.reenumerate': '设备重启后没有重新出现，请拔插后再试；设备仍停在升级模式时可直接重试',
   'fw.error.probeFailed': '进入升级模式后没有收到回应，请重插设备后再试',
   'fw.error.statusCode': '设备返回了意外的状态码 {status}',
   'fw.error.statusInfo': '设备拒绝了固件信息（型号或包内容不符）',

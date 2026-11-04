@@ -113,14 +113,24 @@ describe('decodeSigmaStream', () => {
 
   it('resynchronises on a leading garbage byte and still emits the frame', () => {
     const stream = new Uint8Array(2 + STATUS_CONTINUE.length);
-    stream[0] = 0x00;
+    stream[0] = 0x00; // 报告补位：静默跳过，不记 issue
     stream[1] = 0x01;
     stream.set(STATUS_CONTINUE, 2);
 
     const result = decodeSigmaStream(stream);
     expect(result.frames).toHaveLength(1);
-    expect(result.issues.map((issue) => issue.problem)).toEqual(['start', 'start']);
-    expect(result.issues.map((issue) => issue.offset)).toEqual([0, 1]);
+    expect(result.issues.map((issue) => issue.problem)).toEqual(['start']);
+    expect(result.issues.map((issue) => issue.offset)).toEqual([1]);
+  });
+
+  it('silently skips 0x00 report padding before and after a status frame', () => {
+    const stream = new Uint8Array(53 + STATUS_CONTINUE.length + 20);
+    stream.set(STATUS_CONTINUE, 53);
+
+    const result = decodeSigmaStream(stream);
+    expect(result.frames).toHaveLength(1);
+    expect(result.issues).toHaveLength(0);
+    expect(result.rest).toHaveLength(0);
   });
 
   it('reports crc issues and resynchronises on the next frame', () => {

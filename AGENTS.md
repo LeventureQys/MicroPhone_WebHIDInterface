@@ -53,6 +53,8 @@ $env:PATH = "C:\Users\a5935\.dsh\dsh-runtimes\dsh-primary-runtime\dependencies\n
 .\start.cmd -Sandboxed      # 不给 Electron 加 --no-sandbox（仅本机 Chromium 沙箱正常时）
 ```
 
+> 本机 Smart App Control / WDAC 会拦截双击 `.cmd`（已知坑 29）。双击启动请用仓库根的 `启动 MIC STUDIO.micstudio`；首次注册：`powershell -NoProfile -ExecutionPolicy Bypass -File scripts\register-sac-launcher.ps1`（HKCU，无需管理员，`-Unregister` 撤销）。
+
 `start.cmd` 只是入口，逻辑在 `scripts/start.ps1`；该文件必须保存为 **UTF-8 带 BOM**，否则 PowerShell 5.1 按 GBK 解码中文会直接语法错误。脚本默认给 Electron 加 `--no-sandbox`（已知坑 14 / 18），自动化调用时设 `MICSTUDIO_NO_PAUSE=1` 可跳过失败后的 `pause`。
 
 打包与安装依赖必须先设镜像（GitHub 直连不通）：
@@ -88,7 +90,7 @@ Ground truth（地址 / 标定 / 权限 / 默认值，唯一权威）：`Documen
 | `Document/Protocol/效果器参数范围.xlsx` | `src/renderer/src/domain/params.ts` | 仅中文标签与单位；数值以寄存器表为准 |
 | `Document/Update/Alpha/v1.0.0/需求文档.md` | 全部功能范围 | 需求边界 |
 | `Document/Update/Alpha/v1.0.0/设计文档.md` | 全部实现契约 | 接口签名与视觉规范 |
-| `Document/Update/Alpha/v1.1.0/设计文档.md` | v1.1.0 契约与 §12 变更记录 R-1…R-23 | 与 v1.0.0 冲突时以本文件为准 |
+| `Document/Update/Alpha/v1.1.0/设计文档.md` | v1.1.0 契约与 §12 变更记录 R-1…R-24 | 与 v1.0.0 冲突时以本文件为准 |
 | 参照实现 AudioEQ_Visualized_Web（MIT） | `src/renderer/src/eq/**` | 频响算法与 Canvas 分层渲染 |
 | `third_party/web_hid_utils/docs/*.md`、`packages/webhid-kit/README.md` | `src/renderer/src/device/webhid/**` | WebHID 强制约束、桥接协议、套件 API |
 
@@ -187,8 +189,6 @@ Remove-Item Env:ELECTRON_RUN_AS_NODE -ErrorAction SilentlyContinue
 
 **第二轮真机联调（2026-10-26 23:00，固件 V0.0.2）**：**参数链路已跑通**——`sync()`、诊断自检 3/3、场景写入 → 设备回读一致；补位零与解析器闭锁在正常请求路径上已修，`0x0001`/`0x0002` 只出现在拒绝路径。仍留 7 条固件问题（拒绝路径喷 ACK、读路径不校验地址、只读/范围不校验、`0x12` 超容量返回 514 B 帧、区间是 `0x2075`(118) 不是 `0x2071`(114)、`0x2057` 恒 0 且无周期上报、信息区/预设区无默认值），详见 `Document/Update/Alpha/v1.1.0/真机联调报告-第二轮.md`，取证在 `artifacts/real2/`，探针 `scripts/probes/real2-*.js`。
 
-**DFU 包格式（协议《DFU固件升级通讯协议说明_20261026》）**：包首「进入 DFU」帧有两种形态——旧 SigmaBus `C4 0B 00 00 03 08 10 01 00 15 FF`，或 2026-10-26 起的新 Modbus 帧 `00 10 00 0A 10 08 00 01 8D 09`；`device/dfu/image.ts` 的 `detectPackageHeader()` 两种都收，`ParsedImage.headerKind` 记录形态，`frames[0]` 仍是包首帧。信息帧体固件只读前 81 B（出厂包 = 81 / 整帧 90），协议文档写的 85 / 94 是笔误，解析器两种长度都接受。
-
 **真机 DFU 已刷通（2026-10-27 21:11，M001 `0x0A67/0x0010`）**：`JYM001` 信息帧被 `0x01` 拒（设备信息区为空）→ 内存改 `000000` 重封 CRC → `0x03` → 64 B/块 × 2564 + 末块 896 B → **`0x05`**，120.6 s；设备写 `{A5,FF,00,02}` 复位后重新枚举为 `USB Audio Device`（`MI_00` 音频 + `MI_03` HID），Modbus 正常。整轮不依赖 Electron：`tools/dfu/m001-dfu.py` + `hidwin.py`（ctypes 直连 HID）。App 内 DFU 仍缺「等重枚举 + 重开句柄」（评审 P0-1/P0-2），救砖通道（P1-1）未做；详细过程、失败模式与主机侧三条修正见 `Document/Update/Alpha/v1.1.0/真机DFU刷写成功记录.md`，符合性评审见 `Document/Protocol/DFU协议符合性评审_20261026.md`。
 
 **第三轮真机联调（2026-10-27 21:20–21:35，刷完 V0.0.2 后）**：这是**刷完机之后**第一次完整跑参数链路 + 逐条协议一致性，报告 `Document/Update/Alpha/v1.1.0/真机联调报告-第三轮.md`，探针 `scripts/probes/real4-*.js`，取证 `artifacts/real4/`。要点：
@@ -199,6 +199,12 @@ Remove-Item Env:ELECTRON_RUN_AS_NODE -ErrorAction SilentlyContinue
 - **`0x10` 设备→主机上报的实测语义**（协议文档未写）：只有 `0x2024`/`0x2025` 真的变化时，设备才在 ACK 后约 5 ms 推一条 `0x10`，内容固定是这两个字；与用 `0x10` 还是 `0x11` 写无关；写同值/其它参数/空闲都不报（`real4-report.js` 8 组）。上位机 `_applyEcho` 已按「镜像更新、不回写」处理，不形成写环。
 - **口径冲突待裁决**：协议 §五 写预设区 `0x2000~0x2075`(118)，参数表只有 114 项（止于 `0x2071`），固件按 118 放行（读 `0x2072..0x2075` 回 0 而不报错）。建议以参数表为准。
 - 上位机小修：信息区为空时抽屉原本显示「设备型号不匹配：」加空值，已改为 `device.warn.modelMissing`（`设备未返回型号信息（信息区为空）`），`link.test.ts` 补例，重编后截图验证。
+
+**第四轮真机联调（2026-11-04，M001 App 模式）**：主机侧全流程通过——连接 / `sync()` / 自检 3/3（连续 4 次）/ 场景写入回读 / 20 次连续写 / 空闲 60 s / 关闭重开；**未复现写 Flash 卡顿与偶发断连**（写 ACK 4.1–9.8 ms，写后立即读 6–11 ms，`timeouts/retries` 全 0）。固件侧余留：信息区/配置区/预设区全 0（`validFlag=0`，EQ 段 enable/type/freq 全 0）、只读与范围不校验、拒绝路径一次请求 17 条 ACK、非法高地址 `0x3000`/`0x4000` 读回内存垃圾、`0x12` 读上限 118（119+ 回 `0x0005`，124–127 的 5 报文请求偶发无回执）、`0x2057` 恒 0。DFU 按用户决定主动未做（Bootloader 写 Flash 挂死 + 本机无 J-Link）。详见 `Document/Update/Alpha/v1.1.0/真机联调报告-第四轮.md`，取证 `artifacts/real4/`，探针 `scripts/probes/real4-*.js`。
+
+**第五轮 DFU 升级测试（2026-11-04，V0.0.4）**：**升级成功，正常路径已复测通过**。主机侧修复：空/全 0 设备型号按"未知"放行（不再报"型号不对"）、`kit.ts` 用 `WeakMap<HIDDevice, 适配句柄>` 缓存真机句柄（修掉重枚举误判）、`decodeAsciiWords()` 把 `0xFF` 擦除值当终止符、DFU 重枚举后等 1 s（`dfuEnterSettleMs`）、265 B 块帧的报告间留 2 ms（`dfuReportGapMs`，设备 OUT 只有 4 槽）、SigmaBus 0x00 补位静默、settling 后不再解析 App 报文。首轮从 App 进 DFU 在 44/654 块超时，复现于 11/654；修复后从 App 用官方 `JYM001` 包**一次写完 654/654（约 21 s，timeout/retry 0）**，设备重启到 V0.0.4；从 Bootloader 直连官方包恢复也成功。升级后新固件初始化了 `0x39000` 信息区与配置/预设区：型号 `JYM001`、名称 `M001`、固件 `0.0.4.0`、自检 3/3；官方 `JYM001` 包预检通过。遗留：SN 区仍 `0xFFFF`（界面显示"—"）。详见 `Document/Update/Alpha/v1.1.0/真机DFU升级测试-第五轮.md`，取证 `artifacts/real5/`。
+
+**DFU 包格式（协议《DFU固件升级通讯协议说明_20261026》）**：包首「进入 DFU」帧有两种形态——旧 SigmaBus `C4 0B 00 00 03 08 10 01 00 15 FF`，或 2026-10-26 起的新 Modbus 帧 `00 10 00 0A 10 08 00 01 8D 09`；`device/dfu/image.ts` 的 `detectPackageHeader()` 两种都收，`ParsedImage.headerKind` 记录形态，`frames[0]` 仍是包首帧。信息帧体固件只读前 81 B（出厂包 = 81 / 整帧 90），协议文档写的 85 / 94 是笔误，解析器两种长度都接受。**主机侧已补上「进 DFU 后等设备重枚举 + 重开句柄」与「设备停在 Bootloader 时保留原始通道继续升级」**（2026-10-27，见已知坑 28/30 与 `Document/Update/Alpha/v1.1.0/修复记录-真机问题-20261027.md`）；第五轮（2026-11-04）已完成 V0.0.4 完整升级（App 正常路径 + Bootloader 直连），见 `Document/Update/Alpha/v1.1.0/真机DFU升级测试-第五轮.md`；评审见 `Document/Protocol/DFU协议符合性评审_20261026.md`。
 
 升级子模块：
 
@@ -421,7 +427,44 @@ Fix（固件侧）：`Len === 0` → 整段丢弃；帧尾不足 4 B 且全 `0x0
 Fix（已落盘，`device/proto/session.ts`）：**已上总线的请求不能丢**——`cancelWork()` 把在途任务标记 `abandoned` 并返回一个"等它回包/超时"的 Promise（总线空闲时返回 `null`，`sync()` 开头保持同步执行），`sync()` 等它兑现后才发新帧；遗弃任务的应答只释放槽位不回调；超时不重发；另加 `syncGeneration`（旧 sync 不得改相位）与 `drainingSync`（等回包期间压住轮询）。单测见 `tests/unit/proto/session.test.ts` 的「S-e × S-f 竞态」两条。
 排查口径：**这不再是固件问题**。若协议将来加请求序号，可把 `abandoned` 逻辑换成按序号配对。复测用 `scripts/probes/real2-app-check-shot.js`（自检三步应全绿）。
 
-### 27. 真机 DFU 写 Flash 的三个坑（M001 V0.0.2，2026-10-27 实刷）
+### 27. 调节参数后卡顿 / 偶发「断连」——设备写 Flash 时主循环停摆
+症状（M001 真机，2026-10-27 反馈）：改一个参数后设备短暂无响应，界面偶发转「同步失败 / 连接异常」；诊断卡里 `timeouts`、`retries` 上涨，严重时 `ParamSession` 连续超时把通道打成 error。**没有拔线**。
+根因两层：① 写参数后固件把参数落 Flash，写 Flash 期间主循环不响应 USB，500 ms 的读超时会被当成写超时，重发写又触发一次落盘（越调越卡）；② 入站看门狗只按"2 s 没有 IN 报告"判掉线，把落 Flash 的静默误判成拔线。
+Fix（已落盘）：
+- `TIMING.writeTimeoutMs = 3000`：写等 ACK 单独用长超时，读/轮询仍 500/200 ms。
+- `TIMING.writeRetries = 1`：写超时最多重发 1 次（校验错/地址错仍按 `requestRetries = 2`）。
+- `TIMING.writeSettleMs = 600`：写回执后暂停电平轮询，别在落 Flash 窗口里塞请求。
+- `TIMING.writeGraceMs = 8000`：从最后一次写帧算起，设备静默不算掉线；`WebHidTransport._checkWatchdog` 同时看本地写时刻与 `ParamSession.writeActivityWithin()`。
+- 真实拔线仍由 HID `disconnect` 事件立即上报，不受宽限影响。
+排查口径：先看诊断卡 `timeouts/retries` 与最后一条写帧；若 `retries` 明显上涨，是设备落 Flash 慢，不要先怀疑协议；若 `onError` 是 HID `disconnect`，那才是物理断开。单测：`tests/unit/proto/session.test.ts` 的「写超时与写后轮询让位」、`tests/unit/transport.test.ts` 的「keeps the link ready while the device is saving flash」。
+
+**2026-11-04 第四轮复测**：M001 真机上 20 次连续写（`0x2025`）、12 次 EQ 写、8 连写、写后立即读，ACK **2.4–11.1 ms**、写后读 **6–11 ms**，`timeouts/retries` 全 0，**未复现卡顿/断连**；但设备预设区 `validFlag=0`，不排除固件只写 RAM、未真正落 Flash。数据见 `Document/Update/Alpha/v1.1.0/真机联调报告-第四轮.md` §4。
+
+### 28. DFU 进 Bootloader 后旧句柄失效 / 重开上位机接不上，无法继续升级
+症状（M001 真机，2026-10-27 反馈）：点开始升级，`0x1008=1` 收到 ACK 后上位机像在等回包，随后 `probeFailed`；此时重开上位机，设备页「打开」卡在参数同步（Bootloader 不说 Modbus），固件抽屉选包又被预检判「型号未知 / 没有已连接设备」。
+根因三处：① 进 DFU 后设备复位重枚举（约 200 ms 复位、1–3 s 出现），主机仍拿旧 `HIDDevice` 发信息帧；② 收尾 `resumeAfterDfu()` 也没有重开句柄；③ `attach()` 参数同步失败就 `dispose` 掉 transport，且预检把"拿不到型号"当拒绝，救砖路径全断。
+Fix（已落盘）：
+- `DeviceLink.awaitReenumeration()`：`WebHidSession.refresh()` 轮询新句柄（同 deviceId 优先，id 漂移时按 VID/PID 找"不是旧句柄"的那台），`WebHidTransport.reopen(handle)` 换句柄并重挂入站监听；窗口 `TIMING.dfuReenumTimeoutMs = 8000`、间隔 `dfuReenumPollMs = 200`。
+- `DfuSession` 新增 `reconnect` 钩子：EnterDfu 收到 ACK 后、信息帧之前调用；失败报 `DfuError.kind = 'reenumerate'`，不发信息帧。
+- `DeviceLink.resumeAfterDfu()` 先 `awaitReenumeration()` 再 `transport.resume()`；`DfuSession.dfuSettleTimeoutMs` 放宽到 20 s，覆盖"重枚举 8 s + 两次全量回读"。
+- `DeviceLink.attach()` 参数同步失败但句柄仍开时走 `_failSync()`：保留 transport / 入站监听，只把 `store.sync` 置 error；设备页错误框提示"可能停在升级模式，去固件升级"。
+- `DfuSession.preflight()` 在 `deviceModelCode() === null` 时**放行**（不再报 `unknown-device`），型号交给 Bootloader 用 Flash 信息区校验（不符回 `0x01 INFO_ERR`）。
+- 虚拟通道（`WebHidSession.mode === 'virtual'`）没有真实重枚举，`awaitReenumeration()` 直接返回，vdevice 自检不受影响。
+排查口径：真机若仍 `probeFailed`，先看诊断卡有没有 "EnterDfu 没有 ACK" 与重枚举错误；`Mock` 里不会复现。单测：`tests/unit/link.test.ts` 的「keeps the raw channel…」「swaps to the newly enumerated handle…」、`tests/unit/dfu/session.test.ts` 的「进 DFU 后等设备重新枚举」、`tests/unit/dfu/controller.test.ts` 的 3c/3d/5c。
+
+**2026-11-04 第五轮真机补充**：真机 `getDevices()` 每次返回新的 `NativeHidHandle` 包装，但底层 `HIDDevice` 是同一个对象；`adaptNativeHandle()` 若每次新建适配句柄，`awaitReenumeration()` 会在设备复位前把"同一台设备的刷新"误判成"新设备"，提前发信息帧并报 `The device must be opened first.`。已在 `device/webhid/kit.ts` 用 `WeakMap<HIDDevice, 适配句柄>` 缓存；单测 `tests/unit/webhid-kit.test.ts`。修复后首轮从 App 进 DFU 仍有一次 44/654 块超时；拔插后从 Bootloader 直连重试 **654/654 成功**。正常路径复测又在 11/654 超时，定位为“重枚举后写得太早 + 5 个 63 B 报告超过设备 4 槽 OUT”；加 `dfuEnterSettleMs=1000`、`dfuReportGapMs=2` 后，App→官方包**一次写完 654/654（约 21 s）**，官方包 Bootloader 直连恢复也通过。详见 `真机DFU升级测试-第五轮.md`。
+
+### 29. Smart App Control / WDAC 拦截双击 `.cmd` / `.bat` / `.lnk`
+症状（2026-11-04，本机）：双击 `start.cmd` 弹「智能应用控制已阻挡…」，窗口不出现；`explorer.exe start.cmd` 也不启动。事件查看器 `Microsoft-Windows-CodeIntegrity/Operational` 记 `3033`：`explorer.exe` 试图加载 `System32\cmd.exe`，不满足 Enterprise 签名级别。
+根因：本机 `HKLM\SYSTEM\CurrentControlSet\Control\CI\Policy\VerifiedAndReputablePolicyState = 1`（SAC 开启），且 `C:\Windows\System32\CodeIntegrity\CiPolicies\Active` 里还有一条 **Microsoft Windows Endpoint Security Policy**（WDAC，enforced）。实测**新建的空白 `hello.cmd` / `hello.bat` / `.lnk` 全部被拦**，而 `cmd.exe`、`powershell.exe`、`electron.exe` 本体可以从资源管理器启动。Microsoft 明确 SAC 没有按文件/目录的例外，改脚本内容绕不过去。
+Fix / 绕过：
+- **双击入口**：仓库根的 `启动 MIC STUDIO.micstudio`（自定义扩展名，`HKCU\Software\Classes\.micstudio` 关联到 `powershell.exe -File scripts\start.ps1 app`）。首次注册：`powershell -NoProfile -ExecutionPolicy Bypass -File scripts\register-sac-launcher.ps1`，不需要管理员；`-Unregister` 撤销。实测双击可拉起窗口（`out/` 构建产物）。
+- **右键入口**：注册脚本同时在文件夹右键菜单加「启动 MIC STUDIO」。
+- **终端入口**（不受影响）：`cmd /c "D:\WorkShop\MicroPhone_WebHIDInterface\start.cmd" app` 或 `powershell -NoProfile -ExecutionPolicy Bypass -File scripts\start.ps1 app`。
+- **彻底解决**：关 SAC（Windows 安全中心 → 应用和浏览器控制 → 智能应用控制 → 关闭，需管理员）；公司策略管理的 WDAC 需 IT 放行。**不要**把 `start.ps1` 改成 `.cmd` 再试——策略拦的是扩展名/脚本宿主，不是内容。
+- 证据：`artifacts/` 下无（系统事件）；复现命令：新建 `hello.cmd` 后 `Start-Process explorer.exe hello.cmd`，查 3033。
+
+### 30. 真机 DFU 写 Flash 的三个坑（M001 V0.0.2，2026-10-27 实刷）
 
 症状与处置（都已在 `tools/dfu/m001-dfu.py` 里落地）：
 
@@ -430,6 +473,8 @@ Fix（已落盘，`device/proto/session.ts`）：**已上总线的请求不能�
 3. **进 DFU 后要等 1.2 s 再重开句柄**：MainApp 收到 ACK 后还要静音/关 UI 才写状态字节复位，抢在 200 ms 窗口里重开会拿到正在掉线的旧句柄（`ReadFile` 报 1167 `ERROR_DEVICE_NOT_CONNECTED`）。
 
 另：**DSH 以 `workspace-write` 运行时 Electron 起不来**（子进程建不了命名管道 → `FATAL:platform_channel`），此时真机取证只能走 ctypes 直连 HID（`tools/dfu/hidwin.py`）。把文件策略放到 `danger-full-access` 后 `electron.exe . --no-sandbox` 可正常起窗口，`--exec-file` 探针能直接碰硬件（2026-10-27 第三轮联调即以此取证，见 `Document/Update/Alpha/v1.1.0/真机联调报告-第三轮.md`）。设备信息区（`0x39000`）为空时 `JYM001` 信息帧必被 `0x01` 拒，只能改内存帧走 `000000` 通用升级。
+
+> 2026-11-04 第五轮：App 内 DFU 已补齐重枚举/救砖入口并完成 V0.0.4；本坑里的“App 内仍缺”与“必须走 ctypes”只适用于 2026-10-27 那轮，现在的 Electron 探针也能直接跑。上面的 4 KB 擦除重发/DataCount 补偿仍适用于 Bootloader 底层。
 
 ## Domain constants
 

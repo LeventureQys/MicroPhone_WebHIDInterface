@@ -2,7 +2,7 @@ import { findParam, findParamByAddr } from '../domain/params';
 import { DEFAULT_REPORT_IDS, type ReportIds } from './protocol';
 import { ParamSession, levelToDb } from './proto/session';
 import type { WordPair } from './proto/codec';
-import { defaultClock, defaultTimers, TIMING, type Clock, type Timers } from './proto/timing';
+import { defaultClock, defaultTimers, TIMING, type Clock, type Timers, type TimingOverrides } from './proto/timing';
 import {
   EQ_BAND_BASE,
   EQ_BAND_COUNT,
@@ -37,7 +37,7 @@ export interface WebHidTransportOptions {
   readonly reportIds?: ReportIds;
   readonly clock?: Clock;
   readonly timers?: Timers;
-  readonly timing?: Partial<typeof TIMING>;
+  readonly timing?: TimingOverrides;
 }
 
 /**
@@ -103,8 +103,13 @@ function bandFieldOf(addr: number): { readonly band: number; readonly field: EqB
  */
 export class WebHidTransport implements DeviceBoundTransport {
   readonly kind = 'webhid' as const;
-  /** 4.2 的 DFU 会话要直接 `sendReport`，因此这里公开句柄与报告号（只读） */
-  readonly device: WebHidDeviceHandle;
+  /**
+   * 4.2 的 DFU 会话要直接 `sendReport`，因此这里公开句柄与报告号（只读）。
+   * DFU 进 Bootloader 后设备会复位重枚举，句柄要换成新枚举出来的那个（`reopen()`），
+   * 所以内部可变、对外只给 getter——升级全程是同一个 `WebHidTransport` 实例，
+   * 控制器挂在 `onInputBytes` 上的订阅才不会因为换句柄而断。
+   */
+  private _device: WebHidDeviceHandle;
   readonly reportIds: ReportIds;
 
   private readonly _clock: Clock;
@@ -127,14 +132,21 @@ export class WebHidTransport implements DeviceBoundTransport {
   private _lastLevelAt: number | null = null;
   /** 最后一条 IN 报告的时刻；入站看门狗据此判"设备不说话" */
   private _lastInboundAt = 0;
+  /** 写后宽限的截止时刻：设备落 Flash 时静默不算掉线（真机 2026-10-27） */
+  private _writeGraceUntil = 0;
   private _watchdogTimer: unknown = null;
 
   constructor(options: WebHidTransportOptions) {
-    this.device = options.device;
+    this._device = options.device;
     this.reportIds = options.reportIds ?? DEFAULT_REPORT_IDS;
     this._clock = options.clock ?? defaultClock();
     this._timers = options.timers ?? defaultTimers();
     this._timing = { ...TIMING, ...options.timing };
+  }
+
+  /** 当前绑定的设备句柄；DFU 重枚举后由 `reopen()` 替换 */
+  get device(): WebHidDeviceHandle {
+    return this._device;
   }
 
   state(): TransportState {
@@ -144,26 +156,65 @@ export class WebHidTransport implements DeviceBoundTransport {
   async open(): Promise<void> {
     if (this._state === 'ready' || this._state === 'connecting') return;
     this._setState('connecting');
+    if (!(await this._bindDevice())) return;
+    await this._startSession();
+  }
 
-    const device = this.device;
+  /**
+   * 只开设备、挂入站监听，不建参数会话、不回读。
+   *
+   * DFU 用：设备进 Bootloader 后已经不会说参数协议，`reopen()` 后由升级会话直接发 SigmaBus 帧。
+   * 保持同一个 transport 实例，`onInputBytes` / `onError` 的订阅在换句柄后依然有效。
+   */
+  async reopen(handle: WebHidDeviceHandle): Promise<void> {
+    this._stopWatchdog();
+    this._unlisten(this._device);
+    const previous = this._device;
+    const session = this._session;
+    this._session = null;
+    session?.dispose();
+    this._device = handle;
+    this._suspended = true;
+    this._lastPeak = null;
+    this._lastLevelAt = null;
+    this._lastInboundAt = this._clock.now();
+    this._setState('connecting');
+    if (!(await this._bindDevice())) return;
+    this._setState('ready');
+    if (previous !== handle && previous.opened) {
+      // 旧句柄已随复位失效；close 失败没有意义，也不该盖住新句柄已就绪的事实
+      void previous.close().catch(() => undefined);
+    }
+  }
+
+  private async _bindDevice(): Promise<boolean> {
+    const device = this._device;
     try {
       if (!device.opened) await device.open();
     } catch (error) {
       this._fail({ kind: 'disconnected', message: `打开设备失败：${messageOf(error)}` });
-      return;
+      return false;
     }
 
-    const sendReport = device.sendReport;
-    if (typeof sendReport !== 'function') {
+    if (typeof device.sendReport !== 'function') {
       // 没有出站通路就无法承载参数协议：宁可整条链路报错，也不要留下"看起来已连接"的假象
       this._fail({ kind: 'disconnected', message: '设备句柄没有 sendReport，无法发送参数帧' });
-      return;
+      return false;
     }
-
     this._listen(device);
+    return true;
+  }
+
+  /** 建参数会话并完成一次回读；DFU 之后 `resume()` 也走这里 */
+  private async _startSession(): Promise<void> {
+    this._setState('connecting');
     const session = new ParamSession({
-      // 一帧可能被切成多包，按顺序逐包发出并等待背压（S-l）
+      // 一帧可能被切成多包，按顺序逐包发出并等待背压（S-l）。
+      // 句柄在发送时现取：DFU 重枚举后 `reopen()` 会换掉 `_device`。
       send: async (reports: readonly Uint8Array[]): Promise<void> => {
+        const device = this._device;
+        const sendReport = device.sendReport;
+        if (typeof sendReport !== 'function') throw new Error('设备句柄没有 sendReport');
         for (const report of reports) await sendReport.call(device, this.reportIds.out, report);
       },
       reportIds: this.reportIds,
@@ -244,6 +295,7 @@ export class WebHidTransport implements DeviceBoundTransport {
     const session = this._session;
     if (session === null || pairs.length === 0) return;
     if (this._suspended) return;
+    this._noteWrite();
     session.write(pairs);
   }
 
@@ -274,6 +326,7 @@ export class WebHidTransport implements DeviceBoundTransport {
     const session = this._session;
     if (session === null || pairs.length === 0) return;
     if (this._suspended) return;
+    this._noteWrite();
     session.write(pairs);
   }
 
@@ -434,7 +487,9 @@ export class WebHidTransport implements DeviceBoundTransport {
     this._suspended = false;
     const session = this._session;
     if (session === null) {
-      await this.open();
+      // `reopen()` 换过句柄后没有会话（DFU 期间不建参数会话），这里补建并回读
+      if (!(await this._bindDevice())) return;
+      await this._startSession();
       return;
     }
     try {
@@ -466,6 +521,9 @@ export class WebHidTransport implements DeviceBoundTransport {
   };
 
   private readonly _onDisconnect = (): void => {
+    // DFU 期间设备复位重枚举，旧句柄断开是预期动作：由 DFU 的 awaitReenumeration 接管，
+    // 这里若照旧派发 disconnected，DeviceLink 会把正在升级的通道拆掉。
+    if (this._suspended) return;
     // 拔线：停轮询并让整条链路进 error，DeviceLink 据此切回演示数据（R5-3）
     this._stopWatchdog();
     this._session?.setPolling(false);
@@ -579,6 +637,11 @@ export class WebHidTransport implements DeviceBoundTransport {
     });
   }
 
+  /** 记一笔写活动：看门狗与轮询让位都按"最后一次写"算宽限 */
+  private _noteWrite(): void {
+    this._writeGraceUntil = this._clock.now() + this._timing.writeGraceMs;
+  }
+
   // ---- 入站看门狗（R5-3） --------------------------------------------------
 
   /**
@@ -607,7 +670,14 @@ export class WebHidTransport implements DeviceBoundTransport {
   private _checkWatchdog(): void {
     // DFU 挂起或已不在 ready 时既不判定也不再排下一拍；恢复时由 open/resume 重新起表
     if (this._state !== 'ready' || this._suspended) return;
-    const silentMs = this._clock.now() - this._lastInboundAt;
+    const now = this._clock.now();
+    // 写后宽限：设备写 Flash 时主循环停摆但 USB 中断仍活着，静默 ≠ 掉线。
+    // 宽限同时看本地写时刻与会话的写帧时刻（后者覆盖排队与重发）。
+    if (now < this._writeGraceUntil || this._session?.writeActivityWithin(this._timing.writeGraceMs)) {
+      this._scheduleWatchdog();
+      return;
+    }
+    const silentMs = now - this._lastInboundAt;
     if (silentMs > this._timing.inboundWatchdogMs) {
       this._handleSilentChannel(silentMs);
       return;
@@ -637,7 +707,9 @@ export class WebHidTransport implements DeviceBoundTransport {
 
   private _fail(error: TransportError): void {
     this._stopWatchdog();
-    this._unlisten(this.device);
+    // 句柄还开着就保留入站监听：参数协议失败不等于设备死了（很可能停在 Bootloader），
+    // DFU 还要靠 `onInputBytes` 收状态帧；只有设备真的没打开才摘监听。
+    if (!this._device.opened) this._unlisten(this._device);
     const session = this._session;
     this._session = null;
     session?.dispose();

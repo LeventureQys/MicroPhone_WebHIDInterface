@@ -11,7 +11,7 @@
  * `DeviceBoundTransport` 天然满足它们，单测也不必造整条链路。
  */
 import type { DiagEntry, DeviceSnapshot } from '../proto/session';
-import { TIMING, type Clock, type Timers } from '../proto/timing';
+import { TIMING, type Clock, type Timers, type TimingOverrides } from '../proto/timing';
 import type { WebHidDeviceHandle } from '../webhid/types';
 import type { LinkState } from '../link';
 import type { ReportIds } from '../protocol';
@@ -33,6 +33,11 @@ export interface FirmwareLink {
   suspendForDfu(): Promise<void>;
   resumeAfterDfu(): Promise<void>;
   attach(deviceId: string): Promise<void>;
+  /**
+   * 设备复位重枚举后换新句柄并重开（进 DFU 之后、收尾之后各一次）。
+   * 可选：单测的假链路不实现时按"虚拟通道无需重枚举"处理。
+   */
+  awaitReenumeration?(): Promise<void>;
 }
 
 export interface FirmwareState {
@@ -50,7 +55,7 @@ export interface FirmwareControllerOptions {
   readonly readFile?: (file: File) => Promise<Uint8Array>;
   readonly timers?: Timers;
   readonly clock?: Clock;
-  readonly timing?: Partial<typeof TIMING>;
+  readonly timing?: TimingOverrides;
   /** DFU 帧诊断（主线程接 `DiagnosticsHub.push`） */
   readonly onDiag?: (entry: DiagEntry) => void;
   /** 主进程守卫（`window.micstudio.setDfuActive`）；单测注入以断言调用顺序 */
@@ -262,12 +267,26 @@ export class FirmwareController extends EventTarget {
         if (channel === null) throw new Error('device channel is gone');
         const sendReport = channel.device.sendReport;
         if (typeof sendReport !== 'function') throw new Error('device handle has no sendReport');
-        for (const report of reports) await sendReport.call(channel.device, channel.reportIds.out, report);
+        // 265 B 的块帧拆成 5 个 63 B 报告，而设备 OUT 环形缓冲只有 4 个槽；
+        // 报告之间留 2 ms 让 Bootloader 取走上一包，否则第 5 包可能被丢、块回执超时。
+        const gap = this.options.timing?.dfuReportGapMs ?? TIMING.dfuReportGapMs;
+        for (let index = 0; index < reports.length; index += 1) {
+          await sendReport.call(channel.device, channel.reportIds.out, reports[index]);
+          if (index + 1 < reports.length && gap > 0) {
+            await new Promise<void>((resolve) => {
+              setTimeout(resolve, gap);
+            });
+          }
+        }
       },
       timers: this.options.timers,
       clock: this.options.clock,
       timing: this.options.timing,
       deviceModelCode: () => this.options.link.getState().device?.modelCode ?? null,
+      // 进 DFU 的 ACK 之后设备复位重枚举：重开句柄再发信息帧（否则探测全打在失效句柄上）
+      reconnect: async (): Promise<void> => {
+        await this.options.link.awaitReenumeration?.();
+      },
       // R6-9：消费级入口永远不给 Bootld 开后门
       allowBootld: false,
       onProgress: (progress) => {

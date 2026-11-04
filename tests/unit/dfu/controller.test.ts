@@ -227,6 +227,8 @@ class FakeLink implements FirmwareLink {
   deviceId: string | null = 'mic-m001';
   /** resume 之后设备回读到的版本（默认就是镜像版本 → verify 通过） */
   versionAfterResume = { x: 1, y: 2, z: 3, build: 0 };
+  /** 进 DFU 后等重枚举的时间线动作；null 表示不记录（保持既有用例的 timeline 不变） */
+  reconnect: (() => Promise<void>) | null = null;
 
   constructor(
     private readonly timeline: string[],
@@ -265,6 +267,10 @@ class FakeLink implements FirmwareLink {
     this.timeline.push(`attach:${deviceId}`);
     this.deviceId = deviceId;
   }
+
+  async awaitReenumeration(): Promise<void> {
+    if (this.reconnect !== null) await this.reconnect();
+  }
 }
 
 interface Harness {
@@ -293,6 +299,8 @@ function makeHarness(options: { readonly withChannel?: boolean } = {}): Harness 
     readFile: async (file: File): Promise<Uint8Array> => new Uint8Array(await file.arrayBuffer()),
     timers,
     clock,
+    // 单测不验证真实等待/报告间隔，置 0 避免每个用例多等 1 s
+    timing: { dfuEnterSettleMs: 0, dfuReportGapMs: 0 },
     setDfuActive: (active: boolean): void => {
       timeline.push(`dfuActive:${active}`);
     },
@@ -364,6 +372,44 @@ describe('FirmwareController', () => {
     expect(h.controller.state().phase).toBe('done');
     expect(h.controller.state().error).toBeNull();
     expect(h.controller.state().info?.version).toEqual({ x: 1, y: 2, z: 3 });
+  });
+
+  it('3c. EnterDfu ACK 后先等设备重枚举，再发信息帧', async () => {
+    const h = makeHarness();
+    h.link.reconnect = async (): Promise<void> => {
+      h.timeline.push('reenumerate');
+    };
+    await h.controller.selectFile(fileOf(PKG));
+    h.controller.setConfirmed(true);
+    const run = h.controller.start();
+    await settle();
+    await run;
+
+    expect(h.timeline.slice(0, 5)).toEqual([
+      'suspend',
+      'dfuActive:true',
+      'send:enter',
+      'reenumerate',
+      'send:info',
+    ]);
+    expect(h.controller.state().phase).toBe('done');
+  });
+
+  it('3d. 重枚举超时 → error.kind=reenumerate，信息帧不发、设备不回滚', async () => {
+    const h = makeHarness();
+    h.link.reconnect = async (): Promise<void> => {
+      throw new Error('device did not reappear');
+    };
+    await h.controller.selectFile(fileOf(PKG));
+    h.controller.setConfirmed(true);
+    const run = h.controller.start();
+    await settle();
+    await run;
+
+    expect(h.controller.state().phase).toBe('failed');
+    expect(h.controller.state().error?.kind).toBe('reenumerate');
+    expect(h.timeline).not.toContain('send:info');
+    expect(h.timeline.at(-1)).toBe('dfuActive:false');
   });
 
   it('4. 失败路径也一定调用 setDfuActive(false)（try/finally）', async () => {
@@ -446,6 +492,30 @@ describe('FirmwareController', () => {
     await run;
     expect(h.controller.state().phase).toBe('done');
     expect(h.controller.state().error).toBeNull();
+  });
+
+  it('5c. 设备停在 Bootloader（拿不到型号快照）时仍能选包并升级', async () => {
+    const h = makeHarness();
+    // 参数同步失败 → DeviceLink 保留句柄但没有 DeviceSnapshot
+    h.link.device = null;
+    h.channel.respondEnter = false;
+
+    const selected = await h.controller.selectFile(fileOf(PKG));
+    expect(selected.ok).toBe(true);
+
+    h.controller.setConfirmed(true);
+    const run = h.controller.start();
+    await settle();
+    // EnterDfu 两次都超时（Bootloader 不认参数协议），随后信息帧探测
+    h.timers.advance(TIMING.requestTimeoutMs);
+    await settle();
+    h.timers.advance(TIMING.requestTimeoutMs);
+    await settle();
+    await run;
+
+    expect(h.controller.state().phase).toBe('done');
+    expect(h.controller.state().error).toBeNull();
+    expect(h.timeline).toContain('send:info');
   });
 
   it('6. 失败后不 reset、不再勾确认也能重试成功（设备停在 bootloader，EnterDfu 无人应答）', async () => {

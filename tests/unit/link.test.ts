@@ -46,11 +46,12 @@ const READBACK: ParamReadResult = {
 
 /** WebHidSession 替身：只实现 DeviceLink 用到的那几个方法 */
 class FakeSession {
-  readonly handle = new FakeHidDevice({ deviceId: 'vdevice', productName: 'Virtual M001' });
+  handle = new FakeHidDevice({ deviceId: 'vdevice', productName: 'Virtual M001' });
   readonly opened: string[] = [];
   readonly closed: string[] = [];
   readonly requestedFilters: Array<readonly WebHidUsageFilter[] | undefined> = [];
   readonly changeListeners = new Set<(state: WebHidSessionState) => void>();
+  refreshCount = 0;
 
   private _state: WebHidSessionState;
 
@@ -91,6 +92,15 @@ class FakeSession {
   async closeDevice(id: string): Promise<void> {
     this.closed.push(id);
     this.handle.opened = false;
+  }
+
+  async refresh(): Promise<void> {
+    this.refreshCount += 1;
+  }
+
+  /** 模拟设备复位重枚举：同一个 deviceId 换了新的句柄对象 */
+  replaceHandle(next: FakeHidDevice): void {
+    this.handle = next;
   }
 
   async requestNativeDevice(filters?: readonly WebHidUsageFilter[]): Promise<void> {
@@ -162,8 +172,7 @@ describe('DeviceLink', () => {
     expect(state.warning).toEqual({ key: 'device.warn.modelMismatch', vars: { code: 'ABC123' } });
   });
 
-  it('warns about a missing model code when the info area is blank', async () => {
-    // 真机 V0.0.2 的信息区全 0，modelCode 读出来是空串；不能显示成「设备型号不匹配：」加空值
+  it('treats an empty model code as missing instead of a mismatch', async () => {
     const { link } = setup({
       readResult: { ...READBACK, device: { ...SNAPSHOT, modelCode: '' } },
     });
@@ -308,6 +317,115 @@ describe('DeviceLink', () => {
     off();
     await link.detach();
     expect(seen).toEqual(['connecting', 'ready']);
+  });
+
+  it('keeps the raw channel when parameter sync fails (device may be in Bootloader)', async () => {
+    const session = new FakeSession('native');
+    const mock = new MockTransport();
+    const channel = new ChannelTransport(mock);
+    const store = new AppStore(channel, { lang: 'zh' });
+    const transport = new WebHidTransport({
+      device: session.handle,
+      // 设备只说 Bootloader 的 SigmaBus，参数帧没人答：把超时压到毫秒级
+      timing: { requestTimeoutMs: 5, requestRetries: 0 },
+    });
+    const link = new DeviceLink({
+      session: session as unknown as WebHidSession,
+      channel,
+      mock,
+      store,
+      createTransport: () => transport,
+    });
+
+    await link.attach('vdevice');
+
+    expect(link.getState().status).toBe('error');
+    expect(link.getState().errorCode).toBe('sync');
+    expect(channel.kind).toBe('webhid');
+    expect(store.get().sync).toBe('error');
+    // 句柄仍开着：固件抽屉还能通过 link.transport() 继续刷
+    expect(link.transport()).toBe(transport);
+    expect(transport.device.opened).toBe(true);
+
+    // 参数会话失败后入站监听不能摘：DFU 的状态帧就是走 onInputBytes 进来的
+    const inbound: Uint8Array[] = [];
+    transport.onInputBytes((bytes) => inbound.push(bytes));
+    session.handle.emitInputReport(0x11, [0xc4, 0x0a, 0x00, 0x00, 0x0b, 0x01, 0x00, 0x03, 0x00, 0x00]);
+    expect(inbound).toHaveLength(1);
+  });
+
+  it('swaps to the newly enumerated handle after DFU entry', async () => {
+    const session = new FakeSession('native');
+    bindRegisterDevice(session.handle, createFakeRegisters());
+    const mock = new MockTransport();
+    const channel = new ChannelTransport(mock);
+    const store = new AppStore(channel, { lang: 'zh' });
+    const transport = new WebHidTransport({ device: session.handle });
+    const link = new DeviceLink({
+      session: session as unknown as WebHidSession,
+      channel,
+      mock,
+      store,
+      createTransport: () => transport,
+      timers: {
+        setTimeout: (fn: () => void): unknown => {
+          fn();
+          return 0;
+        },
+        clearTimeout: (): void => undefined,
+      },
+    });
+    await link.attach('vdevice');
+    await link.suspendForDfu();
+
+    const next = new FakeHidDevice({ deviceId: 'vdevice', productName: 'Maono PD100 Mic' });
+    bindRegisterDevice(next, createFakeRegisters());
+    session.replaceHandle(next);
+
+    await link.awaitReenumeration();
+
+    expect(session.refreshCount).toBeGreaterThan(0);
+    expect(transport.device).toBe(next);
+    expect(next.opened).toBe(true);
+    expect(link.getState().status).toBe('dfu');
+  });
+
+  it('ignores a transport disconnect while the DFU flow is running', async () => {
+    const { link, transport } = setup();
+    await link.attach('vdevice');
+    await link.suspendForDfu();
+
+    transport.emitError({ kind: 'disconnected', message: '设备复位重枚举' });
+
+    expect(link.getState().status).toBe('dfu');
+  });
+
+  it('reuses the same transport when re-attaching the same live handle', async () => {
+    const session = new FakeSession('native');
+    bindRegisterDevice(session.handle, createFakeRegisters());
+    const mock = new MockTransport();
+    const channel = new ChannelTransport(mock);
+    const store = new AppStore(channel, { lang: 'zh' });
+    const transport = new WebHidTransport({ device: session.handle });
+    const link = new DeviceLink({
+      session: session as unknown as WebHidSession,
+      channel,
+      mock,
+      store,
+      createTransport: () => transport,
+    });
+
+    await link.attach('vdevice');
+    expect(link.transport()).toBe(transport);
+    expect(channel.kind).toBe('webhid');
+
+    await link.attach('vdevice');
+
+    // 同一句柄复用旧 transport：不再包一层监听，也不会先 close 再 open 掉正在用的设备
+    expect(link.transport()).toBe(transport);
+    expect(transport.device).toBe(session.handle);
+    expect(transport.state()).toBe('ready');
+    expect(link.getState().status).toBe('ready');
   });
 
   it('exposes the bound device channel only while a device is attached', async () => {

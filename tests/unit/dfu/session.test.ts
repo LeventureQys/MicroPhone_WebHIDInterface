@@ -265,6 +265,7 @@ interface HarnessOptions {
   readonly plan?: (event: SentFrame) => Reply;
   readonly send?: DfuSessionOptions['send'];
   readonly timing?: Partial<typeof TIMING>;
+  readonly reconnect?: () => Promise<void>;
 }
 
 function makeHarness(options: HarnessOptions = {}): Harness {
@@ -280,9 +281,10 @@ function makeHarness(options: HarnessOptions = {}): Harness {
     send: options.send ?? ((reports) => device.send(reports)),
     timers,
     clock,
-    timing: options.timing,
+    timing: { dfuEnterSettleMs: 0, ...options.timing },
     deviceModelCode: () => (options.modelCode === undefined ? 'JYM001' : options.modelCode),
     allowBootld: options.allowBootld,
+    reconnect: options.reconnect,
     onProgress: (value) => progress.push(value),
     onError: (value) => errors.push(value),
     onDiag: (value) => diags.push(value),
@@ -387,6 +389,88 @@ describe('DfuSession 快乐路径', () => {
     expect(hexOf(statusFrame(DFU_STATUS_CONTINUE))).toBe('C4 0A 00 00 0B 01 00 03 23 FF');
     expect(hexOf(statusFrame(DFU_STATUS_SUCCESS))).toBe('C4 0A 00 00 0B 01 00 05 21 FF');
     expect(hexOf(sigmaAckFrame(SIGMA_ACK_CHECKSUM_ERR))).toBe('C4 09 00 00 02 03 00 2E FF');
+  });
+});
+
+describe('DfuSession 进 DFU 后等设备重新枚举', () => {
+  it('EnterDfu ACK 之后、信息帧之前调用一次 reconnect', async () => {
+    const order: string[] = [];
+    const h = makeHarness({
+      plan: (event) => {
+        if (event.kind !== 'enter') order.push(event.kind);
+        return happyPlan(event);
+      },
+      reconnect: async () => {
+        order.push('reconnect');
+      },
+    });
+
+    const run = runCaught(h.session, PKG);
+    await settle();
+    expect(await run).toBeNull();
+
+    // enter 的 plan 发生在 send 里，这里只记录它之后的顺序
+    expect(order.slice(0, 3)).toEqual(['reconnect', 'info', 'block']);
+    expect(order.filter((item) => item === 'reconnect')).toHaveLength(1);
+  });
+
+  it('重枚举后先等 dfuEnterSettleMs，再发信息帧', async () => {
+    const h = makeHarness({
+      plan: happyPlan,
+      timing: { dfuEnterSettleMs: 1000 },
+      reconnect: async () => undefined,
+    });
+
+    const run = runCaught(h.session, PKG);
+    await settle();
+    // 假定时器还没推进：reconnect 已调用，但信息帧必须等 1 s
+    expect(labels(h.device)).toEqual(['enter']);
+
+    h.timers.advance(1000);
+    await settle();
+    expect(labels(h.device)[1]).toBe('info');
+    expect(await run).toBeNull();
+  });
+
+  it('reconnect 失败 → error.kind=reenumerate，且一条信息帧都不发', async () => {
+    const h = makeHarness({
+      plan: happyPlan,
+      reconnect: async () => {
+        throw new Error('device did not re-enumerate');
+      },
+    });
+
+    const run = runCaught(h.session, PKG);
+    await settle();
+    const error = await run;
+
+    expect(error?.message).toContain('reenumerate');
+    expect(h.errors).toHaveLength(1);
+    expect(h.errors[0]).toMatchObject({ kind: 'reenumerate' });
+    expect(h.errors[0].detail).toContain('device did not re-enumerate');
+    expect(labels(h.device)).toEqual(['enter']);
+    expect(h.session.phase()).toBe('failed');
+  });
+
+  it('设备本来就在 Bootloader（EnterDfu 无 ACK）时不调用 reconnect', async () => {
+    let reconnects = 0;
+    const h = makeHarness({
+      plan: (event) => (event.kind === 'enter' ? null : happyPlan(event)),
+      reconnect: async () => {
+        reconnects += 1;
+      },
+    });
+
+    const run = runCaught(h.session, PKG);
+    await settle();
+    await advance(h, TIMING.requestTimeoutMs);
+    await advance(h, TIMING.requestTimeoutMs);
+    await settle();
+    expect(await run).toBeNull();
+
+    expect(reconnects).toBe(0);
+    // 两次 EnterDfu 重试都超时，随后直接由信息帧确认进 Bootloader
+    expect(labels(h.device).slice(0, 3)).toEqual(['enter', 'enter', 'info']);
   });
 });
 
@@ -616,6 +700,19 @@ describe('DfuSession 收尾与中止', () => {
     expect(h.device.reports).toHaveLength(sends);
   });
 
+  it('10b. settling 后不再把 App 报文当 SigmaBus 解析', async () => {
+    const h = makeHarness({ plan: happyPlan });
+    const run = runCaught(h.session, PKG);
+    await settle();
+    expect(await run).toBeNull();
+    expect(h.session.phase()).toBe('settling');
+
+    const before = h.diags.length;
+    h.session.handleBytes(new Uint8Array([0x00, 0x12, 0x00, 0x0a, 0x20, 0x57]));
+    h.session.handleBytes(new Uint8Array(63).fill(0xff));
+    expect(h.diags).toHaveLength(before);
+  });
+
   it('11. abort()：writing 中生效、settling 后返回 false', async () => {
     const plan = (event: SentFrame): Reply => {
       if (event.kind === 'enter') return { ack: ACK_NO_ERR };
@@ -657,7 +754,7 @@ describe('DfuSession 收尾与中止', () => {
 });
 
 describe('DfuSession 型号与调用约束', () => {
-  it('12b. 型号不匹配 / 拿不到设备型号都被预检挡下；通用镜像 000000 不比对', async () => {
+  it('12b. 型号不匹配被预检挡下；拿不到型号（设备停在 Bootloader）放行给设备侧校验；通用镜像不比对', async () => {
     const mismatch = makeHarness({ plan: happyPlan, modelCode: 'JYM009' });
     const result = mismatch.session.preflight(PKG);
     expect(result.ok).toBe(false);
@@ -669,10 +766,18 @@ describe('DfuSession 型号与调用约束', () => {
     }
     expect(mismatch.device.reports).toHaveLength(0);
 
+    // 拿不到型号 = 设备可能停在 Bootloader（升级中断后重开上位机的唯一入口）：
+    // 主机侧不能先拒，否则救砖路径永远走不到；型号由 Bootloader 用信息区校验。
     const unknown = makeHarness({ plan: happyPlan, modelCode: null });
-    const unknownResult = unknown.session.preflight(PKG);
-    expect(unknownResult.ok).toBe(false);
-    if (!unknownResult.ok) expect(unknownResult.rejection.detail?.reason).toBe('unknown-device');
+    expect(unknown.session.preflight(PKG).ok).toBe(true);
+
+    // 真机 V0.0.2/V0.0.4 的 0x39000 信息区全 0：`sync()` 读回来的是空串，不是 null。
+    // 空串 / 空白 / 全 0 都必须按"未知"处理，否则选择正常型号包时直接报"型号不对"。
+    for (const blank of ['', '   ', '000000']) {
+      const deviceWithoutInfo = makeHarness({ plan: happyPlan, modelCode: blank });
+      expect(deviceWithoutInfo.session.preflight(PKG).ok).toBe(true);
+      expect(deviceWithoutInfo.device.reports).toHaveLength(0);
+    }
 
     const wildcard = buildPackage(PLAIN, { modelCode: '000000' });
     const anyDevice = makeHarness({ plan: happyPlan, modelCode: 'OTHER1' });

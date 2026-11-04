@@ -17,7 +17,7 @@ import { PAYLOAD_BYTES, splitFrame } from '../protocol';
 import { ACK_NO_ERR, encodeRandWrite } from '../proto/codec';
 import { FUNC_ACK, FUNC_RAND_WRITE, decodeStream, encodeFrame } from '../proto/frame';
 import type { DiagEntry } from '../proto/session';
-import { TIMING, defaultClock, defaultTimers, type Clock, type Timers } from '../proto/timing';
+import { TIMING, defaultClock, defaultTimers, type Clock, type Timers, type TimingOverrides } from '../proto/timing';
 import {
   DFU_STATUS_CODE_ERR,
   DFU_STATUS_CONTINUE,
@@ -74,6 +74,7 @@ export interface DfuError {
   readonly kind:
     | 'preflight'
     | 'enterTimeout'
+    | 'reenumerate'
     | 'probeFailed'
     | 'statusCode'
     | 'statusInfo'
@@ -94,9 +95,15 @@ export interface DfuSessionOptions {
   readonly send: (reports: readonly Uint8Array[]) => void | Promise<void>;
   readonly timers?: Timers;
   readonly clock?: Clock;
-  readonly timing?: Partial<typeof TIMING>;
+  readonly timing?: TimingOverrides;
   /** 当前设备型号码（`DeviceLink` 的 `DeviceSnapshot.modelCode`）；拿不到返回 null */
   readonly deviceModelCode: () => string | null;
+  /**
+   * 进 DFU 的 ACK 之后调用：设备约 200 ms 后复位、1–3 s 重新枚举，旧句柄已失效。
+   * 调用方（`FirmwareController`）负责等新句柄并重开；抛错按 `reenumerate` 失败处理。
+   * 设备本来就在 Bootloader（EnterDfu 无人应答）时不会调用。
+   */
+  readonly reconnect?: () => Promise<void>;
   /** R6-9：`Bootld` 包默认拒绝，只有自检脚本与单测可以传 true（消费级界面没有这个开关） */
   readonly allowBootld?: boolean;
   readonly onProgress?: (progress: DfuProgress) => void;
@@ -122,6 +129,19 @@ const ENTER_DFU_ATTEMPTS = 2;
 /** 通用镜像：设备侧不校验型号，主机侧也不必匹配 */
 const WILDCARD_MODEL_CODE = '000000';
 
+/**
+ * 设备没上报型号（信息区未烧 / 全 0）与"型号不符"是两件事：
+ * 真机 V0.0.2/V0.0.4 的 `0x39000` 信息区都是空白，`sync()` 读回来的 modelCode 是空串；
+ * 此时不能先拒——设备停在 Bootloader 或产线漏烧信息区都会走到这里，先拒会把升级路径堵死。
+ * 返回 null 表示"未知"，非 null 才是可用于比对的真实型号。
+ */
+function normalizeDeviceModelCode(code: string | null): string | null {
+  if (code === null) return null;
+  const trimmed = code.trim();
+  if (trimmed.length === 0 || trimmed === WILDCARD_MODEL_CODE) return null;
+  return trimmed;
+}
+
 /** 设计 §6.7：进入 5 + 探测 5 + 写入 85 + 收尾验证 5 */
 const ENTER_POINTS = 5;
 const PROBE_POINTS = 5;
@@ -146,7 +166,6 @@ const EMPTY = new Uint8Array(0);
 
 /** 预检内部拒绝原因：`ImageRejection.problem` 是 4.1 的封闭枚举，细分类别只能走 `detail.reason` */
 const REASON_BOOTLD = 'bootld';
-const REASON_UNKNOWN_DEVICE = 'unknown-device';
 const REASON_MISMATCH = 'mismatch';
 
 function hex(value: number, digits: number): string {
@@ -221,6 +240,7 @@ export class DfuSession {
   private readonly timers: Timers;
   private readonly timing: typeof TIMING;
   private readonly deviceModelCode: () => string | null;
+  private readonly reconnect?: () => Promise<void>;
   private readonly allowBootld: boolean;
   private readonly onProgressCb?: (progress: DfuProgress) => void;
   private readonly onErrorCb?: (error: DfuError) => void;
@@ -248,6 +268,7 @@ export class DfuSession {
     this.timers = options.timers ?? defaultTimers();
     this.timing = { ...TIMING, ...options.timing };
     this.deviceModelCode = options.deviceModelCode;
+    this.reconnect = options.reconnect;
     this.allowBootld = options.allowBootld === true;
     this.onProgressCb = options.onProgress;
     this.onErrorCb = options.onError;
@@ -263,7 +284,8 @@ export class DfuSession {
    * 成功把 phase 推到 `ready` 并缓存镜像；失败推到 `failed` 并派发 `onError({kind:'preflight'})`。
    *
    * 拒绝共三类，`ImageRejection.problem` 都用 `modelMissing`（4.1 的枚举里没有"不匹配"这一项），
-   * 具体类别看 `rejection.detail.reason`：`bootld` / `unknown-device` / `mismatch`。
+   * 具体类别看 `rejection.detail.reason`：`bootld` / `mismatch`。
+   * 拿不到设备型号（设备停在 Bootloader）**不**拒绝：交给设备侧做型号校验。
    */
   preflight(bytes: Uint8Array): DfuPreflightResult {
     if (isRunningPhase(this.phaseValue)) throw new Error('dfu already running');
@@ -282,13 +304,11 @@ export class DfuSession {
         return this.rejectPreflight(this.modelRejection(REASON_BOOTLD, info, '固件包是 Bootloader 镜像'));
       }
     } else if (info.modelCode !== WILDCARD_MODEL_CODE) {
-      const deviceModel = this.deviceModelCode();
-      if (deviceModel === null) {
-        return this.rejectPreflight(
-          this.modelRejection(REASON_UNKNOWN_DEVICE, info, '拿不到当前设备的型号码'),
-        );
-      }
-      if (deviceModel !== info.modelCode) {
+      const deviceModel = normalizeDeviceModelCode(this.deviceModelCode());
+      // 拿不到型号 ≠ 型号不符：设备停在 Bootloader 时参数协议没人答，回读快照必然为空；
+      // 产线漏烧 0x39000 信息区时，App 也会返回空串/全 0。这两种都交给设备侧校验，
+      // 主机侧先拒会让「救砖 / 首次升级」永远走不到 Bootloader（2026-11-04 真机实测）。
+      if (deviceModel !== null && deviceModel !== info.modelCode) {
         return this.rejectPreflight(
           this.modelRejection(REASON_MISMATCH, info, `设备型号码 ${deviceModel} 与镜像型号码 ${info.modelCode} 不一致`, deviceModel),
         );
@@ -342,6 +362,27 @@ export class DfuSession {
     } else {
       this.enterDone = true;
       this.emitProgress('entering');
+      // ACK 只说明 App 收到了写命令；约 200 ms 后设备复位、旧 HID 句柄失效，
+      // 必须等新句柄重开后再发信息帧，否则 3 次探测全打在已断开的句柄上。
+      if (this.reconnect !== undefined) {
+        try {
+          await this.reconnect();
+        } catch (error) {
+          const failure: DfuError = {
+            kind: 'reenumerate',
+            round: this.round,
+            detail: describe(error),
+          };
+          this.reportFailure(failure);
+          throw new Error(`dfu ${failure.kind}`);
+        }
+        // 设备刚落成 Bootloader 时 USB/Flash 还没稳；立刻写块会在第 11/44 块附近丢回执
+        //（2026-11-04 真机两次复现）。从拔插后已稳定数秒的 Bootloader 直连则一次写完。
+        if (this.timing.dfuEnterSettleMs > 0) {
+          await this.wait(this.timing.dfuEnterSettleMs);
+          if ((this.phaseValue as string) === 'aborted') throw new Error('dfu aborted');
+        }
+      }
     }
     this.transition('probing');
 
@@ -423,6 +464,16 @@ export class DfuSession {
       return;
     }
     if (this.phaseValue === 'idle' || this.phaseValue === 'preflight' || this.phaseValue === 'ready') return;
+    // 0x05 之后 Bootloader 会重启成 App；这段窗口里旧 DFU 监听还挂着，
+    // 收到的已是 App 的参数/电平报文，再按 SigmaBus 解只会刷一屏 0xFF start issue。
+    if (
+      this.phaseValue === 'settling' ||
+      this.phaseValue === 'verifying' ||
+      this.phaseValue === 'done' ||
+      this.phaseValue === 'failed'
+    ) {
+      return;
+    }
     this.handleSigmaBytes(bytes);
   }
 
@@ -620,6 +671,12 @@ export class DfuSession {
       return { kind: 'failed', error: { kind: 'channel', detail: describe(error) } };
     }
     return { kind: 'ok' };
+  }
+
+  private wait(ms: number): Promise<void> {
+    return new Promise<void>((resolve) => {
+      this.timers.setTimeout(resolve, ms);
+    });
   }
 
   private awaitSlot(kind: SlotKind, timeoutMs: number): Promise<SlotResult> {

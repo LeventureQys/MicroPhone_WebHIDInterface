@@ -477,4 +477,9 @@ describe('ascii word packing (appendix A.4)', () => {
     expect(decodeAsciiWords([0x2020, 0x2000])).toBe('');
     expect(decodeAsciiWords([0x4a00])).toBe('J');
   });
+
+  it('treats erased flash (0xFF) as empty, not as printable characters', () => {
+    expect(decodeAsciiWords([0xffff, 0xffff, 0xffff])).toBe('');
+    expect(decodeAsciiWords([0x4a59, 0xffff, 0x3031])).toBe('JY');
+  });
 });

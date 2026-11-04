@@ -1,4 +1,4 @@
-﻿import type { DictKey } from './zh';
+import type { DictKey } from './zh';
 
 /** 英文字典：键集合由 Record<DictKey, string> 在编译期与 zh.ts 对齐 */
 export const en: Record<DictKey, string> = {
@@ -216,10 +216,12 @@ export const en: Record<DictKey, string> = {
   'device.error.nativeUnavailable': 'Native WebHID is unavailable here (needs a Chromium secure context)',
   'device.error.bridge': 'Cannot reach the bridge service',
   'device.error.device': 'Device operation failed',
+  'device.error.sync': 'The device did not answer the parameter sync; it may be in update mode. Open Firmware update to continue',
   'device.error.noSelection': 'No device selected (the Electron picker is not open yet)',
   'device.error.unknown': 'Link error',
   'device.warn.modelMismatch': 'Device model mismatch: {code}',
   'device.warn.modelMissing': 'Device returned no model code (info area is empty)',
+  'device.warn.bootloader': 'Parameter sync failed but the device handle is still usable; if it is in update mode, continue in Firmware update',
   'device.sync.note': 'After connecting, parameter values come from the device readback; edits made before sync stay local',
   'device.saveNote':
     'Writes take effect immediately; whether they survive a power cycle depends on the firmware (to be confirmed).',
@@ -317,6 +319,7 @@ export const en: Record<DictKey, string> = {
   'fw.close': 'Close',
   'fw.error.preflight': 'The package failed validation; nothing was sent to the device',
   'fw.error.enterTimeout': 'The device did not acknowledge the switch to update mode; replug it and retry',
+  'fw.error.reenumerate': 'The device did not reappear after restarting; replug it and retry, or retry while it is still in update mode',
   'fw.error.probeFailed': 'No reply after entering update mode; replug the device and retry',
   'fw.error.statusCode': 'The device returned an unexpected status {status}',
   'fw.error.statusInfo': 'The device rejected the firmware info (model or package mismatch)',

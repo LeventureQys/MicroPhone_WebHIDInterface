@@ -71,4 +71,36 @@ describe('@webhid-kit wiring', () => {
     // happy-dom 没有 navigator.hid，真机通道应当自报不可用而不是抛错
     expect(kit.nativeAvailable()).toBe(false);
   });
+
+  it('returns the same adapted handle for the same native HIDDevice across refreshes', async () => {
+    // Chromium 每次 getDevices() 都 new 一个 NativeHidHandle，但底层 HIDDevice 是同一个；
+    // DFU 的 awaitReenumeration() 依赖对象身份区分"刷新"与"真的重枚举"，适配层必须缓存。
+    const raw = {
+      vendorId: 0x0a67,
+      productId: 0x0010,
+      productName: 'M001',
+      opened: false,
+      collections: [],
+      addEventListener: (): void => undefined,
+      removeEventListener: (): void => undefined,
+      open: async (): Promise<void> => undefined,
+      close: async (): Promise<void> => undefined,
+      sendReport: async (): Promise<void> => undefined,
+    };
+    const previous = Object.getOwnPropertyDescriptor(navigator, 'hid');
+    Object.defineProperty(navigator, 'hid', {
+      configurable: true,
+      value: { getDevices: async () => [raw], requestDevice: async () => [] },
+    });
+    try {
+      const kit = createWebHidKit();
+      const first = await kit.nativeDevices();
+      const second = await kit.nativeDevices();
+      expect(first).toHaveLength(1);
+      expect(second[0]).toBe(first[0]);
+    } finally {
+      if (previous) Object.defineProperty(navigator, 'hid', previous);
+      else Reflect.deleteProperty(navigator as object, 'hid');
+    }
+  });
 });

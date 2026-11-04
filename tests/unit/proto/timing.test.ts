@@ -5,7 +5,11 @@ import { defaultClock, defaultTimers, TIMING } from '../../../src/renderer/src/d
 const EXPECTED_TIMING = {
   requestTimeoutMs: 500,
   requestRetries: 2,
+  writeTimeoutMs: 3000,
+  writeRetries: 1,
   writeThrottleMs: 120,
+  writeSettleMs: 600,
+  writeGraceMs: 8000,
   pollIntervalMs: 20,
   pollTimeoutMs: 200,
   inboundWatchdogMs: 2000,
@@ -16,15 +20,19 @@ const EXPECTED_TIMING = {
   dfuProbeTimeoutMs: 1500,
   dfuProbeAttempts: 3,
   dfuRoundRestarts: 3,
-  dfuSettleTimeoutMs: 10000,
+  dfuSettleTimeoutMs: 20000,
+  dfuReenumTimeoutMs: 8000,
+  dfuReenumPollMs: 200,
+  dfuEnterSettleMs: 1000,
+  dfuReportGapMs: 2,
   dfuInfoFrameBytes: 90,
   dfuBlockBytes: 265,
 };
 
 describe('TIMING', () => {
-  it('16 个字段值与设计文档 §5.4.4 逐字一致', () => {
+  it('24 个字段值与设计文档 §5.4.4 逐字一致', () => {
     expect({ ...TIMING }).toEqual(EXPECTED_TIMING);
-    expect(Object.keys(TIMING)).toHaveLength(16);
+    expect(Object.keys(TIMING)).toHaveLength(24);
   });
 
   it('对象被冻结，运行期改不动（C8：时间常量只读且集中）', () => {

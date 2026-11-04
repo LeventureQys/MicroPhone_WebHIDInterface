@@ -5,7 +5,7 @@ import type { EqBand, EqFilterType } from '../eq/types';
 import type { ChannelTransport } from './channel-transport';
 import type { MockTransport } from './mock-transport';
 import type { ReportIds } from './protocol';
-import type { Clock, Timers } from './proto/timing';
+import { TIMING, defaultClock, defaultTimers, type Clock, type Timers } from './proto/timing';
 import { EQ_BAND_COUNT, eqBandAddr, findRegister } from './registers';
 import type {
   DeviceSnapshot,
@@ -112,6 +112,14 @@ export class DeviceLink extends EventTarget {
   private _transport: Transport | null = null;
   private _detachers: Array<() => void> = [];
   private _firmwareBeforeDfu: DeviceSnapshot['firmware'] | null = null;
+  /** 重枚举轮询与超时走注入时钟，单测可把 8 s 压成毫秒 */
+  private readonly _timers: Timers;
+  private readonly _clock: Clock;
+  /**
+   * 正在 attach：这期间参数会话超时派发的 `disconnected` 不能当成"设备掉了"，
+   * 由 `attach()` 自己决定是彻底失败还是保留句柄给 DFU（设备可能停在 Bootloader）。
+   */
+  private _attaching = false;
 
   constructor(options: DeviceLinkOptions) {
     super();
@@ -120,6 +128,8 @@ export class DeviceLink extends EventTarget {
     this._mock = options.mock;
     this._store = options.store;
     this._createTransport = options.createTransport;
+    this._timers = options.timers ?? defaultTimers();
+    this._clock = options.clock ?? defaultClock();
     this._state = Object.freeze({
       status: 'idle',
       mode: options.session.getState().mode,
@@ -153,58 +163,64 @@ export class DeviceLink extends EventTarget {
 
   /**
    * 打开设备并接管参数链路：open → channel.use(webhid) → 回读 → 回填 store → ready。
-   * 失败一律降级回 Mock 并保留可读文案，不向调用方抛出（界面只关心状态）。
+   * 打不开设备时降级回 Mock；打开成功但参数同步失败时保留原始通道（设备可能停在 Bootloader，
+   * 固件升级还要用它），参数链路按 error 降级，不向调用方抛出。
    */
   async attach(deviceId: string): Promise<void> {
     if (this._state.status === 'connecting') return;
-    this._patch({
-      status: 'connecting',
-      mode: this._session.getState().mode,
-      deviceId,
-      sync: 'syncing',
-      error: null,
-      errorCode: null,
-      warning: null,
-    });
-    this._store.setSync('syncing');
-
-    const handle = this._session.handleOf(deviceId);
-    if (handle === null) {
-      this._fail('device');
-      return;
-    }
-
+    this._attaching = true;
     try {
-      if (!handle.opened) await this._session.openDevice(deviceId);
-      const transport = this._createTransport
-        ? this._createTransport(handle)
-        : new WebHidTransport({ device: handle, reportIds: reportIdsFromConfig() });
-      this._transport = transport;
-      // 先接上通道与监听再 open()：`open()` 里要做全量回读，失败时 `ParamSession.failFatal`
-      // 会留下解释原因的诊断帧。若等 open() 之后再 `use()`，这些帧就没有订阅者，
-      // 联调时诊断卡是空的（真机联调实测）。写请求不受影响——回读期间在途请求占着队列，
-      // 写只能排队等它结束。
-      this._listen(transport);
-      this._channel.use(transport);
-      await transport.open();
-      if (transport.state() !== 'ready') {
+      this._patch({
+        status: 'connecting',
+        mode: this._session.getState().mode,
+        deviceId,
+        sync: 'syncing',
+        error: null,
+        errorCode: null,
+        warning: null,
+      });
+      this._store.setSync('syncing');
+
+      const handle = this._session.handleOf(deviceId);
+      if (handle === null) {
         this._fail('device');
         return;
       }
-      this._store.setSync('syncing');
-      this._patch({ sync: 'syncing' });
 
-      const result = await transport.readAll();
-      this._applyReadback(result);
-      this._store.setSync('ready');
-      this._patch({
-        status: 'ready',
-        sync: 'ready',
-        device: result.device,
-        warning: this._mismatchWarning(result.device),
-      });
-    } catch {
-      this._fail('device');
+      try {
+        if (!handle.opened) await this._session.openDevice(deviceId);
+        const transport = this._prepareTransport(handle);
+        // 先接上通道与监听再 open()：`open()` 里要做全量回读，失败时 `ParamSession.failFatal`
+        // 会留下解释原因的诊断帧。若等 open() 之后再 `use()`，这些帧就没有订阅者，
+        // 联调时诊断卡是空的（真机联调实测）。写请求不受影响——回读期间在途请求占着队列，
+        // 写只能排队等它结束。
+        await transport.open();
+        if (transport.state() !== 'ready') {
+          // 句柄已经打开、只是参数协议没人答：设备很可能停在 Bootloader（升级失败/首刷中断）。
+          // 这时把句柄丢掉就再也救不回来——保留原始通道，固件抽屉仍能继续升级。
+          if (transport instanceof WebHidTransport && transport.device.opened) this._failSync();
+          else this._fail('device');
+          return;
+        }
+        this._store.setSync('syncing');
+        this._patch({ sync: 'syncing' });
+
+        const result = await transport.readAll();
+        this._applyReadback(result);
+        this._store.setSync('ready');
+        this._patch({
+          status: 'ready',
+          sync: 'ready',
+          device: result.device,
+          warning: this._mismatchWarning(result.device),
+        });
+      } catch {
+        const current = this._transport;
+        if (current instanceof WebHidTransport && current.device.opened) this._failSync();
+        else this._fail('device');
+      }
+    } finally {
+      this._attaching = false;
     }
   }
 
@@ -257,7 +273,42 @@ export class DeviceLink extends EventTarget {
     if (transport instanceof WebHidTransport) await transport.suspend();
   }
 
-  /** DFU 后：恢复会话并全量回读；版本号没变时给软告警（R4-7） */
+  /**
+   * 等设备复位后重新枚举，并把 transport 的句柄换成新出现的那个。
+   *
+   * 协议事实（DFU 协议 1026 §1/§6）：写 `0x1008=1` 后约 200 ms 设备复位，1–3 s 重新枚举；
+   * 旧 `HIDDevice` 已失效，必须重开句柄才能发信息帧 / 回读版本。
+   * 虚拟通道的设备表是桥启动时一次性建好的（没有注册/注销接口），不会真重枚举，直接返回。
+   */
+  async awaitReenumeration(): Promise<void> {
+    const session = this._session;
+    const deviceId = this._state.deviceId;
+    const transport = this._transport;
+    if (session === null || deviceId === null || transport === null) {
+      throw new Error('设备尚未连接，无法等待升级模式重新枚举');
+    }
+    if (session.getState().mode === 'virtual' || !(transport instanceof WebHidTransport)) return;
+
+    const previous = transport.device;
+    const deadline = this._clock.now() + TIMING.dfuReenumTimeoutMs;
+    while (this._clock.now() < deadline) {
+      await this._delay(TIMING.dfuReenumPollMs);
+      await session.refresh();
+      const replacement = this._findReplacement(deviceId, previous);
+      if (replacement === null) continue;
+      if (!replacement.handle.opened) await session.openDevice(replacement.id);
+      if (!replacement.handle.opened) continue;
+      await transport.reopen(replacement.handle);
+      if (transport.state() !== 'ready') {
+        throw new Error(`重新打开设备 ${replacement.id} 失败`);
+      }
+      this._patch({ deviceId: replacement.id });
+      return;
+    }
+    throw new Error(`设备 ${deviceId} 在 ${TIMING.dfuReenumTimeoutMs} ms 内没有重新枚举`);
+  }
+
+  /** 收尾后：换新句柄并全量回读；版本号没变时给软告警（R4-7） */
   async resumeAfterDfu(): Promise<void> {
     const transport = this._transport;
     if (transport === null) {
@@ -266,8 +317,12 @@ export class DeviceLink extends EventTarget {
     }
     const before = this._firmwareBeforeDfu;
     try {
-      if (transport instanceof WebHidTransport) await transport.resume();
-      else await transport.open();
+      if (transport instanceof WebHidTransport) {
+        await this.awaitReenumeration();
+        await transport.resume();
+      } else {
+        await transport.open();
+      }
       if (transport.state() !== 'ready') {
         this._fail('device');
         return;
@@ -332,11 +387,12 @@ export class DeviceLink extends EventTarget {
 
   private _mismatchWarning(device: DeviceSnapshot | null): LinkText | null {
     if (device === null) return null;
-    // 信息区为空时 modelCode 是空串：真机 V0.0.2 就是这样，此时说「不匹配」会在界面上
-    // 挂一句没有型号的警告，用户与现场都无从判断，所以单独给一条「未返回型号」。
-    if (device.modelCode.trim() === '') return { key: 'device.warn.modelMissing' };
-    if (device.modelCode === EXPECTED_MODEL_CODE) return null;
-    return { key: 'device.warn.modelMismatch', vars: { code: device.modelCode } };
+    const code = device.modelCode.trim();
+    if (code === EXPECTED_MODEL_CODE) return null;
+    // 信息区没烧（真机 V0.0.2/V0.0.4 的 0x39000 全 0）不是"型号不匹配"，
+    // 显示"未上报型号"才不会把用户引到错误的排查方向（升级由 Bootloader 兜底校验）。
+    if (code.length === 0 || code === '000000') return { key: 'device.warn.modelMissing' };
+    return { key: 'device.warn.modelMismatch', vars: { code } };
   }
 
   // ---- 通道监听与失败降级 ------------------------------------------------
@@ -362,7 +418,11 @@ export class DeviceLink extends EventTarget {
    * 但状态留 error 并保留文案；不自动重连，等用户再点连接（任务书 §4.5 第 5 条）。
    */
   private _handleDrop(): void {
-    if (this._state.status !== 'ready' && this._state.status !== 'dfu') return;
+    // 升级中设备复位重枚举是预期动作，DFU 会话自己会等新句柄；这里丢掉通道就把升级打断了
+    if (this._state.status === 'dfu') return;
+    // attach 期间的超时由 attach 判定（可能是 Bootloader 不说参数协议，句柄还要留着升级）
+    if (this._attaching) return;
+    if (this._state.status !== 'ready') return;
     this._channel.use(this._mock);
     this._disposeTransport();
     this._store.setSync('error');
@@ -371,6 +431,46 @@ export class DeviceLink extends EventTarget {
       sync: 'error',
       error: this._state.error ?? { key: errorKeyOf('device') },
       errorCode: this._state.errorCode ?? 'device',
+    });
+  }
+
+  /**
+   * 取本次 attach 用的通道。
+   *
+   * 同一句柄再次 attach（"重插后再试"没真拔、或 Bootloader 恢复流程）直接复用旧 transport：
+   * 它的入站监听还在，`open()` 在 error 状态下会重建参数会话，不会把正在用的句柄先关掉。
+   * 句柄换了（真重枚举/重新枚举）才丢弃旧通道，避免两套监听同时挂在一台设备上。
+   */
+  private _prepareTransport(handle: WebHidDeviceHandle): Transport {
+    const existing = this._transport;
+    if (existing instanceof WebHidTransport && existing.device === handle) return existing;
+    if (existing !== null) this._disposeTransport();
+
+    const transport = this._createTransport
+      ? this._createTransport(handle)
+      : new WebHidTransport({ device: handle, reportIds: reportIdsFromConfig() });
+    this._transport = transport;
+    this._listen(transport);
+    this._channel.use(transport);
+    return transport;
+  }
+
+  /**
+   * 参数同步失败但句柄仍活着：设备最可能停在 Bootloader（升级中断后它每次复位都留在那里）。
+   *
+   * 不切回 Mock、也不 dispose 通道——`link.transport()` 继续可用，固件抽屉才能接着刷。
+   * 参数链路按 error 降级（`store.sync = error`），避免界面把"没读到设备值"当成已同步。
+   */
+  private _failSync(): void {
+    this._store.setSync('error');
+    this._patch({
+      status: 'error',
+      sync: 'error',
+      // 回读没成功，旧的设备摘要不能继续当真值用（否则预检会拿上一次的型号做判断）
+      device: null,
+      error: { key: 'device.error.sync' },
+      errorCode: 'sync',
+      warning: { key: 'device.warn.bootloader' },
     });
   }
 
@@ -394,6 +494,30 @@ export class DeviceLink extends EventTarget {
     if (transport === null) return;
     void transport.close().catch(() => {
       // 设备已消失时 close 失败没有意义，也不该盖住原始错误
+    });
+  }
+
+  /**
+   * 找重枚举后的新句柄。优先按原 id（真机 id = `native-VID-PID-序号`，Bootloader 的 VID/PID
+   * 不变时 id 也不变）；枚举顺序变了导致 id 漂移时，退回按 VID/PID 找"不是旧句柄"的那台。
+   */
+  private _findReplacement(
+    deviceId: string,
+    previous: WebHidDeviceHandle,
+  ): { readonly id: string; readonly handle: WebHidDeviceHandle } | null {
+    const direct = this._session.handleOf(deviceId);
+    if (direct !== null && direct !== previous) return { id: deviceId, handle: direct };
+    for (const summary of this._session.getState().devices) {
+      if (summary.vendorId !== previous.vendorId || summary.productId !== previous.productId) continue;
+      const candidate = this._session.handleOf(summary.id);
+      if (candidate !== null && candidate !== previous) return { id: summary.id, handle: candidate };
+    }
+    return null;
+  }
+
+  private _delay(ms: number): Promise<void> {
+    return new Promise<void>((resolve) => {
+      this._timers.setTimeout(resolve, ms);
     });
   }
 

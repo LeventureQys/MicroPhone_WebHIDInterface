@@ -46,7 +46,7 @@ import {
   type DecodeIssue,
   type ParamFrame,
 } from './frame';
-import { TIMING, defaultClock, defaultTimers, type Clock, type Timers } from './timing';
+import { TIMING, defaultClock, defaultTimers, type Clock, type Timers, type TimingOverrides } from './timing';
 
 export type SessionPhase = 'idle' | 'syncing' | 'ready' | 'error';
 
@@ -103,7 +103,7 @@ export interface ParamSessionOptions {
   readonly reportIds?: ReportIds;
   readonly clock?: Clock;
   readonly timers?: Timers;
-  readonly timing?: Partial<typeof TIMING>;
+  readonly timing?: TimingOverrides;
   readonly onPhase?: (phase: SessionPhase) => void;
   readonly onEcho?: (addr: number, raw: number) => void;
   readonly onError?: (error: TransportError) => void;
@@ -334,6 +334,8 @@ export class ParamSession {
   private syncGeneration = 0;
   /** sync 开头等老请求回包期间压住轮询：那时相位还是 ready，轮询会插进两轮之间 */
   private drainingSync = false;
+  /** 最后一次写帧（含重发）上总线的时刻；看门狗与轮询让位都按它算宽限 */
+  private lastWriteActivity = 0;
 
   constructor(options: ParamSessionOptions) {
     this.send = options.send;
@@ -368,6 +370,14 @@ export class ParamSession {
 
   diagnostics(): readonly DiagEntry[] {
     return this.ring.slice();
+  }
+
+  /**
+   * 最近一次写帧是否落在 `ms` 宽限内。通道层用它判断"设备静默是不是正在落 Flash"，
+   * 而不是直接当成掉线（真机写 Flash 时主循环停摆，USB 中断仍在跑）。
+   */
+  writeActivityWithin(ms: number): boolean {
+    return this.lastWriteActivity > 0 && this.clock.now() - this.lastWriteActivity < ms;
   }
 
   /**
@@ -518,6 +528,7 @@ export class ParamSession {
       queued = true;
     }
     if (!queued) return;
+    this.lastWriteActivity = this.clock.now();
     if (this.throttleTimer === null) {
       this.throttleTimer = this.timers.setTimeout(() => this.flushWrites(), this.timing.writeThrottleMs);
     }
@@ -664,7 +675,13 @@ export class ParamSession {
     const inflight = this.inflight;
     if (inflight === null || this.disposed) return;
     inflight.attempts += 1;
-    const timeoutMs = inflight.task.poll ? this.timing.pollTimeoutMs : this.timing.requestTimeoutMs;
+    // 写要等设备落完 Flash 才回 ACK；读/轮询仍用原来的短超时
+    const timeoutMs = inflight.task.poll
+      ? this.timing.pollTimeoutMs
+      : inflight.task.expect === 'ack'
+        ? this.timing.writeTimeoutMs
+        : this.timing.requestTimeoutMs;
+    if (inflight.task.expect === 'ack') this.lastWriteActivity = this.clock.now();
     inflight.timer = this.timers.setTimeout(() => this.onRequestTimeout(inflight), timeoutMs);
     this.counts.outFrames += 1;
     this.pushDiag({
@@ -736,7 +753,7 @@ export class ParamSession {
       this.pump();
       return;
     }
-    if (inflight.attempts <= this.timing.requestRetries) {
+    if (inflight.attempts <= this.retryLimitFor(inflight.task, error)) {
       this.counts.retries += 1;
       this.clearInflightTimer(inflight);
       this.sendAttempt();
@@ -744,6 +761,15 @@ export class ParamSession {
       return;
     }
     this.failFatal(error);
+  }
+
+  /**
+   * 写超时只重发 `writeRetries` 次：重发写会再触发一次 Flash 落盘，不能和读共用 2 次。
+   * 校验错 / 设备地址错说明设备活着，仍按 `requestRetries` 重试。
+   */
+  private retryLimitFor(task: Task, error: TransportError): number {
+    if (task.expect === 'ack' && error.kind === 'timeout') return this.timing.writeRetries;
+    return this.timing.requestRetries;
   }
 
   // ---- 入站与应答归属（S-g / S-h） ----
@@ -987,6 +1013,13 @@ export class ParamSession {
 
   private pollTick(): void {
     if (this.disposed || !this.pollingWanted || this.phaseValue !== 'ready' || this.drainingSync) return;
+    // 写后静默窗口：设备往往在回 ACK 之后才落 Flash，这期间的轮询只会变成超时帧
+    if (this.lastWriteActivity > 0 && this.clock.now() - this.lastWriteActivity < this.timing.writeSettleMs) {
+      this.counts.droppedPolls += 1;
+      this.emitStats();
+      this.schedulePoll();
+      return;
+    }
     // S-f：有待发写、队列非空或在途请求时低优先级轮询让位
     if (this.inflight !== null || this.queue.length > 0 || this.pendingWrites.size > 0) {
       this.counts.droppedPolls += 1;

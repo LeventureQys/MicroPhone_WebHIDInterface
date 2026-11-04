@@ -467,16 +467,16 @@ export function defaultOf(spec: RegisterSpec): number {
   return Math.min(spec.max, Math.max(spec.min, value));
 }
 
-/** 每字两个字符，高字节在前；遇 0x00 停止，去掉尾部空白（需求 A.4） */
+/** 每字两个字符，高字节在前；遇 0x00 / 0xFF 停止（0xFF 是未烧录 Flash 的擦除值），去掉尾部空白（需求 A.4） */
 export function decodeAsciiWords(words: readonly number[]): string {
   let text = '';
   for (const word of words) {
     const value = word & 0xffff;
     const high = (value >> 8) & 0xff;
     const low = value & 0xff;
-    if (high === 0) break;
+    if (high === 0 || high === 0xff) break;
     text += String.fromCharCode(high);
-    if (low === 0) break;
+    if (low === 0 || low === 0xff) break;
     text += String.fromCharCode(low);
   }
   return text.replace(/\s+$/, '');

@@ -255,6 +255,27 @@ export function createDeviceView(session: WebHidSession, options?: DeviceViewOpt
       errorTitle.textContent = '';
       errorDetail.textContent = '';
     }
+    renderLinkError();
+  }
+
+  /**
+   * 链路层错误（参数同步失败但句柄还活着）也显示在同一个错误框里：
+   * WebHidSession 此时仍是 ready，不补这一层用户只能看到顶栏"同步失败"，不知道还能去固件升级。
+   */
+  function renderLinkError(): void {
+    const linkState = options?.link?.getState();
+    if (linkState === undefined || session.getState().error !== null) return;
+    const title = formatLinkText(linkState.error);
+    if (title === null) {
+      // 链路错误清掉后要把错误框收回；WebHidSession 自身没有错误时它本来就不该占着位置
+      errorBox.hidden = true;
+      errorTitle.textContent = '';
+      errorDetail.textContent = '';
+      return;
+    }
+    errorBox.hidden = false;
+    errorTitle.textContent = title;
+    errorDetail.textContent = formatLinkText(linkState.warning) ?? '';
   }
 
   function deviceRow(device: WebHidDeviceSummary): HTMLElement {
@@ -368,6 +389,8 @@ export function createDeviceView(session: WebHidSession, options?: DeviceViewOpt
 
   const offChange = session.onChange(scheduleChange);
   const offReport = session.onReport(scheduleReport);
+  // 链路层错误（参数同步失败但句柄还在）不在 WebHidSession 状态里，要单独订阅
+  const offLink = options?.link?.onChange(() => renderLinkError());
 
   syncTransportField();
   render();
@@ -375,6 +398,7 @@ export function createDeviceView(session: WebHidSession, options?: DeviceViewOpt
   (root as HTMLElement & { destroy?: () => void }).destroy = () => {
     offChange();
     offReport();
+    offLink?.();
     diag.destroy();
     if (reportTimer !== null) clearTimeout(reportTimer);
     if (changeTimer !== null) clearTimeout(changeTimer);

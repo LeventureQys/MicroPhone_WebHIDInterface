@@ -104,6 +104,12 @@ export function decodeSigmaStream(buffer: Uint8Array): SigmaDecodeResult {
   let pos = 0;
 
   while (pos < buffer.length) {
+    // 63 B 报告里状态帧后面全是 0x00 补位；合法帧永远以 0xC4 开头，所以 0x00 只可能是补位。
+    // 静默跳过，否则每块都会产生 50 多条 start issue，把诊断日志刷满、白白消耗 DFU 期间的主线程。
+    if (buffer[pos] === 0x00) {
+      pos += 1;
+      continue;
+    }
     if (buffer[pos] !== SIGMA_START) {
       issues.push({
         problem: 'start',

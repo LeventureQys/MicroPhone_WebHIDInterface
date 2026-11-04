@@ -430,26 +430,24 @@ describe('S-c 不重试的错误码 / R3-4', () => {
   });
 });
 
-describe('S-d 三次失败进 error / R3-5', () => {
-  it('三次超时：phase=error + onPhase(error) + onError(timeout)，之后 write 只派发一次 disconnected', () => {
+describe('S-d 写超时进 error / R3-5', () => {
+  it('写超时只重发 writeRetries 次：phase=error + onPhase(error) + onError(timeout)，之后 write 只派发一次 disconnected', () => {
     const harness = createHarness({ autoReply: false });
     harness.session.write([{ addr: 0x2024, raw: 1 }]);
     harness.timers.advance(TIMING.writeThrottleMs);
     expect(harness.device.requests).toHaveLength(1);
 
-    harness.timers.advance(TIMING.requestTimeoutMs);
+    harness.timers.advance(TIMING.writeTimeoutMs);
     expect(harness.device.requests).toHaveLength(2);
-    harness.timers.advance(TIMING.requestTimeoutMs);
-    expect(harness.device.requests).toHaveLength(3);
     expect(harness.session.phase()).not.toBe('error');
 
-    harness.timers.advance(TIMING.requestTimeoutMs);
+    harness.timers.advance(TIMING.writeTimeoutMs);
     expect(harness.session.phase()).toBe('error');
     expect(harness.events.phases).toEqual(['error']);
     expect(harness.events.errors).toHaveLength(1);
     expect(harness.events.errors[0].kind).toBe('timeout');
-    expect(harness.session.stats().timeouts).toBe(3);
-    expect(harness.session.stats().retries).toBe(2);
+    expect(harness.session.stats().timeouts).toBe(2);
+    expect(harness.session.stats().retries).toBe(1);
 
     const sentBefore = harness.device.requests.length;
     harness.session.write([{ addr: 0x2024, raw: 2 }]);
@@ -465,7 +463,7 @@ describe('S-d 三次失败进 error / R3-5', () => {
     const harness = createHarness({ autoReply: false });
     harness.session.write([{ addr: 0x2024, raw: 1 }]);
     harness.timers.advance(TIMING.writeThrottleMs);
-    harness.timers.advance(TIMING.requestTimeoutMs * 3);
+    harness.timers.advance(TIMING.writeTimeoutMs * 2);
     expect(harness.session.phase()).toBe('error');
 
     await expect(harness.session.read([LEVEL_ADDR])).rejects.toThrow(/error/);
@@ -478,6 +476,45 @@ describe('S-d 三次失败进 error / R3-5', () => {
     expect(result.preset.start).toBe(PRESET_START);
     expect(result.device.modelCode).toBe('JYM001');
     expect(harness.events.phases).toEqual(['error', 'syncing', 'ready']);
+  });
+});
+
+describe('写超时与写后轮询让位（真机落 Flash）', () => {
+  it('写请求按 writeTimeoutMs 等回执：500 ms 不重发，3 s 才重发', () => {
+    const harness = createHarness({ autoReply: false });
+    harness.session.write([{ addr: 0x2024, raw: 1 }]);
+    harness.timers.advance(TIMING.writeThrottleMs);
+    expect(harness.device.requests).toHaveLength(1);
+
+    // 读请求的 500 ms 阈值不应作用在写上：设备写 Flash 期间不能重发（会再触发一次落盘）
+    harness.timers.advance(TIMING.requestTimeoutMs * 2);
+    expect(harness.device.requests).toHaveLength(1);
+    expect(harness.session.stats().timeouts).toBe(0);
+
+    harness.timers.advance(TIMING.writeTimeoutMs - TIMING.requestTimeoutMs * 2);
+    expect(harness.device.requests).toHaveLength(2);
+    expect(harness.session.stats().timeouts).toBe(1);
+    expect(harness.session.stats().retries).toBe(1);
+  });
+
+  it('写回执后 writeSettleMs 内不发电平轮询，之后恢复', async () => {
+    const harness = createHarness();
+    seedDeviceInfo(harness.device);
+    harness.session.setPolling(true);
+    await harness.session.sync();
+    expect(harness.session.phase()).toBe('ready');
+
+    harness.session.write([{ addr: 0x2024, raw: 1 }]);
+    harness.timers.advance(TIMING.writeThrottleMs);
+    const afterWrite = harness.device.requests.length;
+
+    // 落 Flash 窗口内轮询让位：只丢本次、不堆积，也不会把设备从 Flash 写里拽出来
+    harness.timers.advance(TIMING.writeSettleMs - TIMING.writeThrottleMs);
+    expect(harness.device.requests).toHaveLength(afterWrite);
+    expect(harness.session.stats().droppedPolls).toBeGreaterThan(0);
+
+    harness.timers.advance(TIMING.writeSettleMs);
+    expect(harness.device.requests.length).toBeGreaterThan(afterWrite);
   });
 });
 
@@ -884,8 +921,8 @@ describe('S-g / S-h / S-i 入站与诊断', () => {
     const warns = harness.session.diagnostics().filter((entry) => entry.level === 'warn');
     expect(warns.some((entry) => entry.summary.includes('unexpected'))).toBe(true);
     expect(harness.events.levels).toHaveLength(0);
-    // 在途仍是写：推进一个请求超时后应重发而不是被读响应"完成"
-    harness.timers.advance(TIMING.requestTimeoutMs);
+    // 在途仍是写：推进一个写超时后应重发而不是被读响应"完成"
+    harness.timers.advance(TIMING.writeTimeoutMs);
     expect(harness.device.requests).toHaveLength(2);
     expect(harness.session.stats().retries).toBe(1);
   });

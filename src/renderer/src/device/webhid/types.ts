@@ -12,7 +12,7 @@ export type WebHidMode = 'virtual' | 'native';
 export type WebHidStatus = 'idle' | 'connecting' | 'ready' | 'error';
 
 /** 面向界面的失败分类；文案键 = `device.error.<code>`，原始 message 另外保留 */
-export type WebHidErrorCode = 'nativeUnavailable' | 'bridge' | 'device' | 'noSelection' | 'unknown';
+export type WebHidErrorCode = 'nativeUnavailable' | 'bridge' | 'device' | 'sync' | 'noSelection' | 'unknown';
 
 /**
  * 真机设备选择器的 usage 过滤条件（W3C `HIDDeviceFilter` 的最小子集）。

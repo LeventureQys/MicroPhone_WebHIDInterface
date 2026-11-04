@@ -393,6 +393,62 @@ describe('WebHidTransport', () => {
     expect(transport.state()).toBe('ready');
   });
 
+  it('ignores a disconnect event while suspended for DFU (device is re-enumerating)', async () => {
+    const { device, transport } = setup();
+    const errors: TransportError[] = [];
+    transport.onError((error) => errors.push(error));
+    await transport.open();
+    await transport.suspend();
+
+    device.dispatchEvent(new CustomEvent('disconnect'));
+
+    expect(transport.state()).toBe('ready');
+    expect(errors).toHaveLength(0);
+  });
+
+  it('keeps the link ready while the device is saving flash after a write', async () => {
+    const { device, transport } = setup();
+    const errors: TransportError[] = [];
+    transport.onError((error) => errors.push(error));
+    await transport.open();
+
+    // 写 ACK 之后设备进入落 Flash：回执还给了，但随后一段时间没有任何 IN 报告
+    transport.write([{ id: 'enc.Level', value: 2 }]);
+    await vi.advanceTimersByTimeAsync(150);
+    device.responder = null;
+
+    // 2.5 s 已超过 inboundWatchdogMs，但还在写后宽限里，不能判成掉线
+    await vi.advanceTimersByTimeAsync(2500);
+    expect(transport.state()).toBe('ready');
+    expect(errors).toHaveLength(0);
+
+    // 超过 writeGraceMs 仍静默才升级为通道错误
+    await vi.advanceTimersByTimeAsync(6000);
+    expect(transport.state()).toBe('error');
+    expect(errors.some((error) => error.kind === 'disconnected')).toBe(true);
+  });
+
+  it('reopens with a new handle after re-enumeration and resumes the session on it', async () => {
+    const { device, transport } = setup();
+    await transport.open();
+    await transport.suspend();
+
+    const next = new FakeHidDevice({ deviceId: 'vdevice-boot', productName: 'Virtual M001 Bootloader' });
+    bindRegisterDevice(next, createFakeRegisters());
+    await transport.reopen(next);
+
+    expect(transport.device).toBe(next);
+    expect(next.opened).toBe(true);
+    expect(transport.state()).toBe('ready');
+    // reopen 只开句柄不建会话：Bootloader 不说参数协议，回读会白等
+    expect(transport.stats().outFrames).toBe(0);
+    expect(device.closeCount).toBe(1);
+
+    await transport.resume();
+    expect(transport.state()).toBe('ready');
+    expect(transport.stats().outFrames).toBeGreaterThan(0);
+  });
+
   it('sends one 0x10 frame for a writable parameter', async () => {
     const { device, transport } = setup();
     await transport.open();
