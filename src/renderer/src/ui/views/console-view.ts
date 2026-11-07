@@ -1,4 +1,4 @@
-import type { LevelFrame, Transport } from '../../device/transport';
+import type { DeviceSnapshot, LevelFrame, Transport } from '../../device/transport';
 import { findParam, type ParamSpec } from '../../domain/params';
 import { matchScene, scenePatch, SCENES, type SceneId, type ScenePreset } from '../../domain/scenes';
 import {
@@ -31,6 +31,7 @@ import {
   switchControl,
   type MacroSliderHandle,
 } from '../controls';
+import { icon, type IconName } from '../icons';
 import { MeterCanvas, type MeterChannelState } from '../meter';
 
 export interface ConsoleApi {
@@ -38,19 +39,27 @@ export interface ConsoleApi {
   openAdvanced: () => void;
 }
 
-const TONES: EqPresetId[] = ['flat', 'vocal', 'warm', 'bright', 'music'];
-const EQ_MARGIN = { top: 14, right: 18, bottom: 30, left: 46 };
+/** 设备摘要的数据源（`DeviceLink`）：工作台只读名字和固件版本，不碰链路 */
+export interface ConsoleDeviceInfo {
+  snapshot: () => DeviceSnapshot | null;
+  onChange: (cb: () => void) => () => void;
+}
 
-function compactCard(opts: { eyebrow?: string; title: string; tag?: string; desc?: string }): {
+const TONES: EqPresetId[] = ['flat', 'vocal', 'warm', 'bright', 'music'];
+/** 映射器与 drawEq 必须用同一套边距，否则网格和曲线会错开 */
+const EQ_MARGIN = { top: 26, right: 32, bottom: 28, left: 40 };
+const SCENE_ICON: Record<SceneId, IconName> = {
+  meeting: 'meeting',
+  podcast: 'podcast',
+  sing: 'sing',
+  quiet: 'quiet',
+};
+
+function compactCard(opts: { title: string; tag?: string; desc?: string }): {
   root: HTMLElement;
   body: HTMLElement;
 } {
-  const built = card({
-    eyebrow: opts.eyebrow ?? '',
-    title: opts.title,
-    tag: opts.tag,
-    desc: opts.desc,
-  });
+  const built = card({ title: opts.title, tag: opts.tag, desc: opts.desc });
   built.root.classList.add('card--compact');
   return built;
 }
@@ -69,13 +78,21 @@ function element(tag: string, className: string, text: string): HTMLElement {
 function gainItem(label: string, value: string, unit: string): { root: HTMLElement; value: HTMLElement } {
   const root = document.createElement('div');
   root.className = 'console-gain-item';
+  root.title = t('common.readonly');
   const valueNode = element('strong', 'console-gain-value', value);
-  root.append(
-    element('span', 'console-gain-label', label),
-    valueNode,
-    element('span', 'console-gain-unit', unit),
-  );
+  const labelRow = document.createElement('span');
+  labelRow.className = 'console-gain-label';
+  labelRow.append(element('span', '', label), icon('lock', 11));
+  const valueRow = document.createElement('span');
+  valueRow.className = 'console-gain-readout';
+  valueRow.append(valueNode, element('span', 'console-gain-unit', unit));
+  root.append(labelRow, valueRow);
   return { root, value: valueNode };
+}
+
+function firmwareText(device: DeviceSnapshot): string {
+  const { x, y, z, build } = device.firmware;
+  return `${x}.${y}.${z}.${build}`;
 }
 
 /**
@@ -86,6 +103,7 @@ export function createConsoleView(
   store: AppStore,
   transport: Transport,
   api: ConsoleApi,
+  deviceInfo?: ConsoleDeviceInfo,
 ): HTMLElement {
   const state = store.get();
 
@@ -94,7 +112,6 @@ export function createConsoleView(
 
   // ---- 电平 + 增益 + 设备 ------------------------------------------------
   const meterCard = compactCard({
-    eyebrow: t('console.level.eyebrow'),
     title: t('console.level.title'),
     // 右上角标记随通道/相位变化：演示数据 / 同步中，ready 且真机时不显示（Q3）
     tag: t('sync.badge.demo'),
@@ -102,8 +119,12 @@ export function createConsoleView(
   meterCard.root.classList.add('console-meter');
   const syncTag = meterCard.root.querySelector<HTMLElement>('.card-tag');
 
+  // 电平画在一块"屏幕"里：凹槽底色由外层 div 提供，canvas 只画刻度与 LED 段
+  const meterScreen = document.createElement('div');
+  meterScreen.className = 'meter-screen';
   const canvas = document.createElement('canvas');
   canvas.className = 'meter-canvas console-meter-canvas';
+  meterScreen.append(canvas);
   const meter = new MeterCanvas(canvas, {
     minDb: -60,
     rmsLabel: t('meter.rms'),
@@ -126,9 +147,16 @@ export function createConsoleView(
     gainValues.set(hpGain.id, { spec: hpGain, node: item.value });
   }
 
+  // 设备摘要：整行可点（打开设备抽屉），右侧按钮保留给键盘与旧探针
   const deviceRow = document.createElement('div');
   deviceRow.className = 'console-device-row';
   deviceRow.title = t('device.sync.note');
+  deviceRow.addEventListener('click', (event) => {
+    if ((event.target as HTMLElement).closest('button')) return;
+    api.openDevice();
+  });
+  const deviceIcon = icon('usb', 16);
+  deviceIcon.classList.add('console-device-icon');
   const deviceText = document.createElement('div');
   deviceText.className = 'console-device-text';
   const deviceName = element('span', 'console-device-name', t('console.device.demo'));
@@ -137,11 +165,11 @@ export function createConsoleView(
   const deviceButton = document.createElement('button');
   deviceButton.type = 'button';
   deviceButton.className = 'btn btn--ghost btn--small';
-  deviceButton.textContent = t('console.device.short');
+  deviceButton.append(element('span', '', t('console.device.short')), icon('chevronRight', 14));
   deviceButton.addEventListener('click', () => api.openDevice());
-  deviceRow.append(deviceText, deviceButton);
+  deviceRow.append(deviceIcon, deviceText, deviceButton);
 
-  meterCard.body.append(canvas, gainBox, deviceRow);
+  meterCard.body.append(meterScreen, gainBox, deviceRow);
 
   // ---- 一键场景 ------------------------------------------------------------
   const sceneCard = compactCard({
@@ -158,10 +186,15 @@ export function createConsoleView(
     button.className = 'scene-btn';
     button.dataset.scene = scene.id;
     button.setAttribute('aria-pressed', 'false');
-    button.append(
+    const glyph = icon(SCENE_ICON[scene.id] ?? 'podcast', 18);
+    glyph.classList.add('scene-icon');
+    const textBox = document.createElement('span');
+    textBox.className = 'scene-text';
+    textBox.append(
       element('strong', 'scene-name', t(`console.scene.${scene.id}`)),
       element('span', 'scene-desc', t(`console.scene.${scene.id}.desc`)),
     );
+    button.append(glyph, textBox);
     button.addEventListener('click', () => applyScene(scene));
     sceneButtons.set(scene.id, button);
     sceneRow.append(button);
@@ -225,9 +258,8 @@ export function createConsoleView(
 
   // ---- 音色曲线 ------------------------------------------------------------
   const eqCard = compactCard({
-    eyebrow: t('console.eq.eyebrow'),
     title: t('console.eq.title'),
-    tag: t('console.eq.tag'),
+    desc: t('console.eq.desc'),
   });
   eqCard.root.classList.add('console-eq');
   const canvasWrap = document.createElement('div');
@@ -235,13 +267,14 @@ export function createConsoleView(
   const eqCanvas = document.createElement('canvas');
   eqCanvas.className = 'eq-canvas console-eq-canvas';
   canvasWrap.append(eqCanvas);
-  const eqHint = element('p', 'eq-hint', t('console.eq.desc'));
+  // 去高级参数的入口放在卡头右侧：和标题同一视线，不用滚到曲线底下找
   const advancedLink = document.createElement('button');
   advancedLink.type = 'button';
   advancedLink.className = 'console-link';
-  advancedLink.textContent = t('console.eq.advanced');
+  advancedLink.append(element('span', '', t('console.eq.advanced')), icon('chevronRight', 14));
   advancedLink.addEventListener('click', () => api.openAdvanced());
-  eqCard.body.append(canvasWrap, eqHint, advancedLink);
+  eqCard.root.querySelector('.card-head')?.append(advancedLink);
+  eqCard.body.append(canvasWrap);
 
   // ---- 快捷开关 ------------------------------------------------------------
   const switchCard = compactCard({ title: t('console.switch.title') });
@@ -261,7 +294,10 @@ export function createConsoleView(
     onChange: (value) => store.setParam('enc.Level', value),
   });
   encLevel.classList.add('segmented--compact');
-  encGroup.append(encSwitch, encLevel);
+  const encLevelRow = document.createElement('div');
+  encLevelRow.className = 'switch-sub';
+  encLevelRow.append(element('span', 'switch-sub-label', t('console.enc.level')), encLevel);
+  encGroup.append(encSwitch, encLevelRow);
 
   const limitGroup = document.createElement('div');
   limitGroup.className = 'switch-item';
@@ -292,30 +328,10 @@ export function createConsoleView(
   noticeBar.className = 'console-notice';
   noticeBar.setAttribute('role', 'status');
   noticeBar.setAttribute('aria-live', 'polite');
+  // 外观在 components.css 的 .console-notice（fixed 定位，不进三栏网格）；
   // 初始显隐交给下面的 setNoticeVisible(false)，避免两处各写一次 hidden 造成状态漂移
-  noticeBar.style.cssText = [
-    'position: fixed',
-    'top: 74px',
-    'left: 50%',
-    'transform: translateX(-50%)',
-    'z-index: 60',
-    // 刻意不写 display：内联 display 会盖掉 [hidden]{display:none}，
-    // 导致 hidden=true 时仍画出 30×18 的空胶囊。显隐一律走 setNoticeVisible。
-    'align-items: center',
-    'gap: 8px',
-    'max-width: min(640px, 82vw)',
-    'padding: 8px 14px',
-    'border-radius: 10px',
-    'border: 1px solid rgba(246, 154, 154, 0.55)',
-    'background: rgba(32, 20, 24, 0.94)',
-    'color: var(--text, #e7ebf2)',
-    'font-size: 12.5px',
-    'line-height: 1.35',
-    'pointer-events: none',
-    'box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45)',
-  ].join(';');
   const noticeText = element('span', 'console-notice-text', '');
-  noticeBar.append(noticeText);
+  noticeBar.append(icon('alert', 15), noticeText);
 
   /** 显隐的唯一开关：同时设 hidden 与内联 display，任何一条被覆盖都不会露出空条 */
   const setNoticeVisible = (visible: boolean): void => {
@@ -503,6 +519,7 @@ export function createConsoleView(
       gainToY: mapperProxy.gainToY,
       xToFreq: mapperProxy.xToFreq,
       yToGain: mapperProxy.yToGain,
+      theme: { margin: EQ_MARGIN },
     });
   }
 
@@ -596,13 +613,26 @@ export function createConsoleView(
       syncTag.textContent = badgeText;
       syncTag.hidden = badgeText.length === 0;
     }
-    deviceName.textContent = mock ? t('console.device.demo') : t('sync.source.device');
+    // 真机：名字取设备信息区（为空时退回型号码 / "已连接"），副标题写固件版本 + 同步相位，
+    // 不再出现"已连接 / 已连接"这种两行说同一件事
+    const snapshot = mock ? null : (deviceInfo?.snapshot() ?? null);
+    const named = snapshot?.deviceName.trim() || snapshot?.modelCode.trim() || '';
+    deviceName.textContent = mock ? t('console.device.demo') : named || t('sync.source.device');
+    const phase = t(`sync.phase.${stateNow.sync}`);
     deviceState.textContent = mock
       ? t('console.device.connected')
-      : stateNow.transport === 'ready'
-        ? t('sync.source.device')
-        : t('common.unavailable');
+      : stateNow.transport !== 'ready'
+        ? t('common.unavailable')
+        : snapshot
+          ? `${t('console.device.firmware', { version: firmwareText(snapshot) })} · ${phase}`
+          : phase;
+    let tone = 'idle';
+    if (mock) tone = 'demo';
+    else if (stateNow.transport === 'error' || stateNow.sync === 'error') tone = 'error';
+    else if (stateNow.transport === 'ready' && stateNow.sync === 'ready') tone = 'ok';
+    deviceRow.dataset.tone = tone;
   };
+  const offDeviceInfo = deviceInfo?.onChange(() => syncChannelBadge());
 
   // ---- 状态回填 ------------------------------------------------------------
   const unsubscribe = store.onChange((next) => {
@@ -642,6 +672,7 @@ export function createConsoleView(
     clearNoticeTimer();
     store.removeEventListener(LOCAL_ERROR_EVENT, onLocalError);
     offTransportError();
+    offDeviceInfo?.();
     offLevels();
     unsubscribe();
     detachEq();

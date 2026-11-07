@@ -72,9 +72,7 @@ function createChannelCard(configStore: ChannelConfigStore): ChannelCardHandle {
   let config = configStore.get();
 
   const view = card({
-    eyebrow: 'CHANNEL',
     title: t('settings.channel.title'),
-    tag: 'HID',
     desc: t('settings.channel.desc'),
   });
 
@@ -145,10 +143,8 @@ function createChannelCard(configStore: ChannelConfigStore): ChannelCardHandle {
   const reportRow = fieldRow('report', t('settings.channel.reportId'));
   const outInput = textInput('reportIdOut', formatReportId(config.reportIdOut), '0x51');
   const inInput = textInput('reportIdIn', formatReportId(config.reportIdIn), '0x11');
-  outInput.style.flex = '1 1 0';
-  inInput.style.flex = '1 1 0';
   const reportBody = document.createElement('div');
-  reportBody.className = 'pfield-body';
+  reportBody.className = 'pfield-body settings-pair';
   reportBody.append(
     textNode('span', 'pfield-unit', 'OUT'),
     outInput,
@@ -180,14 +176,11 @@ function createChannelCard(configStore: ChannelConfigStore): ChannelCardHandle {
   const whitelistRow = fieldRow('whitelist', t('settings.channel.whitelist'), whitelistCount);
 
   const whitelistInput = document.createElement('textarea');
-  whitelistInput.className = 'device-input';
+  whitelistInput.className = 'device-input device-input--area';
   whitelistInput.dataset.field = 'whitelist';
   whitelistInput.spellcheck = false;
   whitelistInput.rows = 3;
   whitelistInput.placeholder = '0xFF01:0x01';
-  whitelistInput.style.height = '60px';
-  whitelistInput.style.padding = '6px 9px';
-  whitelistInput.style.resize = 'vertical';
   whitelistInput.value = formatWhitelistText(config.whitelist);
 
   const renderWhitelistCount = (): void => {
@@ -215,8 +208,6 @@ function createChannelCard(configStore: ChannelConfigStore): ChannelCardHandle {
   const vidRow = fieldRow('vidpid', t('settings.channel.vidpid'));
   const vidsInput = textInput('vids', formatIdList(config.vids), '0x352F');
   const pidsInput = textInput('pids', formatIdList(config.pids), '0x0010');
-  vidsInput.style.flex = '1 1 0';
-  pidsInput.style.flex = '1 1 0';
 
   const applyIdLists = (): void => {
     const vids = parseVidPidList(vidsInput.value);
@@ -229,7 +220,7 @@ function createChannelCard(configStore: ChannelConfigStore): ChannelCardHandle {
   pidsInput.addEventListener('change', applyIdLists);
 
   const vidBody = document.createElement('div');
-  vidBody.className = 'pfield-body';
+  vidBody.className = 'pfield-body settings-pair';
   vidBody.append(
     textNode('span', 'pfield-unit', 'VID'),
     vidsInput,
@@ -242,14 +233,12 @@ function createChannelCard(configStore: ChannelConfigStore): ChannelCardHandle {
     label: t('settings.channel.vidpidSwitch'),
     onChange: (checked) => commit({ useVidPid: checked }, t('settings.channel.saved')),
   });
-  vidSwitch.style.flex = '1 1 auto';
-  vidSwitch.style.marginTop = '10px';
+  vidSwitch.classList.add('settings-grow');
 
   const clearIds = document.createElement('button');
   clearIds.type = 'button';
   clearIds.className = 'btn btn--ghost';
   clearIds.textContent = t('common.clear');
-  clearIds.style.marginTop = '10px';
   clearIds.addEventListener('click', () => {
     vidsInput.value = '';
     pidsInput.value = '';
@@ -258,9 +247,7 @@ function createChannelCard(configStore: ChannelConfigStore): ChannelCardHandle {
 
   // 开关与清空同一行：通道卡要在一屏里放下 6 个控件
   const vidActions = document.createElement('div');
-  vidActions.style.display = 'flex';
-  vidActions.style.alignItems = 'center';
-  vidActions.style.gap = '10px';
+  vidActions.className = 'settings-inline-actions';
   vidActions.append(vidSwitch, clearIds);
 
   vidRow.append(vidBody, vidActions);
@@ -276,7 +263,7 @@ function createChannelCard(configStore: ChannelConfigStore): ChannelCardHandle {
   diagInput.max = String(DIAG_LIMIT_MAX);
   diagInput.step = '1';
   diagInput.value = String(config.diagLimit);
-  diagInput.style.width = '120px';
+  diagInput.classList.add('device-input--short');
   diagInput.addEventListener('change', () => {
     if (diagInput.value.trim().length === 0) {
       diagInput.value = String(config.diagLimit);
@@ -298,7 +285,7 @@ function createChannelCard(configStore: ChannelConfigStore): ChannelCardHandle {
     label: t('settings.channel.autoConnectHint'),
     onChange: (checked) => commit({ autoConnect: checked }, t('settings.channel.saved')),
   });
-  autoSwitch.style.flex = '1 1 auto';
+  autoSwitch.classList.add('settings-grow');
   autoRow.append(autoSwitch);
 
   renderWhitelistCount();
@@ -316,14 +303,14 @@ function createChannelCard(configStore: ChannelConfigStore): ChannelCardHandle {
 export function createSettingsView(store: AppStore, options?: SettingsViewOptions): HTMLElement {
   const root = document.createElement('div');
   const grid = document.createElement('div');
-  grid.className = 'panel-grid';
+  grid.className = 'settings-grid';
 
   const state = store.get();
 
   // 通道配置比参数活得久（设备页与设置页共享）：没注入就自建一份，读的是同一个 localStorage
   const channelCard = createChannelCard(options?.configStore ?? createChannelConfigStore());
 
-  const uiCard = card({ eyebrow: 'SETTINGS', title: t('settings.ui'), tag: 'UI' });
+  const uiCard = card({ title: t('settings.ui') });
 
   const langRow = document.createElement('div');
   langRow.className = 'pfield';
@@ -368,12 +355,11 @@ export function createSettingsView(store: AppStore, options?: SettingsViewOption
 
   uiCard.body.append(langRow, sceneRow);
 
-  const dataCard = card({ eyebrow: 'SETTINGS', title: t('settings.resetAll'), tag: 'DATA' });
+  const dataCard = card({ title: t('settings.data'), desc: t('settings.data.desc') });
   const resetButton = document.createElement('button');
   resetButton.type = 'button';
-  resetButton.className = 'btn btn--ghost';
+  resetButton.className = 'btn btn--ghost btn--danger btn--block';
   resetButton.textContent = t('settings.resetAll');
-  resetButton.style.width = '100%';
 
   // 复位会一次性覆盖 36 个参数与 14 段 EQ，加一道二次确认，避免误触
   let armed = false;
@@ -419,7 +405,7 @@ export function createSettingsView(store: AppStore, options?: SettingsViewOption
 
   dataCard.body.append(resetButton);
 
-  const aboutCard = card({ eyebrow: 'SETTINGS', title: t('settings.about'), tag: 'ALPHA' });
+  const aboutCard = card({ title: t('settings.about') });
   // 版本号只由主进程 app.getVersion() 提供，渲染进程不再写死兜底值
   const rows: Array<[string, string]> = [
     [t('settings.version'), window.micstudio?.appVersion ?? '—'],
@@ -427,7 +413,7 @@ export function createSettingsView(store: AppStore, options?: SettingsViewOption
   ];
   for (const [label, value] of rows) {
     const row = document.createElement('div');
-    row.className = 'pfield';
+    row.className = 'pfield kv';
     const head = document.createElement('div');
     head.className = 'pfield-head';
     const name = document.createElement('span');
@@ -445,7 +431,11 @@ export function createSettingsView(store: AppStore, options?: SettingsViewOption
   notice.textContent = t('settings.alphaNotice');
   aboutCard.body.append(notice);
 
-  grid.append(channelCard.root, uiCard.root, dataCard.root, aboutCard.root);
+  // 两栏：左边是又高又密的通道配置，右边三张小卡叠成一列，避免四卡自动换行后高低不齐
+  const side = document.createElement('div');
+  side.className = 'settings-side';
+  side.append(uiCard.root, dataCard.root, aboutCard.root);
+  grid.append(channelCard.root, side);
   root.append(grid);
 
   (root as HTMLElement & { destroy?: () => void }).destroy = () => {

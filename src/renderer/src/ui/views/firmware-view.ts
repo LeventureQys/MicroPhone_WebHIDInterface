@@ -8,7 +8,8 @@ import type { FirmwareState } from '../../device/dfu/controller';
 import { CLOSE_BLOCKED_DETAIL } from '../../device/dfu/controller';
 import type { DfuError } from '../../device/dfu/session';
 import { t } from '../../i18n';
-import { card, switchControl } from '../controls';
+import { switchControl } from '../controls';
+import { icon } from '../icons';
 
 /** 视图只依赖这几个方法（`FirmwareController` 满足它，单测可传假实现） */
 export interface FirmwareSource {
@@ -28,7 +29,6 @@ export interface FirmwareViewDeps {
   readonly onClose?: () => void;
 }
 
-const ACCENT = '#f0a65b';
 const RUNNING_PHASES = new Set(['entering', 'probing', 'writing', 'settling', 'verifying']);
 /** 可以中止的阶段：`0x05` 之后设备已经在收尾，主机打断它只会更糟 */
 const ABORTABLE_PHASES = new Set(['entering', 'probing', 'writing']);
@@ -51,7 +51,7 @@ function text(tag: string, className: string, content: string): HTMLElement {
 
 function infoRow(label: string, field: string): { row: HTMLElement; value: HTMLElement } {
   const row = document.createElement('div');
-  row.className = 'pfield';
+  row.className = 'pfield kv';
   const head = document.createElement('div');
   head.className = 'pfield-head';
   head.append(text('span', 'pfield-label', label));
@@ -76,28 +76,40 @@ export function createFirmwareView(deps: FirmwareViewDeps): HTMLElement {
   const root = document.createElement('div');
   root.className = 'device-main fw-view';
 
-  const shell = card({
-    eyebrow: 'DFU',
-    title: t('fw.flow'),
-    tag: 'FLASH',
-  });
-  const body = shell.body;
+  // 三步：选包 → 核对并确认 → 写入。步骤只是视觉分组，节点与类名保持不变（单测与探针按类名取）
+  const step = (index: number, title: string): { root: HTMLElement; body: HTMLElement } => {
+    const section = document.createElement('section');
+    section.className = 'fw-step';
+    const head = document.createElement('header');
+    head.className = 'fw-step-head';
+    head.append(text('span', 'fw-step-no', String(index)), text('h3', 'fw-step-title', title));
+    const stepBody = document.createElement('div');
+    stepBody.className = 'fw-step-body';
+    section.append(head, stepBody);
+    return { root: section, body: stepBody };
+  };
 
-  body.append(text('p', 'card-desc fw-warn', t('fw.warn.stuck')));
+  const warn = document.createElement('div');
+  warn.className = 'callout callout--warn';
+  warn.append(icon('alert', 16), text('p', 'card-desc fw-warn', t('fw.warn.stuck')));
 
   // -- 文件 ---------------------------------------------------------------
-  const fileRow = document.createElement('div');
-  fileRow.className = 'pfield';
-  const fileHead = document.createElement('div');
-  fileHead.className = 'pfield-head';
-  fileHead.append(text('span', 'pfield-label', t('fw.file.pick')));
+  // 原生 file input 铺满整块拖放区、透明：点击与拖放都走浏览器自己的文件选择，不另写 drop 处理
+  const fileRow = document.createElement('label');
+  fileRow.className = 'pfield fw-drop';
   const fileInput = document.createElement('input');
   fileInput.type = 'file';
   fileInput.accept = '.bin';
-  fileInput.className = 'device-input fw-file';
+  fileInput.className = 'fw-file';
+  fileInput.setAttribute('aria-label', t('fw.file.pick'));
+  const dropIcon = icon('upload', 20);
+  dropIcon.classList.add('fw-drop-icon');
+  const dropText = document.createElement('span');
+  dropText.className = 'fw-drop-text';
   const fileName = text('span', 'pfield-value fw-file-name', t('fw.file.none'));
   const fileSize = text('p', 'device-hint fw-file-size', '');
-  fileRow.append(fileHead, fileInput, fileName, fileSize);
+  dropText.append(fileName, text('span', 'fw-drop-hint', t('fw.file.drop')), fileSize);
+  fileRow.append(dropIcon, dropText, fileInput);
 
   // -- 预检摘要 -----------------------------------------------------------
   const infoBox = document.createElement('div');
@@ -150,9 +162,6 @@ export function createFirmwareView(deps: FirmwareViewDeps): HTMLElement {
   bar.className = 'fw-bar';
   bar.max = 100;
   bar.value = 0;
-  // 组件样式表不在本任务的改动范围，进度条只调这两处内联样式
-  bar.style.width = '100%';
-  bar.style.accentColor = ACCENT;
   const progressHead = document.createElement('div');
   progressHead.className = 'pfield-head';
   progressHead.append(phaseText, percentText);
@@ -185,8 +194,13 @@ export function createFirmwareView(deps: FirmwareViewDeps): HTMLElement {
   exitRow.append(retryBtn, replugBtn, closeBtn);
   resultBox.append(doneText);
 
-  body.append(fileRow, infoBox, confirm, startRow, progressBox, resultBox, errorBox, exitRow);
-  root.append(shell.root);
+  const pick = step(1, t('fw.step.pick'));
+  pick.body.append(fileRow);
+  const check = step(2, t('fw.step.check'));
+  check.body.append(infoBox, confirm);
+  const flash = step(3, t('fw.step.flash'));
+  flash.body.append(startRow, progressBox, resultBox, errorBox, exitRow);
+  root.append(warn, pick.root, check.root, flash.root);
 
   // -- 本地状态 -----------------------------------------------------------
 

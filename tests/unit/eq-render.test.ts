@@ -23,6 +23,7 @@ function createMockContext(): MockContext {
       calls.stroke += 1;
     },
     arc: (x: number, y: number, r: number) => calls.arc.push([x, y, r]),
+    createLinearGradient: () => ({ addColorStop: () => {} }),
     fillText: () => {},
     setTransform: () => {},
     quadraticCurveTo: () => {},

@@ -18,11 +18,25 @@ body {
   font-size: var(--fs-13);
   line-height: 1.5;
   -webkit-font-smoothing: antialiased;
+  user-select: none;
+}
+
+/* 可复制的内容（输入框、日志、hex）放开选择 */
+input,
+textarea,
+.device-hex,
+.diag-log,
+.diag-device,
+.device-row-id,
+.device-error,
+.fw-info {
+  user-select: text;
 }
 
 button,
 input,
-select {
+select,
+textarea {
   font: inherit;
   color: inherit;
 }
@@ -44,20 +58,27 @@ p {
 }
 
 ::-webkit-scrollbar-thumb {
-  background: #2f3644;
+  background: rgba(255, 255, 255, 0.08);
   border-radius: 6px;
-  border: 2px solid var(--bg);
+  border: 3px solid transparent;
+  background-clip: padding-box;
 }
 
 ::-webkit-scrollbar-thumb:hover {
-  background: #3c4557;
+  background: rgba(255, 255, 255, 0.16);
+  background-clip: padding-box;
 }
 
-::-webkit-scrollbar-track {
+::-webkit-scrollbar-track,
+::-webkit-scrollbar-corner {
   background: transparent;
 }
 
 :focus-visible {
-  outline: 2px solid var(--accent);
+  outline: 2px solid var(--accent-line);
   outline-offset: 2px;
+}
+
+[hidden] {
+  display: none !important;
 }

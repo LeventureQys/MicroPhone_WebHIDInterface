@@ -278,7 +278,7 @@ export const zh = {
   'console.eq.title': '音色曲线',
   'console.eq.tag': '可拖动',
   'console.eq.desc': '拖动节点调增益，滚轮调 Q',
-  'console.eq.advanced': '想更细？打开高级参数',
+  'console.eq.advanced': '逐段精调',
   'console.switch.title': '快捷开关',
   'console.enc': '环境降噪',
   'console.limiter': '防爆音',
@@ -378,6 +378,15 @@ export const zh = {
   'diag.clear': '清空日志',
   'diag.copied': '已复制到剪贴板',
   'diag.copyFallback': '剪贴板不可用，请手动复制下面的文本',
+  'console.enc.level': '档位',
+  'console.device.firmware': '固件 {version}',
+  'settings.data': '数据',
+  'settings.data.desc': '把全部可写参数与 7 段 EQ 恢复为出厂默认值',
+  'fw.file.drop': '点击选择，或把 .bin 固件包拖到这里',
+  'fw.step.pick': '选择固件包',
+  'fw.step.check': '核对并确认',
+  'fw.step.flash': '写入设备',
+  'advanced.nav': '跳转到分区',
 } satisfies Record<string, string>;
 
 /** 字典键联合类型：en.ts 用它做编译期键集合对齐 */

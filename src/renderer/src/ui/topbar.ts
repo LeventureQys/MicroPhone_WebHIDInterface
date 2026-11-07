@@ -1,6 +1,7 @@
 import type { AppStore } from '../domain/state';
 import { t } from '../i18n';
 import { segmented } from './controls';
+import { icon } from './icons';
 
 const STATE_KEY: Record<string, string> = {
   idle: 'topbar.state.idle',
@@ -25,6 +26,21 @@ export interface TopbarOptions {
   onSettings: () => void;
 }
 
+/** 状态灯的颜色档：错误 > 进行中 > 演示 > 正常 */
+type Tone = 'ok' | 'busy' | 'demo' | 'error' | 'idle';
+
+function toolButton(id: string, label: string, glyph: HTMLElement, onClick: () => void): HTMLButtonElement {
+  const button = document.createElement('button');
+  button.type = 'button';
+  button.className = 'btn btn--ghost btn--tool';
+  button.id = id;
+  const text = document.createElement('span');
+  text.textContent = label;
+  button.append(glyph, text);
+  button.addEventListener('click', onClick);
+  return button;
+}
+
 export function createTopbar(opts: TopbarOptions): HTMLElement {
   const container = document.createElement('div');
   container.className = 'topbar-inner';
@@ -35,21 +51,30 @@ export function createTopbar(opts: TopbarOptions): HTMLElement {
     <span class="brand-mark" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i></span>
     <div class="brand-text">
       <strong>MIC <span class="brand-accent">STUDIO</span></strong>
-      <small>MIC CONSOLE / ALPHA</small>
+      <small>ALPHA</small>
     </div>`;
 
   const right = document.createElement('div');
   right.className = 'topbar-right';
 
+  // 设备状态胶囊：传输态 / 数据来源 / 同步相位合在一个按钮里，点开就是设备抽屉。
+  // 三段各自保留原来的节点与 id（`#source-pill` / `#sync-pill`），联调探针按它们取文案
+  const device = document.createElement('button');
+  device.type = 'button';
+  device.className = 'status-chip';
+  device.id = 'connect-btn';
+  device.title = t('topbar.connectHint');
+  device.addEventListener('click', () => opts.onDevice());
+
   const pill = document.createElement('span');
   pill.className = 'state-pill';
   pill.setAttribute('role', 'status');
-
+  // 状态灯挂在胶囊最前面，颜色由 data-tone 决定（不再跟着某一段走）
   const dot = document.createElement('i');
   dot.className = 'dot';
   const pillText = document.createElement('span');
   pillText.className = 'state-text';
-  pill.append(dot, pillText);
+  pill.append(pillText);
 
   let mockTag: HTMLElement | null = null;
   if (opts.mock) {
@@ -77,20 +102,13 @@ export function createTopbar(opts: TopbarOptions): HTMLElement {
   syncText.className = 'state-text';
   syncPill.append(syncText);
 
-  const advanced = document.createElement('button');
-  advanced.type = 'button';
-  advanced.className = 'btn btn--ghost';
-  advanced.id = 'advanced-btn';
-  advanced.textContent = t('topbar.advanced');
-  advanced.title = t('topbar.advancedHint');
-  advanced.addEventListener('click', () => opts.onAdvanced());
+  const caret = icon('chevronDown', 14);
+  caret.classList.add('status-chip-caret');
+  device.append(dot, sourcePill, pill, syncPill, caret);
 
-  const settings = document.createElement('button');
-  settings.type = 'button';
-  settings.className = 'btn btn--ghost';
-  settings.id = 'settings-btn';
-  settings.textContent = t('topbar.settings');
-  settings.addEventListener('click', () => opts.onSettings());
+  const advanced = toolButton('advanced-btn', t('topbar.advanced'), icon('sliders', 16), () => opts.onAdvanced());
+  advanced.title = t('topbar.advancedHint');
+  const settings = toolButton('settings-btn', t('topbar.settings'), icon('gear', 16), () => opts.onSettings());
 
   const lang = segmented<'zh' | 'en'>({
     options: [
@@ -103,14 +121,11 @@ export function createTopbar(opts: TopbarOptions): HTMLElement {
   lang.classList.add('segmented--lang');
   lang.setAttribute('aria-label', t('topbar.lang'));
 
-  const device = document.createElement('button');
-  device.type = 'button';
-  device.className = 'btn btn--primary';
-  device.id = 'connect-btn';
-  device.textContent = t('topbar.connect');
-  device.addEventListener('click', () => opts.onDevice());
+  const divider = document.createElement('span');
+  divider.className = 'topbar-divider';
+  divider.setAttribute('aria-hidden', 'true');
 
-  right.append(pill, sourcePill, syncPill, advanced, settings, lang, device);
+  right.append(device, divider, advanced, settings, lang);
   container.append(brand, right);
 
   const syncState = (): void => {
@@ -128,6 +143,26 @@ export function createTopbar(opts: TopbarOptions): HTMLElement {
 
     syncPill.className = `state-pill state-pill--sync state-pill--${state.sync}`;
     syncText.textContent = t(SYNC_KEY[state.sync] ?? 'sync.phase.idle');
+
+    // 胶囊里只露"来源 · 同步"两段；传输态只在出问题或进行中时露出来，
+    // 正常就绪时它和"已连接"说的是同一件事
+    const tone: Tone =
+      state.transport === 'error' || state.sync === 'error'
+        ? 'error'
+        : state.transport === 'connecting' || state.sync === 'syncing'
+          ? 'busy'
+          : kind === 'mock'
+            ? 'demo'
+            : connected
+              ? 'ok'
+              : 'idle';
+    device.dataset.tone = tone;
+    pill.hidden = !(state.transport === 'error' || state.transport === 'connecting');
+    syncPill.hidden = kind === 'mock' && state.sync === 'idle';
+    device.setAttribute(
+      'aria-label',
+      `${t('topbar.connect')}: ${sourceText.textContent} · ${pillText.textContent} · ${syncText.textContent}`,
+    );
   };
   syncState();
   const unsubscribe = opts.store.onChange(() => syncState());

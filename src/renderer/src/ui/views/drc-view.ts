@@ -21,9 +21,7 @@ export function createDrcView(store: AppStore): HTMLElement {
   const readNumber = (id: string): number => state.params[id] ?? findParam(id)?.default ?? 0;
 
   const crossover = card({
-    eyebrow: 'DRC / CROSSOVER',
     title: t('module.drc3'),
-    tag: '2 PARAMS',
     desc: t('module.drc3.desc'),
   });
   for (const id of ['drc3.fc1', 'drc3.fc2']) {
@@ -66,9 +64,7 @@ export function createDrcView(store: AppStore): HTMLElement {
 
   for (const band of BANDS) {
     const bandCard = card({
-      eyebrow: `DRC / ${band.toUpperCase()}`,
       title: t(`drc.band.${band}`),
-      tag: '5 PARAMS',
     });
     const cond = document.createElement('p');
     cond.className = 'card-desc';

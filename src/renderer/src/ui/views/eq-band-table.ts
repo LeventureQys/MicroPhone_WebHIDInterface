@@ -14,13 +14,13 @@ const TYPE_VALUES: EqFilterType[] = [0, 1, 2, 3, 4];
 export function createEqBandTable(store: AppStore): HTMLElement {
   const model = new EqModel(store.get().bands);
 
-  const built = card({ eyebrow: 'EQ / BANDS', title: t('eq.bandTitle'), tag: '1-7' });
+  const built = card({ title: t('eq.bandTitle') });
 
   const toolbar = document.createElement('div');
   toolbar.className = 'eq-table-toolbar';
   const reset = document.createElement('button');
   reset.type = 'button';
-  reset.className = 'btn btn--ghost';
+  reset.className = 'btn btn--ghost btn--small';
   reset.textContent = t('eq.resetAll');
   reset.addEventListener('click', () => {
     for (let index = 0; index < model.visibleCount(); index += 1) {
@@ -152,7 +152,9 @@ export function createEqBandTable(store: AppStore): HTMLElement {
   }
   internal.append(summary, internalDesc, internalList);
 
-  built.body.append(toolbar, list, internal);
+  // 复位按钮放卡头右侧，和标题同一行
+  built.root.querySelector('.card-head')?.append(toolbar);
+  built.body.append(list, internal);
 
   function syncRows(): void {
     for (const [index, rowInputs] of inputs) {

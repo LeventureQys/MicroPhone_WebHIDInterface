@@ -1,23 +1,42 @@
 :root {
-  --bg: #0e1118;
-  --panel: #171c26;
-  --panel-2: #1d2430;
-  --panel-3: #101721;
-  --border: #323947;
-  --border-soft: #2b3240;
-  --accent: #f0a65b;
-  --accent-strong: #f4aa5f;
-  --accent-dim: #503c30;
-  --text: #e7ebf2;
-  --text-dim: #b8c5d3;
-  --muted: #8592a7;
-  --ok: #86c7a5;
-  --warn: #e0a45e;
-  --danger: #f69a9a;
-  --curve: #f0a030;
+  /* 表面分四层：底 → 面板 → 抬起（输入/悬停）→ 凹槽（电平与曲线的"屏幕"） */
+  --bg: #0b0d11;
+  --bg-top: #0e1015;
+  --panel: #13161c;
+  --panel-2: #1a1e26;
+  --panel-hover: #20252e;
+  --panel-3: #0d0f13;
 
-  --font-ui: system-ui, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif;
-  --font-mono: ui-monospace, 'Cascadia Mono', Consolas, monospace;
+  /* 细线用半透明白，叠在任何一层上都保持同样的分量 */
+  --line: rgba(255, 255, 255, 0.06);
+  --line-2: rgba(255, 255, 255, 0.1);
+  --line-3: rgba(255, 255, 255, 0.16);
+  /* 旧名保留给行内样式与历史选择器 */
+  --border: var(--line-2);
+  --border-soft: var(--line);
+
+  /* 橙色只留给"可操作 / 已选中"，读数与标签一律中性色 */
+  --accent: #f3a45c;
+  --accent-strong: #ffb978;
+  --accent-ink: #1c1208;
+  --accent-soft: rgba(243, 164, 92, 0.12);
+  --accent-line: rgba(243, 164, 92, 0.42);
+  --accent-dim: var(--accent-soft);
+
+  --text: #eceef2;
+  --text-dim: #a9b0bc;
+  --muted: #6c7482;
+
+  --ok: #4fd1a1;
+  --ok-soft: rgba(79, 209, 161, 0.12);
+  --warn: #f2c14e;
+  --warn-soft: rgba(242, 193, 78, 0.12);
+  --danger: #ff7070;
+  --danger-soft: rgba(255, 112, 112, 0.1);
+  --curve: #f3a45c;
+
+  --font-ui: system-ui, 'Segoe UI Variable Text', 'Segoe UI', 'PingFang SC', 'Microsoft YaHei UI', 'Microsoft YaHei', sans-serif;
+  --font-mono: ui-monospace, 'Cascadia Mono', 'SF Mono', Consolas, monospace;
 
   --fs-11: 11px;
   --fs-12: 12px;
@@ -29,6 +48,8 @@
   --radius-4: 4px;
   --radius-6: 6px;
   --radius-8: 8px;
+  --radius-10: 10px;
+  --radius-12: 12px;
 
   --space-4: 4px;
   --space-8: 8px;
@@ -37,6 +58,8 @@
   --space-20: 20px;
   --space-24: 24px;
 
-  --topbar-h: 64px;
-  --navrail-w: 84px;
+  --shadow-pop: 0 24px 64px rgba(0, 0, 0, 0.55), 0 0 0 1px rgba(255, 255, 255, 0.04);
+  --ease: cubic-bezier(0.2, 0.7, 0.2, 1);
+
+  --topbar-h: 56px;
 }

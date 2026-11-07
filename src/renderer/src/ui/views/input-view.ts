@@ -32,9 +32,7 @@ export function createInputView(store: AppStore): HTMLElement {
   // 3.2 之前整卡按只读渲染，导致这 3 个可写项在抽屉里既没有控件也点不动（§4.12）
   const gainSpecs = paramsOf('gain');
   const gainCard = card({
-    eyebrow: 'INPUT / GAIN',
     title: t('module.gain'),
-    tag: `${gainSpecs.length} PARAMS`,
     desc: t('module.gain.desc'),
   });
 
@@ -71,9 +69,7 @@ export function createInputView(store: AppStore): HTMLElement {
 
   // 噪声门
   const gateCard = card({
-    eyebrow: 'INPUT / GATE',
     title: t('module.noisegate'),
-    tag: '6 PARAMS',
     desc: t('module.noisegate.desc'),
   });
   const gateFields = createParamFields(store, paramsOf('noisegate'));
@@ -81,9 +77,7 @@ export function createInputView(store: AppStore): HTMLElement {
 
   // 环境降噪
   const encCard = card({
-    eyebrow: 'INPUT / ENC',
     title: t('module.enc'),
-    tag: '2 PARAMS',
     desc: t('module.enc.desc'),
   });
   const onOffSpec = paramsOf('enc').find((spec) => spec.field === 'OnOff');
@@ -129,9 +123,7 @@ export function createInputView(store: AppStore): HTMLElement {
 
   if (eqModeSpec) {
     const built = card({
-      eyebrow: 'INPUT / EQ MODE',
       title: t('module.eq'),
-      tag: '1 PARAM',
       desc: t('module.eq.desc'),
     });
     const modeField = document.createElement('div');

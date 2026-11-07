@@ -18,7 +18,7 @@ export function createMainWindow(options: WindowOptions = {}): BrowserWindow {
     minWidth: 1100,
     minHeight: 700,
     show: false,
-    backgroundColor: '#0e1118',
+    backgroundColor: '#0b0d11',
     autoHideMenuBar: true,
     title: 'MIC STUDIO',
     webPreferences: {

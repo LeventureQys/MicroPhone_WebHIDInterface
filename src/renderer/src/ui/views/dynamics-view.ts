@@ -10,18 +10,14 @@ export function createDynamicsView(store: AppStore): HTMLElement {
   grid.className = 'panel-grid';
 
   const compCard = card({
-    eyebrow: 'DYNAMICS / COMP',
     title: t('module.comp'),
-    tag: '6 PARAMS',
     desc: t('module.comp.desc'),
   });
   const compFields = createParamFields(store, paramsOf('comp'));
   compCard.body.append(...compFields.nodes);
 
   const limitCard = card({
-    eyebrow: 'DYNAMICS / LIMIT',
     title: t('module.limit'),
-    tag: '3 PARAMS',
     desc: t('module.limit.desc'),
   });
   const limitFields = createParamFields(store, paramsOf('limit'));

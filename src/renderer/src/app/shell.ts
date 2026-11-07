@@ -32,7 +32,8 @@ export interface Shell {
 const PANEL_META: Record<PanelId, { title: string; subtitle: string; size: 'narrow' | 'medium' | 'wide' }> = {
   advanced: { title: 'advanced.title', subtitle: 'advanced.desc', size: 'wide' },
   device: { title: 'device.modalTitle', subtitle: 'device.subtitle', size: 'medium' },
-  firmware: { title: 'fw.title', subtitle: 'fw.subtitle', size: 'wide' },
+  // 固件升级是一条单列流程，宽抽屉只会把它拉成一条长横线
+  firmware: { title: 'fw.title', subtitle: 'fw.subtitle', size: 'narrow' },
   settings: { title: 'settings.title', subtitle: 'settings.subtitle', size: 'medium' },
 };
 

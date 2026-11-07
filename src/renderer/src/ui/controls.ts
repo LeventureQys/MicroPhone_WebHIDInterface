@@ -15,12 +15,25 @@ function valueText(spec: ParamSpec, value: number): string {
   return formatValue(spec, value);
 }
 
+/**
+ * 滑杆已走过的那段轨道用 CSS 变量 `--fill` 着色：原生 range 在 Chromium 里没有
+ * "已填充"伪元素，每次值变化（拖动 / 外部回填）都要重算一次。
+ */
+export function paintRange(range: HTMLInputElement): void {
+  const min = Number(range.min || 0);
+  const max = Number(range.max || 100);
+  const value = Number(range.value);
+  const ratio = max > min && Number.isFinite(value) ? (value - min) / (max - min) : 0;
+  range.style.setProperty('--fill', `${(Math.max(0, Math.min(1, ratio)) * 100).toFixed(2)}%`);
+}
+
 export function paramSlider(
   spec: ParamSpec,
   opts: { value: number; onInput: (value: number) => void },
 ): HTMLElement {
   const root = document.createElement('div');
-  root.className = 'pfield';
+  // pfield--slider：标签 + 数字框一行、滑杆一行（布局见 components.css）
+  root.className = 'pfield pfield--slider';
   root.dataset.param = spec.id;
 
   const head = document.createElement('div');
@@ -52,6 +65,7 @@ export function paramSlider(
   range.max = String(SLIDER_STEPS);
   range.step = '1';
   range.value = String(toSliderPosition(spec, opts.value));
+  paintRange(range);
 
   const number = document.createElement('input');
   number.type = 'number';
@@ -64,6 +78,7 @@ export function paramSlider(
   const commit = (raw: number): void => {
     const next = quantize(spec, raw);
     range.value = String(toSliderPosition(spec, next));
+    paintRange(range);
     number.value = valueText(spec, next);
     readout.textContent = valueText(spec, next);
     opts.onInput(next);
@@ -238,6 +253,7 @@ export function macroSlider(opts: {
   range.step = '1';
   range.value = String(opts.value);
   range.setAttribute('aria-label', opts.label);
+  paintRange(range);
 
   root.append(head, range);
 
@@ -262,11 +278,13 @@ export function macroSlider(opts: {
   const setValue = (value: number): void => {
     const next = Math.min(max, Math.max(min, Math.round(value)));
     if (range.value !== String(next)) range.value = String(next);
+    paintRange(range);
     readout.textContent = format(next);
   };
 
   range.addEventListener('input', () => {
     const value = Number(range.value);
+    paintRange(range);
     readout.textContent = format(value);
     opts.onChange(value);
   });
@@ -275,7 +293,8 @@ export function macroSlider(opts: {
 }
 
 export function card(opts: {
-  eyebrow: string;
+  /** 小标题；空串不渲染（抽屉与工作台的卡片都不再用等宽大写小标） */
+  eyebrow?: string;
   title: string;
   tag?: string;
   desc?: string;
@@ -289,15 +308,18 @@ export function card(opts: {
   const textBox = document.createElement('div');
   textBox.className = 'card-heading';
 
-  const eyebrow = document.createElement('p');
-  eyebrow.className = 'eyebrow';
-  eyebrow.textContent = opts.eyebrow;
+  if (opts.eyebrow) {
+    const eyebrow = document.createElement('p');
+    eyebrow.className = 'eyebrow';
+    eyebrow.textContent = opts.eyebrow;
+    textBox.append(eyebrow);
+  }
 
   const title = document.createElement('h3');
   title.className = 'card-title';
   title.textContent = opts.title;
 
-  textBox.append(eyebrow, title);
+  textBox.append(title);
 
   if (opts.desc) {
     const desc = document.createElement('p');
@@ -328,6 +350,7 @@ export function setSliderValue(root: HTMLElement, spec: ParamSpec, value: number
   const readout = root.querySelector<HTMLElement>('.pfield-value');
   const position = String(toSliderPosition(spec, value));
   if (range && range.value !== position) range.value = position;
+  if (range) paintRange(range);
   if (number) number.value = valueText(spec, value);
   if (readout) readout.textContent = valueText(spec, value);
 }

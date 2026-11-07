@@ -1,8 +1,10 @@
+import { icon } from './icons';
+
 export interface ModalOptions {
   title: string;
   subtitle?: string;
   content: HTMLElement;
-  /** wide = 高级参数；medium = 设备；narrow = 设置 */
+  /** wide = 高级参数；medium = 设备 / 设置；narrow = 固件升级 */
   size?: 'narrow' | 'medium' | 'wide';
 }
 
@@ -12,8 +14,9 @@ export interface ModalHandle {
 }
 
 /**
- * 单实例浮层：一屏工作台之外的"抽屉"，用于高级参数 / 设备 / 设置。
- * 打开时不销毁底层界面，关闭后回到原来的状态与滚动位置。
+ * 单实例抽屉：从右侧滑出，用于高级参数 / 设备 / 固件 / 设置。
+ * 打开时不销毁底层界面，关闭后回到原来的状态与滚动位置；
+ * 关闭是同步移除（没有退场动画），调用方关掉后立刻就能再开下一个。
  */
 export function openModal(opts: ModalOptions): ModalHandle {
   const previousFocus = document.activeElement as HTMLElement | null;
@@ -47,7 +50,7 @@ export function openModal(opts: ModalOptions): ModalHandle {
   closeButton.type = 'button';
   closeButton.className = 'modal-close';
   closeButton.setAttribute('aria-label', 'close');
-  closeButton.textContent = '×';
+  closeButton.append(icon('close', 18));
 
   head.append(textBox, closeButton);
 

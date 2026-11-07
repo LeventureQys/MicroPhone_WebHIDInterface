@@ -3,17 +3,19 @@
   flex-direction: column;
   height: 100%;
   min-height: 0;
-  background: var(--bg);
+  background:
+    radial-gradient(1200px 520px at 78% -10%, rgba(243, 164, 92, 0.05), transparent 60%),
+    var(--bg);
 }
 
 .topbar {
   display: flex;
   align-items: center;
-  justify-content: space-between;
   flex: 0 0 var(--topbar-h);
   height: var(--topbar-h);
-  padding: 0 var(--space-24);
-  border-bottom: 1px solid var(--border-soft);
+  padding: 0 20px;
+  border-bottom: 1px solid var(--line);
+  background: rgba(14, 16, 21, 0.72);
 }
 
 /* 一屏工作台的外壳：顶栏以下全部交给 console */
@@ -21,7 +23,7 @@
   display: flex;
   flex: 1 1 auto;
   min-height: 0;
-  padding: 18px 22px;
+  padding: 16px 20px 18px;
 }
 
 .boot-placeholder {

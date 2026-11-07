@@ -68,7 +68,11 @@ async function boot(): Promise<void> {
   const shell = createShell({
     store,
     mock: channel.kind === 'mock',
-    console: (api) => createConsoleView(store, channel, api),
+    console: (api) =>
+      createConsoleView(store, channel, api, {
+        snapshot: () => link.getState().device,
+        onChange: (cb) => link.onChange(() => cb()),
+      }),
     advanced: () => createAdvancedView(store),
     device: () =>
       createDeviceView(webhid, {

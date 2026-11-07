@@ -59,7 +59,7 @@ function text(tag: string, className: string, content: string): HTMLElement {
 
 function fieldRow(label: string, value: HTMLElement): HTMLElement {
   const row = document.createElement('div');
-  row.className = 'pfield';
+  row.className = 'pfield kv';
   const head = document.createElement('div');
   head.className = 'pfield-head';
   head.append(text('span', 'pfield-label', label), value);
@@ -116,10 +116,7 @@ export function createDeviceView(session: WebHidSession, options?: DeviceViewOpt
   // -- 连接 -----------------------------------------------------------------
 
   const connection = card({
-    eyebrow: 'WEBHID',
     title: t('device.title'),
-    tag: 'LINK',
-    desc: t('device.subtitle'),
   });
 
   const modeRow = document.createElement('div');
@@ -195,7 +192,8 @@ export function createDeviceView(session: WebHidSession, options?: DeviceViewOpt
 
   const entries = document.createElement('div');
   entries.className = 'device-actions';
-  const firmwareBtn = actionButton(t('fw.open'), 'primary', () => options?.onOpenFirmware?.());
+  // 一张卡只留一个主按钮（连接）；固件升级是低频操作
+  const firmwareBtn = actionButton(t('fw.open'), 'ghost', () => options?.onOpenFirmware?.());
   firmwareBtn.classList.add('fw-open');
   const settingsBtn = actionButton(t('settings.channel.title'), 'ghost', () => options?.onOpenSettings?.());
   settingsBtn.classList.add('device-settings-open');
@@ -205,21 +203,21 @@ export function createDeviceView(session: WebHidSession, options?: DeviceViewOpt
   connection.body.append(text('p', 'card-desc device-save-note', t('device.saveNote')));
   // -- 设备列表 --------------------------------------------------------------
 
-  const devices = card({ eyebrow: 'DEVICES', title: t('device.devices'), tag: 'HID' });
+  const devices = card({ title: t('device.devices') });
   const deviceList = document.createElement('div');
   deviceList.className = 'device-list';
   devices.body.append(deviceList);
 
   // -- 报告监视 --------------------------------------------------------------
 
-  const reports = card({ eyebrow: 'MONITOR', title: t('device.reports'), tag: 'INPUT' });
+  const reports = card({ title: t('device.reports') });
   const reportBox = document.createElement('div');
   reportBox.className = 'device-report';
   reports.body.append(reportBox);
 
   // -- 套件信息 --------------------------------------------------------------
 
-  const kit = card({ eyebrow: 'VENDOR', title: t('device.kit'), tag: 'SUB' });
+  const kit = card({ title: t('device.kit') });
   const kitRows: Array<[string, string]> = [
     [t('device.kit.version'), session.kitVersion],
     [t('device.kit.protocol'), session.bridgeProtocol],
@@ -227,7 +225,7 @@ export function createDeviceView(session: WebHidSession, options?: DeviceViewOpt
   ];
   for (const [label, value] of kitRows) {
     const row = document.createElement('div');
-    row.className = 'pfield';
+    row.className = 'pfield kv';
     const head = document.createElement('div');
     head.className = 'pfield-head';
     head.append(text('span', 'pfield-label', label), text('span', 'pfield-value', value));
@@ -242,7 +240,8 @@ export function createDeviceView(session: WebHidSession, options?: DeviceViewOpt
 
   main.append(devices.root, reports.root, diag.root);
   side.append(connection.root, kit.root);
-  layout.append(main, side);
+  // 连接控制放左边窄栏：先选通道、连上，再看右边的设备表与报告
+  layout.append(side, main);
   root.append(layout);
 
   // -- 渲染 ------------------------------------------------------------------
@@ -432,7 +431,7 @@ interface DiagSection {
  * 没有通道时退回 hub 里的聚合值，于是未连接也能看到最后一次同步的计数。
  */
 function createDiagSection(hub: DiagnosticsHub | undefined, link: DeviceLink | undefined): DiagSection {
-  const shell = card({ eyebrow: 'DIAGNOSTICS', title: t('diag.title'), tag: 'LOG', desc: t('diag.subtitle') });
+  const shell = card({ title: t('diag.title'), desc: t('diag.subtitle') });
 
   const details = document.createElement('details');
   details.className = 'eq-internal diag-details';
@@ -460,7 +459,7 @@ function createDiagSection(hub: DiagnosticsHub | undefined, link: DeviceLink | u
   ];
   for (const [field, label] of deviceFields) {
     const row = document.createElement('div');
-    row.className = 'pfield';
+    row.className = 'pfield kv';
     const head = document.createElement('div');
     head.className = 'pfield-head';
     const value = text('span', 'pfield-value', t('diag.device.none'));
