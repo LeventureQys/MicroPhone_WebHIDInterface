@@ -128,6 +128,11 @@ export class WebHidTransport implements DeviceBoundTransport {
   private _state: TransportState = 'idle';
   private _listening = false;
   private _suspended = false;
+  /**
+   * 挂起期间收到的 `disconnect`（DFU 里设备复位重枚举是这个事件，不算拔线）。
+   * 但升级失败后要区分"设备还在"与"句柄已经没了"，否则重试会把帧发到死句柄上。
+   */
+  private _handleLost = false;
   private _lastPeak: number | null = null;
   private _lastLevelAt: number | null = null;
   /** 最后一条 IN 报告的时刻；入站看门狗据此判"设备不说话" */
@@ -154,7 +159,15 @@ export class WebHidTransport implements DeviceBoundTransport {
   }
 
   async open(): Promise<void> {
-    if (this._state === 'ready' || this._state === 'connecting') return;
+    if (this._state === 'connecting') return;
+    // DFU 挂起期间 `_suspended` 为真但 state 仍是 ready（`suspend()` 不动状态机）：
+    // 直接 return 会让"升级失败后重新打开设备"变成一次必然超时的回读，见 `resume()`。
+    if (this._suspended) {
+      await this.resume();
+      return;
+    }
+    // 裸通道（`reopen()` 后没有参数会话）不能算"已打开"，要补建会话
+    if (this._state === 'ready' && this._session !== null) return;
     this._setState('connecting');
     if (!(await this._bindDevice())) return;
     await this._startSession();
@@ -175,6 +188,7 @@ export class WebHidTransport implements DeviceBoundTransport {
     session?.dispose();
     this._device = handle;
     this._suspended = true;
+    this._handleLost = false;
     this._lastPeak = null;
     this._lastLevelAt = null;
     this._lastInboundAt = this._clock.now();
@@ -185,6 +199,23 @@ export class WebHidTransport implements DeviceBoundTransport {
       // 旧句柄已随复位失效；close 失败没有意义，也不该盖住新句柄已就绪的事实
       void previous.close().catch(() => undefined);
     }
+  }
+
+  /**
+   * 退出 DFU 挂起（升级失败 / 中止的收场）：清掉挂起标记与看门狗，参数会话原样保留。
+   *
+   * 只清标记不动会话：设备可能停在 Bootloader，`resume()` 的同步会白等到超时；
+   * 由调用方决定是"试着恢复参数通道"还是"保留裸通道继续刷固件"。
+   */
+  cancelDfu(): void {
+    this._suspended = false;
+    this._handleLost = false;
+    this._stopWatchdog();
+  }
+
+  /** 挂起期间设备是真的拔了（还是只是复位重枚举）；`reacquire()` 据此决定要不要换句柄 */
+  handleLost(): boolean {
+    return this._handleLost;
   }
 
   private async _bindDevice(): Promise<boolean> {
@@ -202,11 +233,17 @@ export class WebHidTransport implements DeviceBoundTransport {
       return false;
     }
     this._listen(device);
+    // 能打开就说明句柄是活的：之前挂起期间记下的"已断开"作废
+    this._handleLost = false;
     return true;
   }
 
   /** 建参数会话并完成一次回读；DFU 之后 `resume()` 也走这里 */
   private async _startSession(): Promise<void> {
+    const stale = this._session;
+    this._session = null;
+    // 旧会话可能还挂着轮询定时器：换会话前必须销毁，否则两套定时器会一起发帧
+    stale?.dispose();
     this._setState('connecting');
     const session = new ParamSession({
       // 一帧可能被切成多包，按顺序逐包发出并等待背压（S-l）。
@@ -256,6 +293,7 @@ export class WebHidTransport implements DeviceBoundTransport {
     this._lastPeak = null;
     this._lastLevelAt = null;
     this._suspended = false;
+    this._handleLost = false;
     this._setState('idle');
   }
 
@@ -482,9 +520,18 @@ export class WebHidTransport implements DeviceBoundTransport {
     this._session?.setPolling(false);
   }
 
-  /** DFU 后：恢复喂字节与轮询并重新同步；状态机回到 ready 由 `session.sync()` 的成功决定 */
+  /**
+   * DFU 后：恢复喂字节与轮询并重新同步。
+   *
+   * 也是"升级失败/中止后把参数通道拉回来"的入口：句柄已经随拔线/复位消失时快速失败，
+   * 不再对着死句柄等满一轮同步超时（那会让失败界面多停 1.5 s 且毫无信息量）。
+   */
   async resume(): Promise<void> {
     this._suspended = false;
+    if (this._handleLost) {
+      this._fail({ kind: 'disconnected', message: '设备已断开，需要重新取句柄后再恢复参数通道' });
+      return;
+    }
     const session = this._session;
     if (session === null) {
       // `reopen()` 换过句柄后没有会话（DFU 期间不建参数会话），这里补建并回读
@@ -521,8 +568,9 @@ export class WebHidTransport implements DeviceBoundTransport {
   };
 
   private readonly _onDisconnect = (): void => {
-    // DFU 期间设备复位重枚举，旧句柄断开是预期动作：由 DFU 的 awaitReenumeration 接管，
-    // 这里若照旧派发 disconnected，DeviceLink 会把正在升级的通道拆掉。
+    // 挂起期间设备复位重枚举是预期动作：由 DFU 的 awaitReenumeration 接管。
+    // 但要记下"这条句柄没了"，升级失败后 `reacquire()` 才知道该换句柄而不是继续用这根。
+    this._handleLost = true;
     if (this._suspended) return;
     // 拔线：停轮询并让整条链路进 error，DeviceLink 据此切回演示数据（R5-3）
     this._stopWatchdog();
@@ -707,6 +755,8 @@ export class WebHidTransport implements DeviceBoundTransport {
 
   private _fail(error: TransportError): void {
     this._stopWatchdog();
+    // 失败即退出 DFU 挂起：留着 `_suspended` 会让写入被静默丢弃、拔线也不再上报
+    this._suspended = false;
     // 句柄还开着就保留入站监听：参数协议失败不等于设备死了（很可能停在 Bootloader），
     // DFU 还要靠 `onInputBytes` 收状态帧；只有设备真的没打开才摘监听。
     if (!this._device.opened) this._unlisten(this._device);

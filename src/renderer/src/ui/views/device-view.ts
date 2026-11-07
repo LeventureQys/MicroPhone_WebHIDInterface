@@ -1,5 +1,5 @@
 import { ENTRY_EVENT, STATS_EVENT, type DiagnosticsHub } from '../../device/diagnostics';
-import { formatLinkText, type DeviceLink } from '../../device/link';
+import { formatLinkText, type DeviceLink, type LinkState } from '../../device/link';
 import type { DeviceSnapshot, DiagEntry, SessionStats } from '../../device/transport';
 import { errorKeyOf } from '../../device/webhid/session';
 import type { WebHidSession } from '../../device/webhid/session';
@@ -89,6 +89,11 @@ export interface DeviceViewOptions {
   readonly onOpenFirmware?: () => void;
   /** 「通道设置」按钮：交给 shell 打开设置抽屉（5.1） */
   readonly onOpenSettings?: () => void;
+  /**
+   * 后台自动连接：用户手动断开时 `pause()`（别马上又连回来）、手动连接时 `resume()`。
+   * 不传时不干预自动连接。
+   */
+  readonly autoConnect?: { pause(): void; resume(): void };
 }
 
 /**
@@ -154,9 +159,13 @@ export function createDeviceView(session: WebHidSession, options?: DeviceViewOpt
   const actions = document.createElement('div');
   actions.className = 'device-actions';
   const connectBtn = actionButton(t('device.connect'), 'primary', () => {
+    // 用户显式要连：撤销自动连接的"手动断开"暂停
+    options?.autoConnect?.resume();
     void session.connect(mode);
   });
   const disconnectBtn = actionButton(t('device.disconnect'), 'ghost', () => {
+    // 用户显式断开：自动连接先停手，别再抢着连回去
+    options?.autoConnect?.pause();
     void session.disconnect();
   });
   const refreshBtn = actionButton(t('device.refresh'), 'ghost', () => {
@@ -164,6 +173,7 @@ export function createDeviceView(session: WebHidSession, options?: DeviceViewOpt
   });
   const requestBtn = actionButton(t('device.request'), 'ghost', () => {
     const link = options?.link;
+    options?.autoConnect?.resume();
     if (link) void link.requestNativeDevice();
     else void session.requestNativeDevice();
   });
@@ -296,6 +306,8 @@ export function createDeviceView(session: WebHidSession, options?: DeviceViewOpt
         const link = options?.link;
         // 有 DeviceLink 时开关设备走 link：它负责切参数通道、全量回读与失败降级；
         // 没有 link（单测/旧装配）才退回只开关句柄
+        if (device.opened) options?.autoConnect?.pause();
+        else options?.autoConnect?.resume();
         if (link) {
           if (device.opened) void link.detach();
           else void link.attach(device.id);
@@ -444,6 +456,7 @@ function createDiagSection(hub: DiagnosticsHub | undefined, link: DeviceLink | u
     ['vidpid', t('diag.device.vidpid')],
     ['serial', t('diag.device.serial')],
     ['comErr', t('diag.device.comErr')],
+    ['audio', t('diag.device.audio')],
   ];
   for (const [field, label] of deviceFields) {
     const row = document.createElement('div');
@@ -536,6 +549,14 @@ function createDiagSection(hub: DiagnosticsHub | undefined, link: DeviceLink | u
     ].join(' / ');
   }
 
+  /** 电平来源行：音频输入名；退回设备上报时给出原因（权限 / 无输入） */
+  function audioText(state: LinkState['audio']): string {
+    if (state === undefined || state === null) return t('diag.device.none');
+    if (state.source === 'audio') return t('device.audio.using', { label: state.label ?? '—' });
+    if (state.error !== undefined) return t(`device.audio.error.${state.error}`);
+    return t('device.audio.device');
+  }
+
   function renderSummary(): void {
     const device: DeviceSnapshot | null = link?.getState().device ?? null;
     const values: Record<string, string> = {
@@ -548,6 +569,7 @@ function createDiagSection(hub: DiagnosticsHub | undefined, link: DeviceLink | u
       vidpid: device === null ? t('diag.device.none') : `${hex(device.vid)} / ${hex(device.pid)}`,
       serial: device?.serial === undefined || device.serial === '' ? t('diag.device.none') : device.serial,
       comErr: device === null ? t('diag.device.none') : String(device.comErrAck),
+      audio: audioText(link?.getState().audio),
     };
     for (const [field, value] of Object.entries(values)) {
       const node = deviceRows[field];

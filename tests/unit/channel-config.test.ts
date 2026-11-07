@@ -50,6 +50,24 @@ describe('DEFAULT_CHANNEL_CONFIG', () => {
     expect(DEFAULT_CHANNEL_CONFIG.vids).toEqual([]);
     expect(DEFAULT_CHANNEL_CONFIG.pids).toEqual([]);
     expect(DEFAULT_CHANNEL_CONFIG.diagLimit).toBe(500);
+    // 后台自动连接默认开（真机 2026-11 需求：插上就自动连）
+    expect(DEFAULT_CHANNEL_CONFIG.autoConnect).toBe(true);
+  });
+
+  it('autoConnect 逐个字段校验：非法值回落默认开，明确关闭才关', () => {
+    expect(normalizeChannelConfig({ autoConnect: false }).autoConnect).toBe(false);
+    expect(normalizeChannelConfig({ autoConnect: '0' }).autoConnect).toBe(false);
+    expect(normalizeChannelConfig({ autoConnect: '1' }).autoConnect).toBe(true);
+    expect(normalizeChannelConfig({ autoConnect: 'nope' }).autoConnect).toBe(true);
+    // 老版本 localStorage 里没有这个键 → 必须是开
+    expect(loadChannelConfig(fakeStorage()).autoConnect).toBe(true);
+  });
+
+  it('autoConnect 随 saveChannelConfig 落盘并可回读', () => {
+    const storage = fakeStorage();
+    saveChannelConfig(configWith({ autoConnect: false }), storage);
+    expect(storage.data.get(CHANNEL_STORAGE_KEYS.autoConnect)).toBe('0');
+    expect(loadChannelConfig(storage).autoConnect).toBe(false);
   });
 
   it('默认白名单与主进程匹配用的默认值同源，但数组是独立副本', () => {

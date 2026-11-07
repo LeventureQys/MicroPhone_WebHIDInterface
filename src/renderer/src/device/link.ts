@@ -2,6 +2,7 @@ import { t } from '../i18n';
 import { loadChannelConfig } from '../domain/channel-config';
 import type { AppStore } from '../domain/state';
 import type { EqBand, EqFilterType } from '../eq/types';
+import { audioErrorKind } from './audio-meter';
 import type { ChannelTransport } from './channel-transport';
 import type { MockTransport } from './mock-transport';
 import type { ReportIds } from './protocol';
@@ -10,6 +11,7 @@ import { EQ_BAND_COUNT, eqBandAddr, findRegister } from './registers';
 import type {
   DeviceSnapshot,
   DeviceBoundTransport,
+  LevelFrame,
   ParamEcho,
   ParamReadResult,
   SyncPhase,
@@ -44,6 +46,32 @@ export interface LinkState {
   readonly device: DeviceSnapshot | null;
   /** 软告警：型号码不匹配、升级后版本未变等，不阻断连接 */
   readonly warning: LinkText | null;
+  /** 电平来源：真实固件不上报 `0x2057`，改成采同一台设备的音频输入 */
+  readonly audio?: LinkAudioState | null;
+}
+
+/**
+ * 电平来源状态。
+ *
+ * `source: 'audio'` 表示正在用音频输入算电平；`'device'` 表示退回设备上报的 `0x2057`
+ * （拿不到麦克风权限 / 没有音频输入时）。`error` 只在 `'device'` 时有值。
+ */
+export interface LinkAudioState {
+  readonly label: string | null;
+  readonly source: 'audio' | 'device';
+  /** 是否按提示词命中同一台声卡；false 表示退回系统默认输入 */
+  readonly matched?: boolean;
+  readonly error?: 'denied' | 'unavailable' | 'unknown';
+}
+
+/**
+ * 外部电平源（`AudioLevelMeter` 满足它）：`start()` 打开音频输入并开始出帧，
+ * `stop()` 关掉，`onLevels()` 与 `Transport` 同形。
+ */
+export interface AudioLevelSource {
+  start(hints: readonly string[]): Promise<{ readonly label: string; readonly matched: boolean }>;
+  stop(): void;
+  onLevels(cb: (frame: LevelFrame) => void): () => void;
 }
 
 export interface DeviceLinkOptions {
@@ -56,12 +84,20 @@ export interface DeviceLinkOptions {
   readonly clock?: Clock;
   /** 单测注入：给定设备句柄返回 Transport，缺省构造 WebHidTransport */
   readonly createTransport?: (device: WebHidDeviceHandle) => Transport;
+  /**
+   * 外部电平源：真机固件不上报 `0x2057` 时，用同一台设备的音频输入算电平。
+   * 缺省不启用（单测与无麦克风环境退化成设备上报）。
+   */
+  readonly audioLevels?: AudioLevelSource;
 }
 
 export const LINK_CHANGE_EVENT = 'change';
 
 /** 设备信息的型号码；不一致只告警不阻断（R4-3） */
 export const EXPECTED_MODEL_CODE = 'JYM001';
+/** M001 的 USB 身份：后台自动连接只认这一对 */
+export const EXPECTED_VENDOR_ID = 0x0a67;
+export const EXPECTED_PRODUCT_ID = 0x0010;
 
 function sameFirmware(
   left: DeviceSnapshot['firmware'],
@@ -76,6 +112,17 @@ function sameText(left: LinkText | null, right: LinkText | null): boolean {
   return left.key === right.key && JSON.stringify(left.vars ?? {}) === JSON.stringify(right.vars ?? {});
 }
 
+function sameAudio(
+  left: LinkAudioState | null | undefined,
+  right: LinkAudioState | null | undefined,
+): boolean {
+  const a = left ?? null;
+  const b = right ?? null;
+  if (a === b) return true;
+  if (a === null || b === null) return false;
+  return a.label === b.label && a.source === b.source && a.matched === b.matched && a.error === b.error;
+}
+
 function sameState(left: LinkState, right: LinkState): boolean {
   return (
     left.status === right.status &&
@@ -85,7 +132,8 @@ function sameState(left: LinkState, right: LinkState): boolean {
     sameText(left.error, right.error) &&
     left.errorCode === right.errorCode &&
     left.device === right.device &&
-    sameText(left.warning, right.warning)
+    sameText(left.warning, right.warning) &&
+    sameAudio(left.audio, right.audio)
   );
 }
 
@@ -107,6 +155,7 @@ export class DeviceLink extends EventTarget {
   private readonly _mock: MockTransport;
   private readonly _store: AppStore;
   private readonly _createTransport?: (device: WebHidDeviceHandle) => Transport;
+  private readonly _audioLevels?: AudioLevelSource;
 
   private _state: LinkState;
   private _transport: Transport | null = null;
@@ -128,6 +177,7 @@ export class DeviceLink extends EventTarget {
     this._mock = options.mock;
     this._store = options.store;
     this._createTransport = options.createTransport;
+    this._audioLevels = options.audioLevels;
     this._timers = options.timers ?? defaultTimers();
     this._clock = options.clock ?? defaultClock();
     this._state = Object.freeze({
@@ -169,6 +219,8 @@ export class DeviceLink extends EventTarget {
   async attach(deviceId: string): Promise<void> {
     if (this._state.status === 'connecting') return;
     this._attaching = true;
+    // 重连期间先把旧的电平采集停掉：不然拔插后会同时开着两路麦克风
+    this._stopAudioLevels();
     try {
       this._patch({
         status: 'connecting',
@@ -181,14 +233,13 @@ export class DeviceLink extends EventTarget {
       });
       this._store.setSync('syncing');
 
-      const handle = this._session.handleOf(deviceId);
+      const handle = await this._openHandle(deviceId);
       if (handle === null) {
         this._fail('device');
         return;
       }
 
       try {
-        if (!handle.opened) await this._session.openDevice(deviceId);
         const transport = this._prepareTransport(handle);
         // 先接上通道与监听再 open()：`open()` 里要做全量回读，失败时 `ParamSession.failFatal`
         // 会留下解释原因的诊断帧。若等 open() 之后再 `use()`，这些帧就没有订阅者，
@@ -214,6 +265,8 @@ export class DeviceLink extends EventTarget {
           device: result.device,
           warning: this._mismatchWarning(result.device),
         });
+        // 真机固件不上报 0x2057：连接成功后开始采同一台设备的音频输入（异步，不阻塞 ready）
+        void this._startAudioLevels();
       } catch {
         const current = this._transport;
         if (current instanceof WebHidTransport && current.device.opened) this._failSync();
@@ -222,6 +275,35 @@ export class DeviceLink extends EventTarget {
     } finally {
       this._attaching = false;
     }
+  }
+
+  /**
+   * 取一根能用的句柄：会话表里那根打不开时（拔线后旧 `HIDDevice` 已随设备销毁）刷新一次
+   * 设备表再试。真机拔插后系统给的是**新的** `HIDDevice`，不刷新就会一直"打开失败"，
+   * 用户只能重开 app（真机 2026-11 反馈）。
+   *
+   * 刷新后 id 若漂移（真机 id 带枚举序位），按 VID/PID 找同一台并把 link 的 deviceId 改过去。
+   */
+  private async _openHandle(deviceId: string): Promise<WebHidDeviceHandle | null> {
+    const first = this._session.handleOf(deviceId);
+    if (first === null) return null;
+    if (first.opened) return first;
+    await this._session.openDevice(deviceId);
+    if (first.opened) return first;
+
+    await this._session.refresh();
+    const direct = this._session.handleOf(deviceId);
+    if (direct !== null && direct !== first) {
+      if (!direct.opened) await this._session.openDevice(deviceId);
+      if (direct.opened) return direct;
+    }
+
+    const moved = this._locateDevice(first);
+    if (moved === null) return null;
+    if (!moved.handle.opened) await this._session.openDevice(moved.id);
+    if (!moved.handle.opened) return null;
+    if (moved.id !== deviceId) this._patch({ deviceId: moved.id });
+    return moved.handle;
   }
 
   /**
@@ -236,6 +318,7 @@ export class DeviceLink extends EventTarget {
   /** 断开设备并回到演示数据；`store.sync` 回 idle，顶栏随即显示"演示数据" */
   async detach(): Promise<void> {
     const deviceId = this._state.deviceId;
+    this._stopAudioLevels();
     this._channel.use(this._mock);
     this._store.setSync('idle');
     this._disposeTransport();
@@ -338,11 +421,149 @@ export class DeviceLink extends EventTarget {
         device: result.device ?? this._state.device,
         warning: unchanged ? { key: 'fw.warn.versionUnchanged' } : null,
       });
+      // 升级完设备重新枚举成 App 模式，音频输入也跟着回来：重新采一路
+      void this._startAudioLevels();
     } catch {
       this._fail('device');
     } finally {
       this._firmwareBeforeDfu = null;
     }
+  }
+
+  /**
+   * 升级失败 / 中止后的收场：把链路从"升级中"拉回一个用户还能继续操作的状态。
+   *
+   * 失败路径不会走 `resumeAfterDfu()`（设备可能停在 Bootloader，等重枚举只会白等），
+   * 但 `suspendForDfu()` 已经挂起了通道：不在这里清掉，写入会被静默丢弃、拔线也不再上报，
+   * 界面还会一直停在"已同步"——只能重开 app 才能恢复（真机 2026-11 反馈）。
+   *
+   * 能重新同步就回 ready；不能（设备在 Bootloader / 已拔出）就保留裸通道并给出
+   * `device.warn.bootloader`，让固件抽屉接着刷、用户知道下一步该干什么。
+   */
+  async recoverAfterDfuFailure(): Promise<void> {
+    this._firmwareBeforeDfu = null;
+    const transport = this._transport;
+    if (transport instanceof WebHidTransport) {
+      await transport.resume();
+      if (transport.state() === 'ready') {
+        try {
+          const result = await transport.readAll();
+          this._applyReadback(result);
+          this._store.setSync('ready');
+          this._patch({
+            status: 'ready',
+            sync: 'ready',
+            device: result.device ?? this._state.device,
+            warning: this._mismatchWarning(result.device),
+          });
+          void this._startAudioLevels();
+          return;
+        } catch {
+          // 回读失败：落到下面的 error 收场，但通道继续留着
+        }
+      }
+    }
+    this._store.setSync('error');
+    this._patch({
+      status: 'error',
+      sync: 'error',
+      // 回读没成功，旧的设备摘要不能继续当真值用（否则预检会拿上一次的型号做判断）
+      device: null,
+      error: { key: 'device.error.sync' },
+      errorCode: 'sync',
+      warning: { key: 'device.warn.bootloader' },
+    });
+  }
+
+  /**
+   * 重试前重新取通道：升级失败 / 拔线 / 复位重枚举之后，句柄与挂起状态都可能已经失效。
+   *
+   * 1. 句柄还活着（设备没掉）→ 只清 DFU 挂起，参数会话照旧；
+   * 2. 句柄没了但会话设备表里有同一台的新句柄 → `refresh()` 后 `reopen()` 换过去
+   *    （同一个 transport 实例，DFU 的 `onInputBytes` 订阅不断）；
+   * 3. 通道之前被 `_fail()` 丢掉了 → 新建一条只开句柄的裸通道。
+   *
+   * 返回 false 表示设备确实不在了：调用方应提示"插回后在设备页重新连接"，不要继续发帧。
+   */
+  async reacquire(): Promise<boolean> {
+    const existing = this._transport;
+    if (existing instanceof WebHidTransport && !existing.handleLost() && existing.device.opened) {
+      existing.cancelDfu();
+      return true;
+    }
+
+    // 句柄已失效：重新枚举一次设备表（拔插后系统给的是新的 HIDDevice，旧对象打不开）
+    try {
+      await this._session.refresh();
+    } catch {
+      // 刷新失败仍按现有句柄试一次，失败由下面的 openDevice / reopen 判定
+    }
+    const found = this._locateDevice(existing instanceof WebHidTransport ? existing.device : null);
+    if (found === null) return false;
+    if (!found.handle.opened) {
+      await this._session.openDevice(found.id);
+      if (!found.handle.opened) return false;
+    }
+
+    if (existing instanceof WebHidTransport) {
+      await existing.reopen(found.handle);
+      if (existing.state() !== 'ready') return false;
+      existing.cancelDfu();
+      this._patch({ deviceId: found.id });
+      return true;
+    }
+
+    const transport = this._prepareTransport(found.handle);
+    if (transport instanceof WebHidTransport) {
+      await transport.reopen(found.handle);
+      if (transport.state() !== 'ready') return false;
+      transport.cancelDfu();
+    } else {
+      await transport.open();
+      if (transport.state() !== 'ready') return false;
+    }
+    this._patch({ deviceId: found.id });
+    return true;
+  }
+
+  // ---- 电平来源（音频输入） ----------------------------------------------
+
+  /**
+   * 打开"同一台设备"的音频输入并把它的电平接到通道出口。
+   *
+   * 提示词取 HID 的 productName（真机是 "USB Audio Device"）+ 型号码：Windows 的音频端点
+   * 名字里带得上这些词就能匹配到同一台设备；匹配不到就退回系统默认输入（`matched=false`）。
+   * 采集失败（没权限 / 没有输入）不阻断连接，只把电平退化成设备上报的 `0x2057`。
+   */
+  private async _startAudioLevels(): Promise<void> {
+    const meter = this._audioLevels;
+    if (meter === undefined) return;
+    const transport = this._transport;
+    const handle = transport instanceof WebHidTransport ? transport.device : null;
+    if (handle === null) return;
+    const hints = [handle.productName ?? '', EXPECTED_MODEL_CODE, 'M001'];
+    try {
+      const info = await meter.start(hints);
+      // 采集期间可能已经断开 / 换了设备：晚到的那一路立刻收回
+      if (this._transport !== transport || this._state.status !== 'ready') {
+        meter.stop();
+        return;
+      }
+      this._channel.useLevelSource(meter);
+      this._patch({ audio: { label: info.label, source: 'audio', matched: info.matched } });
+    } catch (error) {
+      if (this._transport !== transport) return;
+      this._channel.useLevelSource(null);
+      this._patch({ audio: { label: null, source: 'device', error: audioErrorKind(error) } });
+    }
+  }
+
+  /** 停采集并摘掉外部电平源：设备断开 / 切回 Mock / 停在 Bootloader 时都要调 */
+  private _stopAudioLevels(): void {
+    if (this._audioLevels === undefined) return;
+    this._audioLevels.stop();
+    this._channel.useLevelSource(null);
+    if (this._state.audio != null) this._patch({ audio: null });
   }
 
   // ---- 回读回填 ----------------------------------------------------------
@@ -423,6 +644,7 @@ export class DeviceLink extends EventTarget {
     // attach 期间的超时由 attach 判定（可能是 Bootloader 不说参数协议，句柄还要留着升级）
     if (this._attaching) return;
     if (this._state.status !== 'ready') return;
+    this._stopAudioLevels();
     this._channel.use(this._mock);
     this._disposeTransport();
     this._store.setSync('error');
@@ -462,6 +684,7 @@ export class DeviceLink extends EventTarget {
    * 参数链路按 error 降级（`store.sync = error`），避免界面把"没读到设备值"当成已同步。
    */
   private _failSync(): void {
+    this._stopAudioLevels();
     this._store.setSync('error');
     this._patch({
       status: 'error',
@@ -476,6 +699,7 @@ export class DeviceLink extends EventTarget {
 
   /** 失败统一入口：切回 Mock、停链路、置 error 文案键（code → `device.error.<code>`） */
   private _fail(code: WebHidErrorCode): void {
+    this._stopAudioLevels();
     this._channel.use(this._mock);
     this._disposeTransport();
     this._store.setSync('error');
@@ -511,6 +735,35 @@ export class DeviceLink extends EventTarget {
       if (summary.vendorId !== previous.vendorId || summary.productId !== previous.productId) continue;
       const candidate = this._session.handleOf(summary.id);
       if (candidate !== null && candidate !== previous) return { id: summary.id, handle: candidate };
+    }
+    return null;
+  }
+
+  /**
+   * `reacquire()` 的候选句柄：优先"原 id + 新对象"（复位重枚举），其次同 VID/PID 的另一台，
+   * 最后接受原 id 的同一个对象（通道被丢掉后重建时，设备可能从头到尾没断过）。
+   *
+   * 与 `_findReplacement()` 的差别只在最后一条：等重枚举时必须拿到新对象，重新取通道时
+   * 同一台活着的设备也是合法结果。
+   */
+  private _locateDevice(
+    previous: WebHidDeviceHandle | null,
+  ): { readonly id: string; readonly handle: WebHidDeviceHandle } | null {
+    const deviceId = this._state.deviceId;
+    if (deviceId !== null) {
+      const direct = this._session.handleOf(deviceId);
+      if (direct !== null && direct !== previous) return { id: deviceId, handle: direct };
+    }
+    if (previous !== null) {
+      for (const summary of this._session.getState().devices) {
+        if (summary.vendorId !== previous.vendorId || summary.productId !== previous.productId) continue;
+        const candidate = this._session.handleOf(summary.id);
+        if (candidate !== null && candidate !== previous) return { id: summary.id, handle: candidate };
+      }
+    }
+    if (deviceId !== null) {
+      const direct = this._session.handleOf(deviceId);
+      if (direct !== null) return { id: deviceId, handle: direct };
     }
     return null;
   }

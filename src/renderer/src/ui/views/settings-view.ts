@@ -290,8 +290,19 @@ function createChannelCard(configStore: ChannelConfigStore): ChannelCardHandle {
   });
   diagRow.append(diagInput);
 
+  // -- 自动连接 --------------------------------------------------------------
+
+  const autoRow = fieldRow('autoConnect', t('settings.channel.autoConnect'));
+  const autoSwitch = switchControl({
+    checked: config.autoConnect,
+    label: t('settings.channel.autoConnectHint'),
+    onChange: (checked) => commit({ autoConnect: checked }, t('settings.channel.saved')),
+  });
+  autoSwitch.style.flex = '1 1 auto';
+  autoRow.append(autoSwitch);
+
   renderWhitelistCount();
-  view.body.append(kindRow, bridgeRow, reportRow, whitelistRow, vidRow, diagRow, status);
+  view.body.append(kindRow, bridgeRow, reportRow, whitelistRow, vidRow, diagRow, autoRow, status);
 
   return {
     root: view.root,

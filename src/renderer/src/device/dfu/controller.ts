@@ -32,12 +32,22 @@ export interface FirmwareLink {
   getState(): LinkState;
   suspendForDfu(): Promise<void>;
   resumeAfterDfu(): Promise<void>;
-  attach(deviceId: string): Promise<void>;
   /**
    * 设备复位重枚举后换新句柄并重开（进 DFU 之后、收尾之后各一次）。
    * 可选：单测的假链路不实现时按"虚拟通道无需重枚举"处理。
    */
   awaitReenumeration?(): Promise<void>;
+  /**
+   * 开始升级前重新取通道：升级失败 / 拔线 / 复位重枚举之后旧句柄已失效，
+   * 必须换到重新枚举出来的那个才能发帧。返回 false 表示设备确实不在了。
+   * 可选：单测的假链路不实现时按"通道一直可用"处理。
+   */
+  reacquire?(): Promise<boolean>;
+  /**
+   * 失败 / 中止后的收场：把链路从"升级中"的挂起状态拉回来（清挂起、能同步就重新同步）。
+   * 可选：不实现时链路保持原状（单测不关心）。
+   */
+  recoverAfterDfuFailure?(): Promise<void>;
 }
 
 export interface FirmwareState {
@@ -62,6 +72,11 @@ export interface FirmwareControllerOptions {
   readonly setDfuActive?: (active: boolean) => void | Promise<void>;
   /** 关窗被拦截的通知订阅（`window.micstudio.onDfuCloseBlocked`） */
   readonly onCloseBlocked?: (cb: () => void) => (() => void) | void;
+  /**
+   * 后台自动连接：升级期间 `pause()`，收场后 `resume()`。
+   * 不禁用的话，失败后自动重连会和「立即重试」抢同一个句柄（两边都会改 link 状态）。
+   */
+  readonly autoConnect?: { pause(): void; resume(): void };
 }
 
 /** 关窗被拦截时 `DfuError.detail` 的标记：phase 不变，界面只提示不中断 */
@@ -190,14 +205,18 @@ export class FirmwareController extends EventTarget {
   /**
    * 开始升级。未确认 → 抛 `Error('confirmation required')` 且**零出帧**。
    * 失败不抛：错误进 `state.error`（界面据此渲染"重试 / 重插"），设备状态不回滚。
+   *
+   * 重试也是走这里：先 `reacquire()` 把可能已经失效的句柄换掉（拔线 / 复位重枚举），
+   * 取不到通道就直接报 `unplugged`，一个字节都不发。
    */
   async start(): Promise<void> {
     const bytes = this._bytes;
     if (bytes === null) throw new Error('no firmware selected');
     if (!this._state.confirmed) throw new Error('confirmation required');
     if (this._running) throw new Error('dfu already running');
-    if (this.options.link.transport() === null) {
-      this.patch({ phase: 'failed', error: { kind: 'channel', detail: 'fw.error.noDevice' } });
+
+    if (!(await this.reacquireChannel())) {
+      this.patch({ phase: 'failed', error: { kind: 'unplugged' } });
       return;
     }
 
@@ -214,13 +233,20 @@ export class FirmwareController extends EventTarget {
     this.patch({ error: null, confirmed: true });
     const offInput = this.subscribeInput();
     const offClose = this.subscribeCloseBlocked();
+    // 升级期间别让后台自动连接插进来（失败收场后它会重新武装，见 finally）
+    this.options.autoConnect?.pause();
+    /** 挂起已经生效：异常退出必须由 `recoverAfterDfuFailure()` 收场，否则链路会卡在"升级中" */
+    let suspended = false;
     try {
       // 顺序是硬约束（R4-7）：先停参数链路，再开主进程守卫，最后才开始发帧
       await this.options.link.suspendForDfu();
+      suspended = true;
       await this.setDfuActive(true);
       await session.run(bytes);
       // run() 在 settling 处返回：设备正在重启，重连并全量回读
       await this.options.link.resumeAfterDfu();
+      // resumeAfterDfu() 自己处理失败（不抛），走到这里链路已由它收场，不能再按"挂起中"处置
+      suspended = false;
       const verdict = this.verifyVersion(this.options.link.getState().device);
       if (verdict.ok) session.complete();
       else session.complete({ ok: false, detail: verdict.detail });
@@ -233,8 +259,10 @@ export class FirmwareController extends EventTarget {
     } finally {
       offInput();
       offClose();
+      if (suspended) await this.recoverChannel();
       await this.setDfuActive(false);
       this._running = false;
+      this.options.autoConnect?.resume();
       this.patch({ phase: session.phase() });
     }
   }
@@ -244,10 +272,11 @@ export class FirmwareController extends EventTarget {
     this._session?.abort();
   }
 
-  /** 重插后再试：重新 attach 当前设备（设备此时在 Bootloader 里）再跑一次 */
+  /**
+   * 重插后再试：与「立即重试」同一条路径 —— `start()` 开头会 `reacquire()`，
+   * 拔线后系统给的是新的 `HIDDevice`，不换句柄重试必然失败。
+   */
   async replugAndRetry(): Promise<void> {
-    const deviceId = this.options.link.getState().deviceId;
-    if (deviceId !== null) await this.options.link.attach(deviceId);
     await this.start();
   }
 
@@ -299,6 +328,36 @@ export class FirmwareController extends EventTarget {
     });
     this._session = session;
     return session;
+  }
+
+  /**
+   * 发第一帧之前把通道重新取一遍。
+   *
+   * 失败重试的入口全在这里：上一轮可能已经让句柄失效（EnterDfu 让设备复位重枚举、
+   * 或者用户把线拔了），沿用旧句柄的 `sendReport` 必然抛错，于是每次重试都停在
+   * `channel` 错误上、永远走不到"重新枚举"那一步（真机 2026-11 反馈的"必须重开 app"）。
+   */
+  private async reacquireChannel(): Promise<boolean> {
+    const reacquire = this.options.link.reacquire;
+    if (reacquire !== undefined) {
+      try {
+        if (!(await reacquire.call(this.options.link))) return false;
+      } catch {
+        return false;
+      }
+    }
+    return this.options.link.transport() !== null;
+  }
+
+  /** 失败 / 中止收场：链路挂起必须在这里清掉，否则参数通道静默失效、只能重开 app */
+  private async recoverChannel(): Promise<void> {
+    const recover = this.options.link.recoverAfterDfuFailure;
+    if (recover === undefined) return;
+    try {
+      await recover.call(this.options.link);
+    } catch {
+      // 收场是尽力而为：不能盖住升级本身的结论
+    }
   }
 
   /** DFU 期间把 IN 字节交给会话；参数会话此时已被 `suspend()` 掐断，不抢流 */

@@ -90,7 +90,7 @@ Ground truth（地址 / 标定 / 权限 / 默认值，唯一权威）：`Documen
 | `Document/Protocol/效果器参数范围.xlsx` | `src/renderer/src/domain/params.ts` | 仅中文标签与单位；数值以寄存器表为准 |
 | `Document/Update/Alpha/v1.0.0/需求文档.md` | 全部功能范围 | 需求边界 |
 | `Document/Update/Alpha/v1.0.0/设计文档.md` | 全部实现契约 | 接口签名与视觉规范 |
-| `Document/Update/Alpha/v1.1.0/设计文档.md` | v1.1.0 契约与 §12 变更记录 R-1…R-24 | 与 v1.0.0 冲突时以本文件为准 |
+| `Document/Update/Alpha/v1.1.0/设计文档.md` | v1.1.0 契约与 §12 变更记录 R-1…R-28 | 与 v1.0.0 冲突时以本文件为准 |
 | 参照实现 AudioEQ_Visualized_Web（MIT） | `src/renderer/src/eq/**` | 频响算法与 Canvas 分层渲染 |
 | `third_party/web_hid_utils/docs/*.md`、`packages/webhid-kit/README.md` | `src/renderer/src/device/webhid/**` | WebHID 强制约束、桥接协议、套件 API |
 
@@ -118,6 +118,8 @@ Electron 主进程只负责窗口、菜单、WebHID 会话策略与 IPC；渲染
 - `src/renderer/src/device/proto`：参数协议纯函数层（`crc` CRC-16 / `frame` 组帧与流式拆帧 / `codec` 编解码 / `timing` 唯一定时器出口 / `session` 串行队列 + 超时重试 + 写合并 + 电平轮询）
 - `src/renderer/src/device/dfu`：固件升级层（`frame` SigmaBus 帧 / `image` 打包解析与预检 / `session` DFU 状态机）
 - `src/renderer/src/device/link.ts`：设备连接编排（WebHid 会话 ↔ 通道 ↔ 参数同步 ↔ DFU）
+- `src/renderer/src/device/auto-connect.ts`：后台自动连接（VID 0x0A67 / PID 0x0010，默认开，设置页可关）
+- `src/renderer/src/device/audio-meter.ts`：音频电平表（固件不上报 `0x2057`，改采同一台设备的音频输入）
 - `src/renderer/src/device/channel-transport.ts`：通道类型与 report ID 装配（mock / virtual / native）
 - `tools/vdevice`：虚拟下位机（`run` 一键起停 / `sidecar` 设备侧侧车 + 控制面 / `device-stack` 参数协议栈 / `dfu-stack` DFU 栈 / `faults` 故障注入 / `level` 电平源 / `package` 升级包夹具 / `selftest` 20 例端到端自检）
 - `src/shared`：跨进程类型
@@ -181,6 +183,10 @@ Remove-Item Env:ELECTRON_RUN_AS_NODE -ErrorAction SilentlyContinue
 2. 真机通道的 `select-hid-device` 改为**按 `Usage Page 0xFF01 / Usage 0x01` 白名单放行**（`shared/webhid-whitelist.ts` 的 `shouldAllowSelection`：空白名单→拒；entries 非空→放；vids/pids 全空→放；否则按 VID/PID 复核）。usage 过滤实际发生在渲染进程 `requestDevice({ filters })`。
 3. 上游 `forget()` 只撤销本会话授权，不等于操作系统级撤销。
 
+**后台自动连接（2026-11-07，`device/auto-connect.ts`）**：应用启动即在后台每 1.5 s 查一次系统里的 `VID 0x0A67 / PID 0x0010`（M001）；设备插着但上位机没连上就自动 `connect('native')` + `link.attach()`，不必用户先点「连接」再点「打开」。只在真机通道生效：连的是虚拟桥接（`ready` + `virtual`）时完全不碰；用户在设备页点「断开 / 关闭」→ `pause()`，要等设备拔掉一次或再次手动连接才重新自动连；升级中（`status='dfu'`）与正在连接时不动；参数同步失败（设备停在 Bootloader）立即 `parked` 停手，避免一直对着升级模式空转。设置页「通道」卡有开关（`micstudio.autoConnect`，默认开，老配置缺键时按开处理）。实测（2026-11-07，本机真插 M001）：启动日志 `[auto-connect] 发现 USB Audio Device（native-0a67-0010-0），尝试自动连接` → `自动连接成功`，顶栏直接「已连接 / 已同步」，回读增益 97/34。`WebHidSession` 为此补了 `probeNative()`（会话没连上时也能只读枚举，不建设备表）与 `nativeAvailable()`；`refresh()` 在设备表没变时不再 patch，避免 1.5 s 一次的整表重绘。
+
+**电平来源（2026-11-07，`device/audio-meter.ts`）**：真机固件不上报 `0x2057`（始终 0），电平条改由**同一台设备的音频输入**算。`DeviceLink` 连上后 `AudioLevelMeter.start([HID productName, 'JYM001', 'M001'])` → `enumerateDevices()` 按 label 子串匹配端点（同分优先具体端点，不选 `Default - ` 别名；首次授权前 label 为空时先开一次默认输入拿权限再重挑）→ `getUserMedia`（显式关掉 `echoCancellation/noiseSuppression/autoGainControl`）→ `AnalyserNode.getFloatTimeDomainData`（fftSize 1024，33 ms 一帧）→ 算 RMS/峰值（峰值 300 ms 线性回落）→ `LevelFrame`（输出通道恒 -96）→ `ChannelTransport.useLevelSource()`。挂着外部源时设备上报的 `0x2057` 帧被丢弃；断开 / 停在 Bootloader 时 `stop()` 并摘源。主进程必须放行麦克风：`installWebHidHandlers` 的 permission check/request 允许 `media` 且只放 `audio`（摄像头拒绝），`index.ts` 加 `autoplay-policy=no-user-gesture-required`（否则 `AudioContext` 停在 `suspended`，`AnalyserNode` 不推进）。设备页诊断卡新增「电平来源」行；拿不到麦克风时按 `denied/unavailable/unknown` 显示原因并退回设备上报。实测（2026-11-07，本机真插 M001）：诊断显示「音频输入：麦克风 (USB Audio Device) (0a67:0010)」，电平条 **RMS -44.6 / 峰值 -32.8**（改前是 -60 / —）。
+
 **首轮真机联调（2026-10-26，M001 `0x0A67/0x0010`）**：路径全部打通到「第 1 条回读成功、第 2 条被固件假 ACK 抢答」，参数链路卡在固件侧（补位零 + 解析器闭锁），详见 `Document/Update/Alpha/v1.1.0/真机联调报告.md`，取证在 `artifacts/real/`。实测三条与旧笔记冲突、已作废的假设：
 
 1. **Electron 33.4.11 的 `HIDDevice` 带 `collections`**（含 `usagePage`/`usage`/报告数），`getDevices()` 与 `requestDevice()` 都有，所以 `shouldAllowSelection` 的 usage 复核在真机上可用；原「不含 collections、主进程只能粗筛」的结论作废。
@@ -203,6 +209,8 @@ Remove-Item Env:ELECTRON_RUN_AS_NODE -ErrorAction SilentlyContinue
 **第四轮真机联调（2026-11-04，M001 App 模式）**：主机侧全流程通过——连接 / `sync()` / 自检 3/3（连续 4 次）/ 场景写入回读 / 20 次连续写 / 空闲 60 s / 关闭重开；**未复现写 Flash 卡顿与偶发断连**（写 ACK 4.1–9.8 ms，写后立即读 6–11 ms，`timeouts/retries` 全 0）。固件侧余留：信息区/配置区/预设区全 0（`validFlag=0`，EQ 段 enable/type/freq 全 0）、只读与范围不校验、拒绝路径一次请求 17 条 ACK、非法高地址 `0x3000`/`0x4000` 读回内存垃圾、`0x12` 读上限 118（119+ 回 `0x0005`，124–127 的 5 报文请求偶发无回执）、`0x2057` 恒 0。DFU 按用户决定主动未做（Bootloader 写 Flash 挂死 + 本机无 J-Link）。详见 `Document/Update/Alpha/v1.1.0/真机联调报告-第四轮.md`，取证 `artifacts/real4/`，探针 `scripts/probes/real4-*.js`。
 
 **第五轮 DFU 升级测试（2026-11-04，V0.0.4）**：**升级成功，正常路径已复测通过**。主机侧修复：空/全 0 设备型号按"未知"放行（不再报"型号不对"）、`kit.ts` 用 `WeakMap<HIDDevice, 适配句柄>` 缓存真机句柄（修掉重枚举误判）、`decodeAsciiWords()` 把 `0xFF` 擦除值当终止符、DFU 重枚举后等 1 s（`dfuEnterSettleMs`）、265 B 块帧的报告间留 2 ms（`dfuReportGapMs`，设备 OUT 只有 4 槽）、SigmaBus 0x00 补位静默、settling 后不再解析 App 报文。首轮从 App 进 DFU 在 44/654 块超时，复现于 11/654；修复后从 App 用官方 `JYM001` 包**一次写完 654/654（约 21 s，timeout/retry 0）**，设备重启到 V0.0.4；从 Bootloader 直连官方包恢复也成功。升级后新固件初始化了 `0x39000` 信息区与配置/预设区：型号 `JYM001`、名称 `M001`、固件 `0.0.4.0`、自检 3/3；官方 `JYM001` 包预检通过。遗留：SN 区仍 `0xFFFF`（界面显示"—"）。详见 `Document/Update/Alpha/v1.1.0/真机DFU升级测试-第五轮.md`，取证 `artifacts/real5/`。
+
+**第六轮全量真机联调（2026-11-04，V0.0.4，不含 DFU）**：上位机侧全绿——42 项界面值 ⇄ 寄存器真值 **42/42**（`real6-compare.mjs` 用 `registers.ts` 反算）、42 项逐项写入 → 裸 HID 回读 **40/40**（另 2 项只读无控件）、EQ 7 段 28 值全中、四场景与业务控件映射全中（降噪 80→raw 73、平稳 40→360、明亮增益 300…370）、20 连写 `timeouts/retries=0`、空闲 60 s 3028 帧无掉线、关闭重开 + 自检 3/3。协议矩阵 24 条：19 过 / 4 失败 / 1 跳过；拒绝路径从 17 条 ACK 降到 **UnitID 3 条、CRC/长度各 1 条**（未知功能码仍静默）。固件仍缺：只读与范围校验（`0x2023`/`0x2025` 任意值都收）、`0x3000/0x4000` 读回未初始化内存、`0x2057` 恒 0 且无上报。**新发现 P1**：预设初始化整体右移 2 字——`0x205D..0x2073` 恰好等于参数表 `0x205B..0x2071` 的默认值序列（23/23），疑似固件结构体比协议地址表少 4 B，需固件确认 DSP 侧取值是否也偏移；另预设名按小端存（`Factory1 Preset 1`）、EQ 前 7 段默认频点 3 处与表不一致（20/1000/2000 vs 50/2000/5000）。收尾用 `scripts/probes/real6-restore.py` 把 76 项 rw 参数还原为参数表默认值（0 失配）。详见 `Document/Update/Alpha/v1.1.0/真机联调报告-第六轮.md`，取证 `artifacts/real6/`，探针 `scripts/probes/real6-*`。另注：用户自己的 MIC STUDIO 实例持有 `.userdata` 单实例锁时，探针要换独立 userData（本轮用 `D:\Temp\ud6`）。
 
 **DFU 包格式（协议《DFU固件升级通讯协议说明_20261026》）**：包首「进入 DFU」帧有两种形态——旧 SigmaBus `C4 0B 00 00 03 08 10 01 00 15 FF`，或 2026-10-26 起的新 Modbus 帧 `00 10 00 0A 10 08 00 01 8D 09`；`device/dfu/image.ts` 的 `detectPackageHeader()` 两种都收，`ParsedImage.headerKind` 记录形态，`frames[0]` 仍是包首帧。信息帧体固件只读前 81 B（出厂包 = 81 / 整帧 90），协议文档写的 85 / 94 是笔误，解析器两种长度都接受。**主机侧已补上「进 DFU 后等设备重枚举 + 重开句柄」与「设备停在 Bootloader 时保留原始通道继续升级」**（2026-10-27，见已知坑 28/30 与 `Document/Update/Alpha/v1.1.0/修复记录-真机问题-20261027.md`）；第五轮（2026-11-04）已完成 V0.0.4 完整升级（App 正常路径 + Bootloader 直连），见 `Document/Update/Alpha/v1.1.0/真机DFU升级测试-第五轮.md`；评审见 `Document/Protocol/DFU协议符合性评审_20261026.md`。
 
@@ -475,6 +483,20 @@ Fix / 绕过：
 另：**DSH 以 `workspace-write` 运行时 Electron 起不来**（子进程建不了命名管道 → `FATAL:platform_channel`），此时真机取证只能走 ctypes 直连 HID（`tools/dfu/hidwin.py`）。把文件策略放到 `danger-full-access` 后 `electron.exe . --no-sandbox` 可正常起窗口，`--exec-file` 探针能直接碰硬件（2026-10-27 第三轮联调即以此取证，见 `Document/Update/Alpha/v1.1.0/真机联调报告-第三轮.md`）。设备信息区（`0x39000`）为空时 `JYM001` 信息帧必被 `0x01` 拒，只能改内存帧走 `000000` 通用升级。
 
 > 2026-11-04 第五轮：App 内 DFU 已补齐重枚举/救砖入口并完成 V0.0.4；本坑里的“App 内仍缺”与“必须走 ctypes”只适用于 2026-10-27 那轮，现在的 Electron 探针也能直接跑。上面的 4 KB 擦除重发/DataCount 补偿仍适用于 Bootloader 底层。
+
+### 31. 固件升级失败 / 拔线后链路卡在“升级中”，只能重开 app（2026-11-07 修）
+
+症状（用户反馈）：固件升级失败，或者升级中/平时把线拔了，之后点「立即重试」「重插后再试」「设备页打开」都没反应，必须关掉 app 重开。
+
+根因（四处叠加，均已修）：
+1. **失败收场不恢复链路**：`FirmwareController.start()` 原来只在 `run()` 成功后才调 `resumeAfterDfu()`；失败/中止只 `setDfuActive(false)`，于是 `DeviceLink.status` 永久停在 `'dfu'`、`WebHidTransport._suspended` 永久为真。后果：参数写入被 `write()` 静默丢弃、`disconnect` 被 `_onDisconnect` 吞掉、`_handleDrop()` 因 `status==='dfu'` 直接 return，界面却还显示“已同步/已连接”。
+2. **`open()` 在挂起时直接返回**：`suspend()` 不改 `state`（仍 `'ready'`），`DeviceLink.attach()` 里的 `transport.open()` 命中 `state === 'ready'` 早退，`readAll()` 的入站字节又被 `_suspended` 拦掉 → 每一条回读都超时 → `_failSync()`。设备页「打开」因此永远失败。
+3. **重试不重新枚举句柄**：`DfuSession.reconnect`（= `DeviceLink.awaitReenumeration()`）只在 **EnterDfu 拿到 ACK 之后**调用；句柄已死时 EnterDfu 的 `sendReport` 直接抛 → `channel` 错误 → 永远走不到重枚举。`replugAndRetry()` 又只是 `attach(getState().deviceId)`，用会话里的旧句柄，从不 `refresh()`。
+4. **设备表不跟热插拔**：`WebHidSession` 没有 `hid.connect/disconnect` 订阅，拔插后 `devices[].opened` 与句柄表都是旧值；`attach()` 也没刷新，所以“打开”必然对着死句柄。
+
+Fix（已落盘）：`FirmwareController.start()` 发第一帧前 `link.reacquire()`（失败 → 新错误码 `unplugged`，零出帧），`finally` 里按 `suspended` 调 `link.recoverAfterDfuFailure()`；`DeviceLink` 新增 `reacquire()`（`refresh()` + 换句柄 `reopen()`，通道丢了就重建裸通道）、`recoverAfterDfuFailure()`（能同步就回 ready，否则保留裸通道 + `device.warn.bootloader`）、`attach()` 走 `_openHandle()`（旧句柄打不开就刷新一次再开）；`WebHidTransport` 新增 `cancelDfu()` / `handleLost()`，`_fail()` 清挂起，`open()` 在挂起时改走 `resume()`；固件抽屉加「中止升级」。回归用例：`tests/unit/{transport,link,dfu/controller,firmware-view}.test.ts`。
+
+排查口径：**再看到“升级失败后只能用重开 app 解决”，先看 `link.getState().status` 是否还是 `'dfu'`、`transport.stats().outFrames` 是否在界面操作时完全不动**——这两条同时成立就是本坑复发（或又出现新的“失败路径不恢复”分支）。
 
 ## Domain constants
 

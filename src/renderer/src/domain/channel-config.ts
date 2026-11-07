@@ -14,6 +14,8 @@ export interface ChannelConfig {
   readonly vids: readonly number[];
   readonly pids: readonly number[];
   readonly diagLimit: number;
+  /** 后台自动连接真机（VID/PID 匹配的上位机在系统里但没连上时主动连） */
+  readonly autoConnect: boolean;
 }
 
 /** 渲染进程 localStorage 键：逐字段存，坏掉一个字段不影响其余字段回读 */
@@ -25,6 +27,7 @@ export const CHANNEL_STORAGE_KEYS = {
   whitelist: 'micstudio.whitelist',
   useVidPid: 'micstudio.whitelist.useVidPid',
   diagLimit: 'micstudio.diagLimit',
+  autoConnect: 'micstudio.autoConnect',
 } as const;
 
 export const DEFAULT_BRIDGE_URL = 'ws://127.0.0.1:8765/ws';
@@ -57,6 +60,7 @@ export const DEFAULT_CHANNEL_CONFIG: ChannelConfig = {
   vids: [],
   pids: [],
   diagLimit: 500,
+  autoConnect: true,
 };
 
 export const CHANNEL_KINDS: readonly ChannelKind[] = ['mock', 'virtual', 'native'];
@@ -134,6 +138,14 @@ function normalizeUseVidPid(value: unknown): boolean {
   return DEFAULT_CHANNEL_CONFIG.useVidPid;
 }
 
+/** 自动连接默认开：老版本 localStorage 里没有这个键时必须落到"开"，而不是 false */
+function normalizeAutoConnect(value: unknown): boolean {
+  if (typeof value === 'boolean') return value;
+  if (value === '1' || value === 'true') return true;
+  if (value === '0' || value === 'false') return false;
+  return DEFAULT_CHANNEL_CONFIG.autoConnect;
+}
+
 /**
  * 白名单两种入参都接受：UI 的数组，以及 localStorage 里的 `HidWhitelist` 对象。
  * 显式空数组表示"全部拒绝"，与被改坏的脏数据（回落默认）区分开。
@@ -188,6 +200,7 @@ export function normalizeChannelConfig(raw: unknown): ChannelConfig {
     vids,
     pids,
     diagLimit: normalizeDiagLimit(source.diagLimit),
+    autoConnect: normalizeAutoConnect(source.autoConnect),
   };
 }
 
@@ -203,6 +216,7 @@ export function loadChannelConfig(storage?: StorageReader): ChannelConfig {
     whitelist: storedWhitelist,
     useVidPid: readItem(target, CHANNEL_STORAGE_KEYS.useVidPid),
     diagLimit: readItem(target, CHANNEL_STORAGE_KEYS.diagLimit),
+    autoConnect: readItem(target, CHANNEL_STORAGE_KEYS.autoConnect),
   });
 }
 
@@ -224,6 +238,7 @@ export function saveChannelConfig(config: ChannelConfig, storage?: StorageWriter
     target.setItem(CHANNEL_STORAGE_KEYS.whitelist, JSON.stringify(stored));
     target.setItem(CHANNEL_STORAGE_KEYS.useVidPid, normalized.useVidPid ? '1' : '0');
     target.setItem(CHANNEL_STORAGE_KEYS.diagLimit, String(normalized.diagLimit));
+    target.setItem(CHANNEL_STORAGE_KEYS.autoConnect, normalized.autoConnect ? '1' : '0');
   } catch {
     // 配额耗尽 / 隐私模式：配置退化成会话内有效，不当致命错误
   }

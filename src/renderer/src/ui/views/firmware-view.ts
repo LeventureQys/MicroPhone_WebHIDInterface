@@ -18,6 +18,8 @@ export interface FirmwareSource {
   setConfirmed(confirmed: boolean): void;
   start(): Promise<void>;
   replugAndRetry(): Promise<void>;
+  /** 中止（只在收尾之前有效）；不提供时界面不画中止按钮 */
+  abort?(): void;
 }
 
 export interface FirmwareViewDeps {
@@ -28,6 +30,8 @@ export interface FirmwareViewDeps {
 
 const ACCENT = '#f0a65b';
 const RUNNING_PHASES = new Set(['entering', 'probing', 'writing', 'settling', 'verifying']);
+/** 可以中止的阶段：`0x05` 之后设备已经在收尾，主机打断它只会更糟 */
+const ABORTABLE_PHASES = new Set(['entering', 'probing', 'writing']);
 const EXIT_PHASES = new Set(['failed', 'aborted']);
 
 function hex2(value: number): string {
@@ -127,9 +131,13 @@ export function createFirmwareView(deps: FirmwareViewDeps): HTMLElement {
     void controller.start().catch(() => undefined);
   });
   startBtn.disabled = true;
+  // 升级卡住时（设备不回执、写块反复超时）用户需要一条退路：中止后走失败收场，
+  // 通道会被恢复，不必杀掉整个 app（主进程在升级期间拦关窗）
+  const abortBtn = button(t('fw.abort'), 'ghost', 'fw-abort', () => controller.abort?.());
+  abortBtn.hidden = true;
   const startRow = document.createElement('div');
   startRow.className = 'device-actions fw-actions';
-  startRow.append(startBtn);
+  startRow.append(startBtn, abortBtn);
 
   // -- 进度 ---------------------------------------------------------------
   const progressBox = document.createElement('div');
@@ -235,6 +243,7 @@ export function createFirmwareView(deps: FirmwareViewDeps): HTMLElement {
     }
     retryBtn.hidden = !EXIT_PHASES.has(state.phase);
     replugBtn.hidden = !EXIT_PHASES.has(state.phase);
+    abortBtn.hidden = !(controller.abort !== undefined && ABORTABLE_PHASES.has(state.phase));
     // 收尾期正在等设备重启：这时候关掉抽屉会让人以为升级结束了（§4.4）
     closeBtn.disabled = state.phase === 'settling';
   }

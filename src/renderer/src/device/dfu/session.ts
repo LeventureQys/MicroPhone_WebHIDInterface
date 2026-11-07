@@ -83,7 +83,12 @@ export interface DfuError {
     | 'restartExhausted'
     | 'settle'
     | 'verify'
-    | 'channel';
+    | 'channel'
+    /**
+     * 还没发第一帧就判定设备不可用（拔线后句柄失效、重新打开也失败）。
+     * 由 `FirmwareController` 在 `reacquire()` 失败时给出，会话本身不产生这个错误。
+     */
+    | 'unplugged';
   readonly status?: number;
   readonly round?: number;
   readonly blockIndex?: number;

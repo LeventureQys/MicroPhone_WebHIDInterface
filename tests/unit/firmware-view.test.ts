@@ -25,6 +25,7 @@ class FakeController implements FirmwareSource {
   readonly selectCalls: File[] = [];
   startCalls = 0;
   replugCalls = 0;
+  abortCalls = 0;
   acceptSelect = true;
 
   private current: FirmwareState = { ...IDLE };
@@ -61,6 +62,10 @@ class FakeController implements FirmwareSource {
 
   async replugAndRetry(): Promise<void> {
     this.replugCalls += 1;
+  }
+
+  abort(): void {
+    this.abortCalls += 1;
   }
 
   /** 测试用：直接推进状态并广播（等价于真实控制器的 patch） */
@@ -216,5 +221,26 @@ describe('firmware view', () => {
     expect(root.querySelector('.fw-error-title')?.textContent).toBe(t('fw.error.noDevice'));
     expect(root.querySelector<HTMLElement>('.fw-info')?.hidden).toBe(true);
     expect(root.querySelector<HTMLButtonElement>('.fw-start')?.disabled).toBe(true);
+  });
+
+  it('7. 升级中显示「中止升级」，点击调用 controller.abort()；收尾期与空闲时隐藏', async () => {
+    const controller = new FakeController();
+    const { root } = mount(controller);
+    pickFile(root);
+    await settle();
+    const abort = root.querySelector<HTMLButtonElement>('.fw-abort');
+    expect(abort?.hidden).toBe(true);
+
+    controller.push({
+      phase: 'writing',
+      progress: { phase: 'writing', blockIndex: 1, blockTotal: 4, percent: 30, round: 1, message: 'fw.phase.writing' },
+    });
+    expect(abort?.hidden).toBe(false);
+    abort?.click();
+    expect(controller.abortCalls).toBe(1);
+
+    // 0x05 之后设备已经在收尾，主机打断它只会更糟
+    controller.push({ phase: 'settling' });
+    expect(abort?.hidden).toBe(true);
   });
 });

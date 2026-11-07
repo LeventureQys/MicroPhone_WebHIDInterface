@@ -4,13 +4,15 @@ import './styles/layout.css';
 import './styles/components.css';
 
 import { createShell, type Shell } from './app/shell';
+import { AudioLevelMeter } from './device/audio-meter';
+import { AutoConnector } from './device/auto-connect';
 import { ChannelTransport } from './device/channel-transport';
 import { DiagnosticsHub } from './device/diagnostics';
 import { FirmwareController } from './device/dfu/controller';
 import { DeviceLink } from './device/link';
 import { MockTransport } from './device/mock-transport';
 import { createWebHidSession } from './device/webhid';
-import { loadChannelConfig } from './domain/channel-config';
+import { createChannelConfigStore, loadChannelConfig } from './domain/channel-config';
 import { AppStore } from './domain/state';
 import { currentLang } from './i18n';
 import { createAdvancedView } from './ui/views/advanced-view';
@@ -35,13 +37,31 @@ async function boot(): Promise<void> {
   const store = new AppStore(channel, { lang: currentLang() });
   // HID 会话比视图活得久：切语言或开关抽屉时连接不断
   const webhid = createWebHidSession({ bridgeUrl: readBridgeUrl() });
-  const link = new DeviceLink({ session: webhid, channel, mock, store });
+  // 真机固件不上报 0x2057（恒 0）：电平改由同一台设备的音频输入算，连上就采、断开就停
+  const audioMeter = new AudioLevelMeter();
+  const link = new DeviceLink({ session: webhid, channel, mock, store, audioLevels: audioMeter });
   await channel.open();
+
+  // 后台自动连接（默认开）：系统里插着 M001（VID 0x0A67 / PID 0x0010）但上位机还没连上时
+  // 主动连起来；设置页的开关实时改这里的行为（真机 2026-11 需求）
+  const channelConfig = createChannelConfigStore();
+  const autoConnect = new AutoConnector({
+    link,
+    session: webhid,
+    onEvent: (message) => console.log('[auto-connect]', message),
+  });
+  autoConnect.setEnabled(channelConfig.get().autoConnect);
+  channelConfig.subscribe((config) => autoConnect.setEnabled(config.autoConnect));
 
   // 诊断数据面：参数链路的帧日志进 hub，DFU 会话的帧日志也进同一个 hub（诊断卡只看一个来源）
   const hub = new DiagnosticsHub({ ringSize: loadChannelConfig().diagLimit });
   channel.onDiag((entry) => hub.push(entry));
-  const firmware = new FirmwareController({ link, onDiag: (entry) => hub.push(entry) });
+  const firmware = new FirmwareController({
+    link,
+    onDiag: (entry) => hub.push(entry),
+    // 升级期间暂停后台自动连接，收场后再武装
+    autoConnect,
+  });
 
   // 抽屉之间互相跳转（设备 → 固件 / 设置），回调里用 shell 自己的句柄
   let shellRef: Shell | null = null;
@@ -54,11 +74,12 @@ async function boot(): Promise<void> {
       createDeviceView(webhid, {
         link,
         hub,
+        autoConnect,
         onOpenFirmware: () => shellRef?.openPanel('firmware'),
         onOpenSettings: () => shellRef?.openPanel('settings'),
       }),
     firmware: () => createFirmwareView({ controller: firmware, onClose: () => shellRef?.closePanel() }),
-    settings: () => createSettingsView(store),
+    settings: () => createSettingsView(store, { configStore: channelConfig }),
   });
   shellRef = shell;
   mount.replaceChildren(shell.root);

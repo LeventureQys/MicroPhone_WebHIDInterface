@@ -11,6 +11,11 @@ import type {
   TransportState,
 } from './transport';
 
+/** 外部电平源：真机固件不上报电平时的替代数据源（`AudioLevelMeter` 满足它） */
+export interface LevelSource {
+  onLevels(cb: (frame: LevelFrame) => void): () => void;
+}
+
 /**
  * 单一 Transport 门面：内部在 Mock 与真实设备之间切换，`AppStore` 只认这一个对象。
  *
@@ -21,6 +26,8 @@ export class ChannelTransport implements Transport {
   private _active: Transport;
   private _state: TransportState;
   private _detachers: Array<() => void> = [];
+  private _levelSource: LevelSource | null = null;
+  private _levelSourceOff: (() => void) | null = null;
 
   private readonly _levelListeners = new Set<(frame: LevelFrame) => void>();
   private readonly _stateListeners = new Set<(state: TransportState) => void>();
@@ -41,6 +48,26 @@ export class ChannelTransport implements Transport {
 
   active(): Transport {
     return this._active;
+  }
+
+  /**
+   * 挂 / 摘外部电平源；挂着时通道自身的电平帧让位。
+   *
+   * 真机固件不上报 `0x2057`（消息里恒 0），电平改由同一台设备的音频输入算；
+   * 对界面来说数据源换了，但订阅出口（`onLevels`）与 `LevelFrame` 形状不变。
+   */
+  useLevelSource(source: LevelSource | null): void {
+    if (this._levelSource === source) return;
+    this._levelSourceOff?.();
+    this._levelSourceOff = null;
+    this._levelSource = source;
+    if (source === null) return;
+    this._levelSourceOff = source.onLevels((frame) => this._emit(this._levelListeners, frame));
+  }
+
+  /** 当前是否有外部电平源（诊断 / 单测用） */
+  levelSource(): LevelSource | null {
+    return this._levelSource;
   }
 
   /**
@@ -129,7 +156,11 @@ export class ChannelTransport implements Transport {
 
   private _attach(target: Transport): void {
     this._detachers = [
-      target.onLevels((frame) => this._emit(this._levelListeners, frame)),
+      target.onLevels((frame) => {
+        // 音频输入在采时，设备上报的 0x2057 恒 0 只会把电平条压到最低，直接让位
+        if (this._levelSource !== null) return;
+        this._emit(this._levelListeners, frame);
+      }),
       target.onStateChange((state) => {
         this._state = state;
         this._emit(this._stateListeners, state);

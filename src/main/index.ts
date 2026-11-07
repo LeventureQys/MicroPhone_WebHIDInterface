@@ -36,6 +36,10 @@ if (userDataOverride) {
   }
 }
 
+// 电平条改用麦克风采集（Web Audio）：不关自动播放策略时 AudioContext 可能停在 suspended，
+// AnalyserNode 不推进 → 电平永远 -96。必须在 ready 之前设置。
+app.commandLine.appendSwitch('autoplay-policy', 'no-user-gesture-required');
+
 // 启动日志：打包产物没有控制台，出问题只能靠这份文件定位
 // 写入必须"永不抛错"：调用方把 stdout 接成管道后关闭（`$out = & electron …`）、
 // 另一个实例并发持有同一份文件、磁盘写满，都会让 console.log/appendFileSync 出错。

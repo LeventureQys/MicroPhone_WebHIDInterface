@@ -59,7 +59,7 @@ describe('settings view — 通道卡', () => {
     vi.unstubAllGlobals();
   });
 
-  it('渲染 6 个控件，初始值来自 configStore.get()', () => {
+  it('渲染 7 个控件，初始值来自 configStore.get()', () => {
     const store = fakeStore(
       configWith({
         kind: 'virtual',
@@ -71,6 +71,7 @@ describe('settings view — 通道卡', () => {
         vids: [0x352f],
         pids: [0x10],
         diagLimit: 300,
+        autoConnect: false,
       }),
     );
     const view = mount(store);
@@ -78,7 +79,7 @@ describe('settings view — 通道卡', () => {
     const controls = Array.from(view.querySelectorAll('[data-channel-control]')).map((node) =>
       node.getAttribute('data-channel-control'),
     );
-    expect(controls).toEqual(['kind', 'bridge', 'report', 'whitelist', 'vidpid', 'diagLimit']);
+    expect(controls).toEqual(['kind', 'bridge', 'report', 'whitelist', 'vidpid', 'diagLimit', 'autoConnect']);
 
     expect(view.querySelector('[data-channel-control="kind"] .seg-btn.is-active')?.getAttribute('data-value')).toBe(
       'virtual',
@@ -96,8 +97,27 @@ describe('settings view — 通道卡', () => {
       '[data-channel-control="vidpid"] input[type="checkbox"]',
     );
     expect(switchInput?.checked).toBe(true);
+    // 自动连接开关：默认开，这里配置成关
+    const autoInput = view.querySelector<HTMLInputElement>(
+      '[data-channel-control="autoConnect"] input[type="checkbox"]',
+    );
+    expect(autoInput?.checked).toBe(false);
 
     expect(store.calls).toHaveLength(0);
+  });
+
+  it('切换自动连接开关 → configStore.set 收到 autoConnect', () => {
+    const store = fakeStore();
+    const view = mount(store);
+    const input = view.querySelector<HTMLInputElement>('[data-channel-control="autoConnect"] input[type="checkbox"]');
+
+    expect(input?.checked).toBe(true);
+    if (input !== null) {
+      input.checked = false;
+      input.dispatchEvent(new Event('change'));
+    }
+
+    expect(store.calls).toEqual([{ autoConnect: false }]);
   });
 
   it('改通道类型 → configStore.set 收到 kind: virtual', () => {

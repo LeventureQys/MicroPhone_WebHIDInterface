@@ -1,8 +1,9 @@
 import { describe, expect, it } from 'vitest';
+import { AudioMeterError } from '../../src/renderer/src/device/audio-meter';
 import { ChannelTransport } from '../../src/renderer/src/device/channel-transport';
-import { DeviceLink } from '../../src/renderer/src/device/link';
+import { DeviceLink, type AudioLevelSource } from '../../src/renderer/src/device/link';
 import { MockTransport } from '../../src/renderer/src/device/mock-transport';
-import type { DeviceSnapshot, ParamReadResult } from '../../src/renderer/src/device/transport';
+import type { DeviceSnapshot, LevelFrame, ParamReadResult } from '../../src/renderer/src/device/transport';
 import { WebHidTransport } from '../../src/renderer/src/device/webhid-transport';
 import type { WebHidSession } from '../../src/renderer/src/device/webhid/session';
 import type {
@@ -44,14 +45,25 @@ const READBACK: ParamReadResult = {
   },
 };
 
+/** 旧句柄（设备已拔掉）：真机上 `open()` 会抛，会话侧吞掉错误、句柄保持未打开 */
+class DeadHandle extends FakeHidDevice {
+  async open(): Promise<void> {
+    throw new Error('The device must be opened first.');
+  }
+}
+
 /** WebHidSession 替身：只实现 DeviceLink 用到的那几个方法 */
 class FakeSession {
-  handle = new FakeHidDevice({ deviceId: 'vdevice', productName: 'Virtual M001' });
+  handle: FakeHidDevice = new FakeHidDevice({ deviceId: 'vdevice', productName: 'Virtual M001' });
   readonly opened: string[] = [];
   readonly closed: string[] = [];
   readonly requestedFilters: Array<readonly WebHidUsageFilter[] | undefined> = [];
   readonly changeListeners = new Set<(state: WebHidSessionState) => void>();
   refreshCount = 0;
+  /** 模拟"设备的 open() 失败"（拔线后旧句柄打不开） */
+  failOpen = false;
+  /** 下一次 refresh() 时换成这根新句柄（模拟真机拔插后系统给出的新 HIDDevice） */
+  pendingHandle: FakeHidDevice | null = null;
 
   private _state: WebHidSessionState;
 
@@ -86,7 +98,13 @@ class FakeSession {
 
   async openDevice(id: string): Promise<void> {
     this.opened.push(id);
-    this.handle.opened = true;
+    // 真实会话在 open 失败时只记 error，句柄保持未打开
+    if (this.failOpen) return;
+    try {
+      await this.handle.open();
+    } catch {
+      // 与 WebHidSession.openDevice 一致：打开失败不抛，只把错误记进会话状态
+    }
   }
 
   async closeDevice(id: string): Promise<void> {
@@ -96,6 +114,10 @@ class FakeSession {
 
   async refresh(): Promise<void> {
     this.refreshCount += 1;
+    if (this.pendingHandle !== null) {
+      this.handle = this.pendingHandle;
+      this.pendingHandle = null;
+    }
   }
 
   /** 模拟设备复位重枚举：同一个 deviceId 换了新的句柄对象 */
@@ -119,6 +141,49 @@ class FakeSession {
     this._state = Object.freeze({ ...this._state, status });
     for (const cb of [...this.changeListeners]) cb(this._state);
   }
+}
+
+/** 音频电平源替身：记录 start/stop 与提示词，用例可手动推帧 */
+class FakeAudio implements AudioLevelSource {
+  hints: readonly string[] = [];
+  started = 0;
+  stopped = 0;
+  fail: Error | null = null;
+  private readonly listeners = new Set<(frame: LevelFrame) => void>();
+
+  async start(hints: readonly string[]): Promise<{ label: string; matched: boolean }> {
+    this.started += 1;
+    this.hints = [...hints];
+    if (this.fail !== null) throw this.fail;
+    return { label: '麦克风 (USB Audio Device)', matched: true };
+  }
+
+  stop(): void {
+    this.stopped += 1;
+  }
+
+  onLevels(cb: (frame: LevelFrame) => void): () => void {
+    this.listeners.add(cb);
+    return () => {
+      this.listeners.delete(cb);
+    };
+  }
+
+  emit(frame: LevelFrame): void {
+    for (const cb of [...this.listeners]) cb(frame);
+  }
+}
+
+function levelFrame(inputRms: number): LevelFrame {
+  return {
+    t: 0,
+    inputRms,
+    inputPeak: inputRms,
+    outputRms: -96,
+    outputPeak: -96,
+    inputValid: true,
+    outputValid: false,
+  };
 }
 
 function setup(options: { readResult?: ParamReadResult; failOpen?: boolean } = {}) {
@@ -454,5 +519,186 @@ describe('DeviceLink', () => {
 
     await link.detach();
     expect(link.transport()).toBeNull();
+  });
+
+  // ---- DFU 失败 / 拔线后的恢复（真机 2026-11 反馈：升级失败后只能重开 app）----------
+
+  function setupReal(options: { readonly audio?: AudioLevelSource } = {}) {
+    const session = new FakeSession('native');
+    bindRegisterDevice(session.handle, createFakeRegisters());
+    const mock = new MockTransport();
+    const channel = new ChannelTransport(mock);
+    const store = new AppStore(channel, { lang: 'zh' });
+    const transport = new WebHidTransport({
+      device: session.handle,
+      // 超时压到毫秒级：这些用例只关心"挂起有没有被清掉"，不关心真实请求时长
+      timing: { requestTimeoutMs: 15, requestRetries: 0, writeThrottleMs: 5 },
+    });
+    const link = new DeviceLink({
+      session: session as unknown as WebHidSession,
+      channel,
+      mock,
+      store,
+      createTransport: () => transport,
+      audioLevels: options.audio,
+    });
+    return { session, channel, store, transport, link };
+  }
+
+  function delay(ms: number): Promise<void> {
+    return new Promise((resolve) => {
+      setTimeout(resolve, ms);
+    });
+  }
+
+  it('recovers the parameter channel after a failed upgrade instead of staying suspended', async () => {
+    const { link, store, transport, session } = setupReal();
+    await link.attach('vdevice');
+    await link.suspendForDfu();
+
+    await link.recoverAfterDfuFailure();
+
+    expect(link.getState().status).toBe('ready');
+    expect(store.get().sync).toBe('ready');
+    // 挂起没清掉时这里一帧都发不出去（write() 被 `_suspended` 静默丢弃）
+    const before = session.handle.sent.length;
+    transport.write([{ id: 'enc.Level', value: 1 }]);
+    await delay(40);
+    expect(session.handle.sent.length).toBeGreaterThan(before);
+  });
+
+  it('re-attaching in the device page recovers instead of failing the sync', async () => {
+    const { link, store } = setupReal();
+    await link.attach('vdevice');
+    await link.suspendForDfu();
+
+    // 升级失败后用户回设备页点「打开」：以前 open() 直接返回，回读必然超时
+    await link.attach('vdevice');
+
+    expect(link.getState().status).toBe('ready');
+    expect(store.get().sync).toBe('ready');
+  });
+
+  it('keeps the raw channel but reports a sync error when the device vanished during the upgrade', async () => {
+    const { link, store, transport, session } = setupReal();
+    await link.attach('vdevice');
+    await link.suspendForDfu();
+    session.handle.opened = false;
+    session.handle.dispatchEvent(new Event('disconnect'));
+
+    await link.recoverAfterDfuFailure();
+
+    expect(link.getState().status).toBe('error');
+    expect(link.getState().errorCode).toBe('sync');
+    // 设备可能停在 Bootloader：通道要留着让固件抽屉接着刷
+    expect(link.transport()).toBe(transport);
+    expect(link.getState().warning).toEqual({ key: 'device.warn.bootloader' });
+    expect(store.get().sync).toBe('error');
+  });
+
+  it('reacquires the newly enumerated handle before a retry', async () => {
+    const { link, transport, session } = setupReal();
+    await link.attach('vdevice');
+    await link.suspendForDfu();
+    // 复位重枚举：旧句柄随断开失效，系统给出一根新句柄
+    session.handle.opened = false;
+    session.handle.dispatchEvent(new Event('disconnect'));
+    const next = new FakeHidDevice({ deviceId: 'vdevice', productName: 'Virtual M001 Bootloader' });
+    bindRegisterDevice(next, createFakeRegisters());
+    session.replaceHandle(next);
+
+    const ok = await link.reacquire();
+
+    expect(ok).toBe(true);
+    expect(session.refreshCount).toBe(1);
+    expect(transport.device).toBe(next);
+    expect(next.opened).toBe(true);
+    expect(transport.handleLost()).toBe(false);
+    // reacquire 只补通道，不改"升级中 / 出错"这类业务状态
+    expect(link.getState().status).toBe('dfu');
+  });
+
+  it('reports failure when the device cannot be reopened', async () => {
+    const { link, session } = setupReal();
+    await link.attach('vdevice');
+    await link.suspendForDfu();
+    session.handle.opened = false;
+    session.handle.dispatchEvent(new Event('disconnect'));
+    const next = new FakeHidDevice({ deviceId: 'vdevice' });
+    session.replaceHandle(next);
+    session.failOpen = true;
+
+    expect(await link.reacquire()).toBe(false);
+    expect(next.opened).toBe(false);
+  });
+
+  it('opens the re-enumerated handle when re-attaching after a replug', async () => {
+    const { link, store, session } = setupReal();
+    await link.attach('vdevice');
+
+    // 拔线：旧句柄随设备销毁，但会话表里还留着它；插回后系统给出一根新句柄
+    const dead = new DeadHandle({ deviceId: 'vdevice', productName: 'Virtual M001' });
+    const next = new FakeHidDevice({ deviceId: 'vdevice', productName: 'Virtual M001' });
+    bindRegisterDevice(next, createFakeRegisters());
+    session.handle = dead;
+    session.pendingHandle = next;
+
+    // 用户回设备页直接点「打开」：不能要求他先手动点「刷新」
+    await link.attach('vdevice');
+
+    expect(link.getState().status).toBe('ready');
+    expect(store.get().sync).toBe('ready');
+    expect(session.refreshCount).toBe(1);
+    expect(next.opened).toBe(true);
+  });
+
+  // ---- 电平来源：真机固件不上报 0x2057，改采同一台设备的音频输入 -------------------
+
+  it('starts the audio meter with the device identity hints after attaching', async () => {
+    const audio = new FakeAudio();
+    const { link, channel } = setupReal({ audio });
+    const frames: LevelFrame[] = [];
+    channel.onLevels((frame) => frames.push(frame));
+
+    await link.attach('vdevice');
+    await delay(0);
+
+    expect(audio.started).toBe(1);
+    expect(audio.hints).toEqual(['Virtual M001', 'JYM001', 'M001']);
+    expect(link.getState().audio).toEqual({
+      label: '麦克风 (USB Audio Device)',
+      source: 'audio',
+      matched: true,
+    });
+    expect(channel.levelSource()).toBe(audio);
+
+    audio.emit(levelFrame(-9));
+    expect(frames.at(-1)?.inputRms).toBe(-9);
+  });
+
+  it('falls back to the device-reported level when the microphone is unavailable', async () => {
+    const audio = new FakeAudio();
+    audio.fail = new AudioMeterError('denied', 'Permission denied');
+    const { link, channel } = setupReal({ audio });
+
+    await link.attach('vdevice');
+    await delay(0);
+
+    expect(link.getState().audio).toEqual({ label: null, source: 'device', error: 'denied' });
+    expect(channel.levelSource()).toBeNull();
+  });
+
+  it('stops the audio meter when the device is detached', async () => {
+    const audio = new FakeAudio();
+    const { link, channel } = setupReal({ audio });
+    await link.attach('vdevice');
+    await delay(0);
+    expect(channel.levelSource()).toBe(audio);
+
+    await link.detach();
+
+    expect(audio.stopped).toBeGreaterThan(0);
+    expect(channel.levelSource()).toBeNull();
+    expect(link.getState().audio).toBeNull();
   });
 });

@@ -163,4 +163,39 @@ describe('ChannelTransport', () => {
       ],
     ]);
   });
+
+  it('lets an external level source take over and hands the channel back afterwards', () => {
+    const device = new FakeTransport('webhid');
+    const channel = new ChannelTransport(device);
+    const frames: LevelFrame[] = [];
+    channel.onLevels((item) => frames.push(item));
+
+    const listeners = new Set<(item: LevelFrame) => void>();
+    const source = {
+      onLevels: (cb: (item: LevelFrame) => void): (() => void) => {
+        listeners.add(cb);
+        return () => {
+          listeners.delete(cb);
+        };
+      },
+    };
+    channel.useLevelSource(source);
+    expect(channel.levelSource()).toBe(source);
+
+    // 音频源在采时，设备上报的 0x2057 不再转发（恒 0 会把电平条压到最低）
+    device.emitLevels(frame(-20));
+    expect(frames).toHaveLength(0);
+
+    for (const cb of [...listeners]) cb(frame(-6.5));
+    expect(frames).toHaveLength(1);
+    expect(frames[0].inputRms).toBe(-6.5);
+
+    // 摘掉外部源后设备上报恢复
+    channel.useLevelSource(null);
+    expect(channel.levelSource()).toBeNull();
+    expect(listeners.size).toBe(0);
+    device.emitLevels(frame(-40));
+    expect(frames).toHaveLength(2);
+    expect(frames[1].inputRms).toBe(-40);
+  });
 });

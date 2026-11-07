@@ -65,6 +65,23 @@ function deviceId(handle: WebHidDeviceHandle, mode: WebHidMode, index: number): 
   return `${mode}-${vid}-${pid}-${index}`;
 }
 
+/** 设备表是否与上一次完全一致：自动连接按秒轮询时用它跳过无意义的重建与重绘 */
+function sameDevices(left: readonly WebHidDeviceSummary[], right: readonly WebHidDeviceSummary[]): boolean {
+  if (left.length !== right.length) return false;
+  return left.every((item, index) => {
+    const other = right[index];
+    return (
+      other !== undefined &&
+      item.id === other.id &&
+      item.mode === other.mode &&
+      item.vendorId === other.vendorId &&
+      item.productId === other.productId &&
+      item.productName === other.productName &&
+      item.opened === other.opened
+    );
+  });
+}
+
 /**
  * WebHID 会话：把 webhid-kit 的两种通道收成一份可观察状态。
  *
@@ -183,19 +200,42 @@ export class WebHidSession extends EventTarget {
     this.#patch({ status: 'idle', devices: [], error: null, errorCode: null, lastReport: null });
   }
 
-  /** 重新枚举当前通道的设备（设备插拔后不必断开重连） */
+  /** 重新枚举当前通道的设备（设备插拔后不必断开重连）；设备表没变时不派发状态 */
   async refresh(): Promise<void> {
     if (this.#state.status !== 'ready') return;
+    const mode = this.#state.mode;
     try {
       const handles =
-        this.#state.mode === 'virtual' && this.#bridge
-          ? await this.#bridge.list()
-          : await this.#kit.nativeDevices();
-      this.#applyDevices(handles, this.#state.mode);
+        mode === 'virtual' && this.#bridge ? await this.#bridge.list() : await this.#kit.nativeDevices();
+      // 自动连接会按秒级频率调这里：设备表没变就既不重建句柄监听也不 patch，
+      // 否则设备页每拍都会重画整张列表
+      const preview = this.#preview(handles, mode);
+      if (this.#state.error === null && sameDevices(preview, this.#state.devices)) return;
+      this.#applyDevices(handles, mode);
       this.#patch({ error: null, errorCode: null });
     } catch (error) {
-      this.#patch({ error: messageOf(error), errorCode: this.#state.mode === 'virtual' ? 'bridge' : 'unknown' });
+      this.#patch({ error: messageOf(error), errorCode: mode === 'virtual' ? 'bridge' : 'unknown' });
     }
+  }
+
+  /**
+   * 只读探测真机：列出系统里能看到的 HID 设备，不改会话状态、不建设备句柄表。
+   *
+   * 后台自动连接用它：会话还没连上（idle/error）时也要能查"插着没有"，
+   * 而 `refresh()` 只在 status === 'ready' 时工作。id 与 `connect('native')` 合成的一致。
+   */
+  async probeNative(): Promise<readonly WebHidDeviceSummary[]> {
+    if (!this.#kit.nativeAvailable()) return Object.freeze([]);
+    try {
+      return this.#preview(await this.#kit.nativeDevices(), 'native');
+    } catch {
+      return Object.freeze([]);
+    }
+  }
+
+  /** 当前环境是否具备原生 WebHID（后台自动连接据此决定要不要轮询） */
+  nativeAvailable(): boolean {
+    return this.#kit.nativeAvailable();
   }
 
   /**
@@ -313,16 +353,32 @@ export class WebHidSession extends EventTarget {
 
   #summaries(): readonly WebHidDeviceSummary[] {
     const out: WebHidDeviceSummary[] = [];
-    for (const entry of this.#handles.values()) {
-      out.push({
-        id: entry.id,
-        mode: entry.mode,
-        productName: entry.handle.productName || `HID ${entry.handle.vendorId}/${entry.handle.productId}`,
-        vendorId: entry.handle.vendorId,
-        productId: entry.handle.productId,
-        opened: entry.handle.opened,
-      });
-    }
+    for (const entry of this.#handles.values()) out.push(this.#summaryFor(entry.handle, entry.id, entry.mode));
+    return Object.freeze(out);
+  }
+
+  /** 把句柄变成界面用的摘要；`#summaries()` 与只读探测共用同一套字段 */
+  #summaryFor(handle: WebHidDeviceHandle, id: string, mode: WebHidMode): WebHidDeviceSummary {
+    return {
+      id,
+      mode,
+      productName: handle.productName || `HID ${handle.vendorId}/${handle.productId}`,
+      vendorId: handle.vendorId,
+      productId: handle.productId,
+      opened: handle.opened,
+    };
+  }
+
+  /** 句柄列表 → 摘要列表（不改内部句柄表），用于"设备表有没有变"的比较 */
+  #preview(handles: readonly WebHidDeviceHandle[], mode: WebHidMode): readonly WebHidDeviceSummary[] {
+    const seen = new Set<string>();
+    const out: WebHidDeviceSummary[] = [];
+    handles.forEach((handle, index) => {
+      const id = deviceId(handle, mode, index);
+      if (seen.has(id)) return;
+      seen.add(id);
+      out.push(this.#summaryFor(handle, id, mode));
+    });
     return Object.freeze(out);
   }
 

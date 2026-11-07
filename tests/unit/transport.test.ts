@@ -404,6 +404,57 @@ describe('WebHidTransport', () => {
 
     expect(transport.state()).toBe('ready');
     expect(errors).toHaveLength(0);
+    // 但要把"这根句柄没了"记下来：升级失败后重试要据此换句柄（见 DeviceLink.reacquire）
+    expect(transport.handleLost()).toBe(true);
+  });
+
+  it('re-opens the parameter session when open() is called while suspended for DFU', async () => {
+    const { transport } = setup();
+    await transport.open();
+    await transport.suspend();
+    const before = transport.stats().outFrames;
+
+    // 升级失败后设备页再点「打开」：state 还是 ready，不能直接 return（那样回读必然超时）
+    await transport.open();
+
+    expect(transport.state()).toBe('ready');
+    expect(transport.stats().outFrames).toBeGreaterThan(before);
+  });
+
+  it('cancelDfu() puts writes and disconnect reporting back to work', async () => {
+    const { device, transport } = setup();
+    const errors: TransportError[] = [];
+    transport.onError((error) => errors.push(error));
+    await transport.open();
+    await transport.suspend();
+
+    transport.cancelDfu();
+    transport.write([{ id: 'enc.Level', value: 1 }]);
+    await vi.advanceTimersByTimeAsync(150);
+    expect(writeFrames(device)).toHaveLength(1);
+
+    // 拔线必须重新能被感知（挂起期间这个事件是被吞掉的）
+    device.dispatchEvent(new CustomEvent('disconnect'));
+    expect(transport.state()).toBe('error');
+    expect(errors.some((error) => error.kind === 'disconnected')).toBe(true);
+  });
+
+  it('fails fast instead of syncing a handle that was unplugged while suspended', async () => {
+    const { device, transport } = setup();
+    const errors: TransportError[] = [];
+    transport.onError((error) => errors.push(error));
+    await transport.open();
+    await transport.suspend();
+
+    device.dispatchEvent(new CustomEvent('disconnect'));
+    const sentBefore = device.sent.length;
+
+    await transport.resume();
+
+    expect(transport.state()).toBe('error');
+    // 一帧都不该往死句柄上发
+    expect(device.sent.length).toBe(sentBefore);
+    expect(errors.some((error) => error.kind === 'disconnected')).toBe(true);
   });
 
   it('keeps the link ready while the device is saving flash after a write', async () => {

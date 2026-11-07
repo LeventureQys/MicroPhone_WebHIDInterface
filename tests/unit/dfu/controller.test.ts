@@ -229,6 +229,11 @@ class FakeLink implements FirmwareLink {
   versionAfterResume = { x: 1, y: 2, z: 3, build: 0 };
   /** 进 DFU 后等重枚举的时间线动作；null 表示不记录（保持既有用例的 timeline 不变） */
   reconnect: (() => Promise<void>) | null = null;
+  /** 重试前重新取通道：默认复用当前通道，用例可在这里换成一根新句柄 */
+  onReacquire: (() => void) | null = null;
+  reacquires = 0;
+  recovers = 0;
+  status: LinkState['status'] = 'ready';
 
   constructor(
     private readonly timeline: string[],
@@ -243,10 +248,10 @@ class FakeLink implements FirmwareLink {
 
   getState(): LinkState {
     return {
-      status: 'ready',
+      status: this.status,
       mode: 'virtual',
       deviceId: this.deviceId,
-      sync: 'ready',
+      sync: this.status === 'ready' ? 'ready' : 'error',
       error: null,
       errorCode: null,
       device: this.device,
@@ -256,10 +261,12 @@ class FakeLink implements FirmwareLink {
 
   async suspendForDfu(): Promise<void> {
     this.timeline.push('suspend');
+    this.status = 'dfu';
   }
 
   async resumeAfterDfu(): Promise<void> {
     this.timeline.push('resume');
+    this.status = 'ready';
     this.device = snapshot(this.versionAfterResume);
   }
 
@@ -271,6 +278,18 @@ class FakeLink implements FirmwareLink {
   async awaitReenumeration(): Promise<void> {
     if (this.reconnect !== null) await this.reconnect();
   }
+
+  async reacquire(): Promise<boolean> {
+    this.reacquires += 1;
+    if (this.onReacquire !== null) this.onReacquire();
+    return this.channel !== null;
+  }
+
+  async recoverAfterDfuFailure(): Promise<void> {
+    this.recovers += 1;
+    // 失败收场：链路不再停在"升级中"
+    this.status = 'error';
+  }
 }
 
 interface Harness {
@@ -281,6 +300,8 @@ interface Harness {
   readonly clock: FakeClock;
   readonly timers: FakeTimers;
   readonly diags: DiagEntry[];
+  /** 后台自动连接的 pause/resume 调用顺序 */
+  readonly autoCalls: string[];
 }
 
 const diags: DiagEntry[] = [];
@@ -289,6 +310,7 @@ function makeHarness(options: { readonly withChannel?: boolean } = {}): Harness 
   closeHandlers.length = 0;
   diags.length = 0;
   const timeline: string[] = [];
+  const autoCalls: string[] = [];
   const channel = new FakeChannel(timeline);
   const link = new FakeLink(timeline, channel);
   if (options.withChannel === false) link.channel = null;
@@ -304,6 +326,14 @@ function makeHarness(options: { readonly withChannel?: boolean } = {}): Harness 
     setDfuActive: (active: boolean): void => {
       timeline.push(`dfuActive:${active}`);
     },
+    autoConnect: {
+      pause: (): void => {
+        autoCalls.push('pause');
+      },
+      resume: (): void => {
+        autoCalls.push('resume');
+      },
+    },
     onDiag: (entry) => diags.push(entry),
     onCloseBlocked: (cb: () => void): (() => void) => {
       closeHandlers.push(cb);
@@ -313,7 +343,7 @@ function makeHarness(options: { readonly withChannel?: boolean } = {}): Harness 
       };
     },
   });
-  return { controller, link, channel, timeline, clock, timers, diags };
+  return { controller, link, channel, timeline, clock, timers, diags, autoCalls };
 }
 
 const closeHandlers: Array<() => void> = [];
@@ -372,6 +402,11 @@ describe('FirmwareController', () => {
     expect(h.controller.state().phase).toBe('done');
     expect(h.controller.state().error).toBeNull();
     expect(h.controller.state().info?.version).toEqual({ x: 1, y: 2, z: 3 });
+    // 正常路径：先重新取通道（幂等），成功后由 resumeAfterDfu 收尾，不走失败收场
+    expect(h.link.reacquires).toBe(1);
+    expect(h.link.recovers).toBe(0);
+    // 升级期间暂停后台自动连接，结束后重新武装
+    expect(h.autoCalls).toEqual(['pause', 'resume']);
   });
 
   it('3c. EnterDfu ACK 后先等设备重枚举，再发信息帧', async () => {
@@ -431,6 +466,11 @@ describe('FirmwareController', () => {
     expect(h.timeline).toContain('dfuActive:false');
     expect(h.timeline.at(-1)).toBe('dfuActive:false');
     expect(h.timeline).not.toContain('resume');
+    // 失败收场：链路被拉回可恢复状态，不再是"升级中"（否则参数通道静默失效、只能重开 app）
+    expect(h.link.recovers).toBe(1);
+    expect(h.link.status).toBe('error');
+    // 失败后自动连接也要重新武装（resume），否则拔插后不会自动连回来
+    expect(h.autoCalls).toEqual(['pause', 'resume']);
   });
 
   it('5. 版本不一致 → verify 失败，但设备已回到正常工作模式', async () => {
@@ -561,5 +601,59 @@ describe('FirmwareController', () => {
       'resume',
       'dfuActive:false',
     ]);
+  });
+
+  it('7. 拔线后重试：先重新取通道，新句柄可用就能刷完', async () => {
+    const h = makeHarness();
+    await h.controller.selectFile(fileOf(PKG));
+    h.controller.setConfirmed(true);
+
+    // 旧句柄已经随拔线失效：发帧一律抛（模拟 HIDDevice 断开后的 sendReport）
+    const live = h.channel;
+    const dead = live.device;
+    const sendReport = dead.sendReport;
+    dead.sendReport = async (): Promise<void> => {
+      throw new Error('The device must be opened first.');
+    };
+    // 第一次 start：进不去 DFU，也换不到通道（设备还在"拔出"状态）
+    h.link.channel = null;
+    await h.controller.start();
+    expect(h.controller.state().phase).toBe('failed');
+    expect(h.controller.state().error?.kind).toBe('unplugged');
+    expect(h.link.recovers).toBe(0); // 一个字节都没发，也就没有挂起要收场
+
+    // 用户插回设备：reacquire 拿到一根新句柄（这里直接换回可用通道）
+    h.link.onReacquire = (): void => {
+      dead.sendReport = sendReport;
+      h.link.channel = live;
+    };
+    await h.controller.replugAndRetry();
+
+    expect(h.link.reacquires).toBe(2);
+    expect(h.controller.state().phase).toBe('done');
+    expect(h.controller.state().error).toBeNull();
+    // 「重插后再试」不再自己 attach 旧 id，统一走 start() → reacquire
+    expect(h.timeline.filter((entry) => entry.startsWith('attach:'))).toEqual([]);
+  });
+
+  it('8. 升级中止（abort）后同样走失败收场，链路不停在"升级中"', async () => {
+    const h = makeHarness();
+    // 第 2 块不回执：把流程停在 writing，好在"升级中"点中止
+    h.channel.respondBlock = (index, round) =>
+      round === 1 && index === 1 ? null : index === BLOCK_TOTAL - 1 ? DFU_STATUS_SUCCESS : DFU_STATUS_CONTINUE;
+    await h.controller.selectFile(fileOf(PKG));
+    h.controller.setConfirmed(true);
+
+    const run = h.controller.start();
+    await settle();
+    expect(h.controller.state().phase).toBe('writing');
+
+    h.controller.abort();
+    await run;
+
+    expect(h.controller.state().phase).toBe('aborted');
+    expect(h.controller.state().error).toBeNull();
+    expect(h.link.recovers).toBe(1);
+    expect(h.timeline.at(-1)).toBe('dfuActive:false');
   });
 });

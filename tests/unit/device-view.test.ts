@@ -95,4 +95,39 @@ describe('device view', () => {
     await expect(session.connect('virtual')).resolves.toBeUndefined();
     expect(session.getState().status).toBe('ready');
   });
+
+  it('pauses auto-connect on a manual disconnect and resumes when the user connects again', async () => {
+    const device = new FakeHidDevice({ deviceId: 'gamepad', productName: 'Virtual Gamepad' });
+    const session = new WebHidSession({ kit: new FakeKit({ devices: [device] }) });
+    const calls: string[] = [];
+    const view = createDeviceView(session, {
+      autoConnect: {
+        pause: () => calls.push('pause'),
+        resume: () => calls.push('resume'),
+      },
+    });
+    const root = document.createElement('div');
+    root.append(view);
+    document.body.append(root);
+
+    const [connectBtn, disconnectBtn] = buttons(root);
+    connectBtn.click();
+    await flush();
+    expect(calls).toEqual(['resume']);
+
+    disconnectBtn.click();
+    await flush();
+    expect(calls).toEqual(['resume', 'pause']);
+
+    // 行内「打开」也算用户显式连接
+    connectBtn.click();
+    await flush();
+    const open = root.querySelector<HTMLButtonElement>('.device-row .btn');
+    expect(open?.textContent).toBe(t('device.devices.open'));
+    open?.click();
+    await flush();
+    expect(calls).toEqual(['resume', 'pause', 'resume', 'resume']);
+
+    (view as HTMLElement & { destroy?: () => void }).destroy?.();
+  });
 });
