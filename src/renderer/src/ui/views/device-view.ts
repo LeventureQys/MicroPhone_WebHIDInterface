@@ -456,6 +456,7 @@ function createDiagSection(hub: DiagnosticsHub | undefined, link: DeviceLink | u
     ['serial', t('diag.device.serial')],
     ['comErr', t('diag.device.comErr')],
     ['audio', t('diag.device.audio')],
+    ['poll', t('diag.device.poll')],
   ];
   for (const [field, label] of deviceFields) {
     const row = document.createElement('div');
@@ -548,12 +549,24 @@ function createDiagSection(hub: DiagnosticsHub | undefined, link: DeviceLink | u
     ].join(' / ');
   }
 
-  /** 电平来源行：音频输入名；退回设备上报时给出原因（权限 / 无输入） */
+  /** 电平来源行：音频输入名；退回设备上报时给出原因（权限 / 设备不在）；重连中单独提示 */
   function audioText(state: LinkState['audio']): string {
     if (state === undefined || state === null) return t('diag.device.none');
     if (state.source === 'audio') return t('device.audio.using', { label: state.label ?? '—' });
+    if (state.source === 'retrying') return t('device.audio.retrying');
     if (state.error !== undefined) return t(`device.audio.error.${state.error}`);
     return t('device.audio.device');
+  }
+
+  /**
+   * 设备轮询行：连上之后是不是还在向设备要电平（`0x2057`）。
+   *
+   * 音频输入接管电平后这条轮询会关掉——用户据此确认"已连接但不再敲下位机"。
+   */
+  function pollText(): string {
+    const channel = transport();
+    if (channel === null || channel.levelPolling === undefined) return t('diag.device.none');
+    return channel.levelPolling() ? t('diag.poll.on') : t('diag.poll.off');
   }
 
   function renderSummary(): void {
@@ -569,6 +582,7 @@ function createDiagSection(hub: DiagnosticsHub | undefined, link: DeviceLink | u
       serial: device?.serial === undefined || device.serial === '' ? t('diag.device.none') : device.serial,
       comErr: device === null ? t('diag.device.none') : String(device.comErrAck),
       audio: audioText(link?.getState().audio),
+      poll: pollText(),
     };
     for (const [field, value] of Object.entries(values)) {
       const node = deviceRows[field];

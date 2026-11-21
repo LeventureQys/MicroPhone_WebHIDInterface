@@ -5,43 +5,6 @@ import type { EqBand } from '../eq/types';
  * 只做 UI 层换算，不改变协议范围与语义；专业模式始终能看到真实字段。
  */
 
-export const STRENGTH_MIN = 0;
-export const STRENGTH_MAX = 100;
-
-const GATE_MIN_DB = -91;
-const GATE_MAX_DB = 0;
-const COMP_MIN_DB = -60;
-const COMP_MAX_DB = 0;
-
-function clamp(value: number, min: number, max: number): number {
-  if (!Number.isFinite(value)) return min;
-  return Math.min(max, Math.max(min, Math.round(value)));
-}
-
-/** 降噪强度 0..100 ↔ NoiseGate.threshold_db -91..0 */
-export function denoiseStrengthFromThreshold(threshold: number): number {
-  const clamped = Math.min(GATE_MAX_DB, Math.max(GATE_MIN_DB, threshold));
-  return clamp(((clamped - GATE_MIN_DB) / (GATE_MAX_DB - GATE_MIN_DB)) * 100, STRENGTH_MIN, STRENGTH_MAX);
-}
-
-export function thresholdFromDenoiseStrength(strength: number): number {
-  const ratio = clamp(strength, STRENGTH_MIN, STRENGTH_MAX) / 100;
-  return Math.round(GATE_MIN_DB + ratio * (GATE_MAX_DB - GATE_MIN_DB));
-}
-
-/** 平稳度 0..100 ↔ Comp.Threshold 0..-60（越大压得越多） */
-export function smoothnessFromThreshold(threshold: number): number {
-  const clamped = Math.min(COMP_MAX_DB, Math.max(COMP_MIN_DB, threshold));
-  return clamp(((COMP_MAX_DB - clamped) / (COMP_MAX_DB - COMP_MIN_DB)) * 100, STRENGTH_MIN, STRENGTH_MAX);
-}
-
-export function thresholdFromSmoothness(strength: number): number {
-  const ratio = clamp(strength, STRENGTH_MIN, STRENGTH_MAX) / 100;
-  const raw = COMP_MAX_DB + ratio * (COMP_MIN_DB - COMP_MAX_DB);
-  // 阈值步进 0.1
-  return Math.round(raw * 10) / 10;
-}
-
 /**
  * 防爆音开关 ↔ `limit.Enable`（`0x2051`）。C-15 起开关走真实使能位，
  * 阈值 `limit.Threshold` 独立保留（高级参数里可单独调，场景不再写它）。
@@ -54,34 +17,47 @@ export function limitEnableValue(enabled: boolean): number {
   return enabled ? 1 : 0;
 }
 
-export type EqPresetId = 'flat' | 'vocal' | 'warm' | 'bright' | 'music';
+/**
+ * 内置音色只有 4 个固定曲线；`custom` 没有固定增益，曲线存在
+ * `AppStore.customEq` 里（用户自己拖出来的那一条）。
+ */
+export type EqPresetId = 'flat' | 'vocal' | 'warm' | 'bright' | 'custom';
 
-/** 五个风格的 7 段增益（dB）。只动增益，类型/频点/Q 保持不变。 */
-export const EQ_PRESETS: Record<EqPresetId, readonly number[]> = Object.freeze({
+/** 固定音色的 7 段增益（dB）。只动增益，类型/频点/Q 保持不变。 */
+export const EQ_PRESETS: Record<Exclude<EqPresetId, 'custom'>, readonly number[]> = Object.freeze({
   flat: [0, 0, 0, 0, 0, 0, 0],
   vocal: [-3, -2, -1, 1, 3, 2, 0],
   warm: [4, 3, 2, 0, -1, -2, -3],
   bright: [-2, -1, 0, 1, 2, 4, 5],
-  music: [3, 2, 0, -1, 2, 3, 2],
 });
 
-export function eqPresetGains(id: EqPresetId): readonly number[] {
-  return EQ_PRESETS[id];
-}
+/** 自定义音色的初始曲线（全平），之后由用户在曲线上拖出来 */
+export const DEFAULT_CUSTOM_GAINS: readonly number[] = Object.freeze([0, 0, 0, 0, 0, 0, 0]);
 
-/** 当前可见段是否与某个风格一致（用于高亮） */
+/** 当前可见段是否与某个固定风格一致（用于高亮；自定义曲线由调用方另判） */
 export function matchEqPreset(bands: readonly EqBand[], visibleCount: number): EqPresetId | null {
-  for (const id of Object.keys(EQ_PRESETS) as EqPresetId[]) {
-    const gains = EQ_PRESETS[id];
-    let matched = true;
-    for (let index = 0; index < visibleCount; index += 1) {
-      const band = bands[index];
-      if (!band || Math.abs(band.gain - (gains[index] ?? 0)) > 0.05) {
-        matched = false;
-        break;
-      }
-    }
-    if (matched) return id;
+  for (const id of Object.keys(EQ_PRESETS) as Array<Exclude<EqPresetId, 'custom'>>) {
+    if (matchesGains(bands, EQ_PRESETS[id], visibleCount)) return id;
   }
   return null;
+}
+
+/** 当前可见段是否等于给定的一组增益（自定义音色 / 场景高亮用） */
+export function matchesGains(
+  bands: readonly EqBand[],
+  gains: readonly number[],
+  visibleCount = 7,
+): boolean {
+  for (let index = 0; index < visibleCount; index += 1) {
+    const band = bands[index];
+    if (!band || Math.abs(band.gain - (gains[index] ?? 0)) > 0.05) return false;
+  }
+  return true;
+}
+
+/** 从 14 段里取前 7 段的增益，供“把当前曲线存为自定义”使用 */
+export function gainsOf(bands: readonly EqBand[], visibleCount = 7): number[] {
+  const out: number[] = [];
+  for (let index = 0; index < visibleCount; index += 1) out.push(bands[index]?.gain ?? 0);
+  return out;
 }

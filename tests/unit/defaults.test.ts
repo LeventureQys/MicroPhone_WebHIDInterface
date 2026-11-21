@@ -21,7 +21,7 @@ const INNER_FREQS = [36, 112, 356, 1125, 3557, 11247, 17825];
 describe('default params', () => {
   it('is a frozen record with one entry per parameter', () => {
     expect(Object.isFrozen(DEFAULT_PARAMS)).toBe(true);
-    expect(Object.keys(DEFAULT_PARAMS)).toHaveLength(42);
+    expect(Object.keys(DEFAULT_PARAMS)).toHaveLength(46);
     for (const spec of PARAMS) {
       expect(DEFAULT_PARAMS[spec.id]).toBe(spec.default);
     }
@@ -44,12 +44,17 @@ describe('default params', () => {
     expect(DEFAULT_PARAMS['enc.Level']).toBe(0);
     expect(DEFAULT_PARAMS['gain.Mic']).toBe(100);
     expect(DEFAULT_PARAMS['gain.Hp']).toBe(100);
-    expect(DEFAULT_PARAMS['drc3.fc1']).toBe(50);
-    expect(DEFAULT_PARAMS['drc3.fc2']).toBe(50);
-    expect(DEFAULT_PARAMS['drc3.low.preGain']).toBe(0);
+    expect(DEFAULT_PARAMS['drc3.fc1']).toBe(1000);
+    expect(DEFAULT_PARAMS['drc3.fc2']).toBe(3000);
+    expect(DEFAULT_PARAMS['drc3.low.preGain']).toBeCloseTo(1.28, 6);
     expect(DEFAULT_PARAMS['drc3.low.attackTime']).toBe(1);
     expect(DEFAULT_PARAMS['drc3.low.releaseTime']).toBe(5);
     expect(DEFAULT_PARAMS['hp.OnOff']).toBe(1);
+    // 参数表 V0.3 新增：灯效默认开、模式 0；噪声门与三分频动态默认使能
+    expect(DEFAULT_PARAMS['rgb.OnOff']).toBe(1);
+    expect(DEFAULT_PARAMS['rgb.Mode']).toBe(0);
+    expect(DEFAULT_PARAMS['noisegate.Enable']).toBe(1);
+    expect(DEFAULT_PARAMS['drc3.Enable']).toBe(1);
     expect(DEFAULT_LANG).toBe('zh');
   });
 });

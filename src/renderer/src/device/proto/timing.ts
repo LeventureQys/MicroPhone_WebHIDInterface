@@ -17,6 +17,13 @@ export interface Timing {
   writeTimeoutMs: number;
   writeRetries: number;
   writeThrottleMs: number;
+  /**
+   * 相邻两条**写帧**之间的最小间隔。写合并只压同一瞬间的值，连续拖拽仍会一条接一条；
+   * 真机在录音/放音同时写 Flash 时，帧挨太近会把主循环压死（2026-11-13 反馈）。
+   */
+  writeGapMs: number;
+  /** 写超时后再暂停写请求的时长：设备可能正卡在 Flash 里，立刻重发只会更糟 */
+  writePauseAfterTimeoutMs: number;
   writeSettleMs: number;
   writeGraceMs: number;
   pollIntervalMs: number;
@@ -61,12 +68,20 @@ export const TIMING: Readonly<Timing> = Object.freeze({
    */
   writeRetries: 1,
   /**
-   * 写合并窗口。取 120 ms：R3-6 要求"拖拽 2 秒产生 120 次写调用、实际出帧 ≤ 20"。
-   * 窗口数上限 ≈ ceil(T / W) + 1，而 T 是**实际墙钟时长**（调用方逐条 await 时通常略超 2000 ms），
-   * 110 ms 时实测上限会顶到 20（余量 0），120 ms 时上限 18–19，留出余量（见设计 §12 R-22）。
-   * 120 ms 的合并延迟对人手拖拽不可感，远小于一次 HID 往返的体感阈值。
+   * 写合并窗口（尾沿触发）：每次 `write()` 都重置计时器，用户停手 `writeThrottleMs` 后才发一帧。
+   *
+   * 2026-11-13 真机反馈：录音/放音同时频繁调音效参数会把设备主循环压死。原来 120 ms 的
+   * 固定窗口在拖拽期间仍会每 120 ms 出一条写帧（≈8 帧/s），每条都可能触发一次 Flash 落盘。
+   * 改成尾沿 + 300 ms：一次连续拖拽只落最后的值（1 帧），手势停下的延迟仍不可感。
    */
-  writeThrottleMs: 120,
+  writeThrottleMs: 300,
+  /**
+   * 写帧最小间隔。批量写（例如恢复默认一次 40 项）会在一次 flush 里排出多组，
+   * 相邻写帧至少隔 200 ms，给设备留出处理上一帧（含落 Flash）的时间。
+   */
+  writeGapMs: 200,
+  /** 写超时后的冷却：设备可能卡在 Flash 写里，冷却期内不发下一条写请求 */
+  writePauseAfterTimeoutMs: 1000,
   /**
    * 写回执之后暂停电平轮询的时间。落 Flash 通常发生在回执之后（设备先改 RAM 再持久化），
    * 这期间继续 50 Hz 轮询只会制造超时帧、把设备从 Flash 写里反复拽出来；停 600 ms 让设备写完。

@@ -78,14 +78,13 @@ const WORD_MAX = 0xffff;
 
 /**
  * 上位机侧的会话时序（设计 §5.4.4 TIMING 的镜像；本脚本不 import src/**）。
- * `writeThrottleMs` 120 与 R-22 一致：2 s 内的 flush 上限约 ceil(T/W)+1，
- * 而 T 是调用方逐条 await 的**墙钟**时长（实测常略超 2000 ms）。
- * W=100 时上限 21、相位不利就破 R3-6 的"≤20"；W=110 实测会顶到 20（余量 0）；W=120 留出余量。
+ * `writeThrottleMs` 取 300 且为**尾沿触发**（与 `device/proto/session.ts` 一致）：
+ * 一次连续拖拽只在停手 300 ms 后出 1 帧，2 s 的拖拽顶多 ceil(T/W)+1 帧，远低于 R3-6 的"≤20"。
  */
 const TIMING = Object.freeze({
   requestTimeoutMs: 500,
   requestRetries: 2,
-  writeThrottleMs: 120,
+  writeThrottleMs: 300,
   pollIntervalMs: 20,
   pollTimeoutMs: 200,
   enterAttempts: 2,
@@ -684,9 +683,10 @@ class ParamClient {
     if (this.phase === 'error') return;
     this.activate();
     for (const pair of pairs) this.pendingWrites.set(pair.addr, pair.raw);
-    if (this.throttleTimer === null) {
-      this.throttleTimer = setTimeout(() => this.flushWrites(), TIMING.writeThrottleMs);
-    }
+    // 尾沿触发（与 device/proto/session.ts 一致）：每次写都重置窗口，
+    // 一次连续拖拽只在停手后出 1 帧，而不是每 300 ms 出一条写帧。
+    if (this.throttleTimer !== null) clearTimeout(this.throttleTimer);
+    this.throttleTimer = setTimeout(() => this.flushWrites(), TIMING.writeThrottleMs);
   }
 
   /** 界面口径的写：只读字段在本地就被拦掉，连帧都不发（R3-3） */

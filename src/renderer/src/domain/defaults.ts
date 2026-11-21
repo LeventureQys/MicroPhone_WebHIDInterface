@@ -3,7 +3,7 @@ import { EQ_BAND_TOTAL } from '../eq/types';
 import { defaultOf, EQ_BAND_COUNT, eqBandAddr, findRegister } from '../device/registers';
 import { PARAMS } from './params';
 
-/** 42 项标量默认值，全部来自寄存器表 G 列（工程量，未连接设备时的兜底显示） */
+/** 46 项标量默认值，全部来自寄存器表 G 列（工程量，未连接设备时的兜底显示） */
 export const DEFAULT_PARAMS: Readonly<Record<string, number>> = Object.freeze(
   Object.fromEntries(PARAMS.map((item) => [item.id, item.default])),
 );

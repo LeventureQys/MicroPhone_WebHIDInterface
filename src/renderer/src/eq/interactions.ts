@@ -14,6 +14,8 @@ export interface EqInteractionOptions {
   mapper: EqCoordinateMapper;
   onChange: () => void;
   hitRadius?: number;
+  /** 返回 false 时曲线只展示、不响应拖拽/滚轮；缺省恒为可交互 */
+  enabled?: () => boolean;
 }
 
 interface DragState {
@@ -33,6 +35,7 @@ function localPoint(canvas: HTMLCanvasElement, event: PointerEvent | WheelEvent)
 export function attachEqInteractions(options: EqInteractionOptions): () => void {
   const { canvas, model, mapper, onChange } = options;
   const hitRadius = options.hitRadius ?? 12;
+  const isEnabled = (): boolean => options.enabled?.() !== false;
   let drag: DragState | null = null;
   let frame: number | null = null;
   let pending: { x: number; y: number } | null = null;
@@ -70,6 +73,7 @@ export function attachEqInteractions(options: EqInteractionOptions): () => void 
   };
 
   const onPointerDown = (event: PointerEvent): void => {
+    if (!isEnabled()) return;
     const { x, y } = localPoint(canvas, event);
     const index = findBand(x, y);
     if (index === null) {
@@ -87,6 +91,10 @@ export function attachEqInteractions(options: EqInteractionOptions): () => void 
   };
 
   const onPointerMove = (event: PointerEvent): void => {
+    if (!isEnabled()) {
+      canvas.dataset.cursor = 'default';
+      return;
+    }
     const { x, y } = localPoint(canvas, event);
     if (!drag) {
       canvas.dataset.cursor = findBand(x, y) === null ? 'default' : 'grab';
@@ -118,6 +126,7 @@ export function attachEqInteractions(options: EqInteractionOptions): () => void 
   const onPointerCancel = (event: PointerEvent): void => finish(event);
 
   const onWheel = (event: WheelEvent): void => {
+    if (!isEnabled()) return;
     const { x, y } = localPoint(canvas, event);
     const index = findBand(x, y);
     if (index === null) return;
@@ -130,6 +139,7 @@ export function attachEqInteractions(options: EqInteractionOptions): () => void 
   };
 
   const onDoubleClick = (event: MouseEvent): void => {
+    if (!isEnabled()) return;
     const rect = canvas.getBoundingClientRect();
     const index = findBand(event.clientX - rect.left, event.clientY - rect.top);
     if (index === null) return;
@@ -138,6 +148,7 @@ export function attachEqInteractions(options: EqInteractionOptions): () => void 
   };
 
   const onKeyDown = (event: KeyboardEvent): void => {
+    if (!isEnabled()) return;
     const index = model.focusedIndex();
     if (index < 0 || index >= model.visibleCount()) return;
     const band = model.bandAt(index);

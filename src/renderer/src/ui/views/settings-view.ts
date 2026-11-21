@@ -18,7 +18,8 @@ import {
 } from '../../domain/channel-config';
 import { DEFAULT_BANDS, DEFAULT_PARAMS } from '../../domain/defaults';
 import { PARAMS } from '../../domain/params';
-import type { AppStore } from '../../domain/state';
+import { DEFAULT_CUSTOM_GAINS } from '../../domain/quick-controls';
+import { BYPASS_MODULES, type AppStore } from '../../domain/state';
 import { t } from '../../i18n';
 import { card, segmented, switchControl } from '../controls';
 
@@ -385,6 +386,8 @@ export function createSettingsView(store: AppStore, options?: SettingsViewOption
     }
 
     disarm();
+    // 先取消旁通：旁通模块的参数要按快照恢复，若放在复位之后会把刚写回的默认值覆盖掉
+    for (const module of BYPASS_MODULES) store.setBypass(module, false);
     for (const spec of PARAMS) {
       if (spec.readonly) continue;
       const value = DEFAULT_PARAMS[spec.id];
@@ -395,6 +398,7 @@ export function createSettingsView(store: AppStore, options?: SettingsViewOption
       store.setParam(spec.id, value);
     }
     store.setBands(DEFAULT_BANDS);
+    store.setCustomEq(DEFAULT_CUSTOM_GAINS);
     resetButton.textContent = t('settings.resetDone');
     resetButton.disabled = true;
     doneTimer = window.setTimeout(() => {

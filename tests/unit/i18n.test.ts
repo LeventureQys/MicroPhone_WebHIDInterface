@@ -16,7 +16,7 @@ describe('i18n dictionaries', () => {
   });
 
   it('labels every scalar parameter in both languages', () => {
-    expect(PARAMS).toHaveLength(42);
+    expect(PARAMS).toHaveLength(46);
     for (const spec of PARAMS) {
       const key = `param.${spec.id}.label`;
       expect(zhDict, `zh missing ${key}`).toHaveProperty(key);
@@ -25,7 +25,7 @@ describe('i18n dictionaries', () => {
       expect(enDict[key]).not.toBe('');
     }
     const labels = Object.keys(zhDict).filter((key) => /^param\..+\.label$/.test(key));
-    expect(labels).toHaveLength(42);
+    expect(labels).toHaveLength(46);
   });
 
   it('covers every unit and nav entry used by the UI', () => {

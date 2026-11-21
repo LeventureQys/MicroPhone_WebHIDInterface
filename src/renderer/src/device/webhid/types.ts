@@ -55,6 +55,19 @@ export interface WebHidDeviceSummary {
   readonly opened: boolean;
 }
 
+/**
+ * 只按 VID/PID 的存在性探测结果。
+ *
+ * 和 `WebHidDeviceSummary` 分开：后台自动连接只关心"目标设备插着没有"，
+ * 不该为了回答这个问题去解析系统里每一台 HID 的报告描述符。
+ */
+export interface WebHidNativeProbe {
+  readonly vendorId: number;
+  readonly productId: number;
+  readonly productName: string;
+  readonly opened: boolean;
+}
+
 export interface WebHidReportSample {
   readonly deviceId: string;
   readonly reportId: number;
@@ -88,4 +101,14 @@ export interface WebHidKit {
   nativeDevices(): Promise<WebHidDeviceHandle[]>;
   /** 传空 / 不传 = 不带过滤，行为与改动前一致 */
   requestNativeDevice(filters?: readonly WebHidUsageFilter[]): Promise<WebHidDeviceHandle[]>;
+  /**
+   * 只按 VID/PID 查"插着没有"：不解析描述符、不构造句柄。
+   * 后台自动连接每次检查都调它，不能像 `nativeDevices()` 那样把系统里所有 HID 都包一遍。
+   */
+  probeNative(vendorId: number, productId: number): Promise<readonly WebHidNativeProbe[]>;
+  /**
+   * 原生 HID 插拔事件（`navigator.hid` 的 connect / disconnect）。
+   * 有它之后后台连接不必靠高频轮询发现设备；返回退订函数，环境不支持时是 no-op。
+   */
+  watchNative(cb: () => void): () => void;
 }

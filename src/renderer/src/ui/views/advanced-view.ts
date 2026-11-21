@@ -4,6 +4,7 @@ import { createDrcView } from './drc-view';
 import { createDynamicsView } from './dynamics-view';
 import { createEqBandTable } from './eq-band-table';
 import { createInputView } from './input-view';
+import { createLightingView } from './lighting-view';
 
 type ViewFactory = () => HTMLElement;
 
@@ -52,6 +53,12 @@ export function createAdvancedView(store: AppStore): HTMLElement {
       title: t('advanced.section.drc'),
       desc: t('advanced.section.drc.desc'),
       build: () => createDrcView(store),
+    },
+    {
+      id: 'lighting',
+      title: t('advanced.section.lighting'),
+      desc: t('advanced.section.lighting.desc'),
+      build: () => createLightingView(store),
     },
   ];
 

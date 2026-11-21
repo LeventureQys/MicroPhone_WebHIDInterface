@@ -137,6 +137,11 @@ export class WebHidTransport implements DeviceBoundTransport {
   private _lastLevelAt: number | null = null;
   /** 最后一条 IN 报告的时刻；入站看门狗据此判"设备不说话" */
   private _lastInboundAt = 0;
+  /**
+   * 电平轮询是否开着（`0x12` 读 `0x2057`）。由 `DeviceLink` 按"电平是不是走音频输入"设定，
+   * 跨 sync / DFU resume 保留：关掉之后重建会话也不许自己开回来。
+   */
+  private _levelPolling = true;
   /** 写后宽限的截止时刻：设备落 Flash 时静默不算掉线（真机 2026-10-27） */
   private _writeGraceUntil = 0;
   private _watchdogTimer: unknown = null;
@@ -271,7 +276,7 @@ export class WebHidTransport implements DeviceBoundTransport {
     this._session = session;
     // 轮询在同步完成后自动开启（S-e 末尾的 startPolling 只看这个开关），
     // 因此必须在 sync() 之前置位，否则电平永远不来（R5）
-    session.setPolling(true);
+    session.setPolling(this._levelPolling);
 
     try {
       await session.sync();
@@ -281,7 +286,8 @@ export class WebHidTransport implements DeviceBoundTransport {
     }
     this._suspended = false;
     this._setState('ready');
-    this._startWatchdog();
+    // 没有周期请求就没有"设备沉默"可判，看门狗只在轮询开着时值守
+    if (this._levelPolling) this._startWatchdog();
   }
 
   async close(): Promise<void> {
@@ -383,7 +389,7 @@ export class WebHidTransport implements DeviceBoundTransport {
   }
 
   /**
-   * 全量回读：42 项标量按 `findParamByAddr` 换回工程量，
+   * 全量回读：46 项标量按 `findParamByAddr` 换回工程量，
    * EQ 可调段另装进 `bands`（键为寄存器字段名，见 `ParamReadResult`）。
    */
   async readAll(): Promise<ParamReadResult> {
@@ -541,12 +547,42 @@ export class WebHidTransport implements DeviceBoundTransport {
     }
     try {
       await session.sync();
-      session.setPolling(true);
+      session.setPolling(this._levelPolling);
       this._setState('ready');
-      this._startWatchdog();
+      if (this._levelPolling) this._startWatchdog();
     } catch (error) {
       this._fail(transportErrorOf(error));
     }
+  }
+
+  /**
+   * 电平轮询开关（`0x12` 读 `0x2057`）。
+   *
+   * 真机固件不上报电平（`0x2057` 恒 0），电平改由同一台设备的音频输入算（`AudioLevelMeter`）；
+   * 此时这条 20 ms 一次的读只剩空转流量——50 帧/s ≈ 18 万帧/小时，长期压着下位机主循环，
+   * 用户担心把设备卡死（2026-11 反馈）。所以 `DeviceLink` 在音频电平接管后关掉它，
+   * 只有拿不到麦克风（权限被拒 / 没有输入）时才退回设备上报。
+   *
+   * 关轮询必须连入站看门狗一起停：不再有周期请求，就不存在"设备沉默"这回事，否则 2 s 后
+   * 会自己判成掉线。真实拔线仍由 HID `disconnect` 事件立即上报（R5-3 的另一半），
+   * 设备无响应则会在写参数超时时暴露。
+   */
+  setLevelPolling(enabled: boolean): void {
+    if (this._levelPolling === enabled) return;
+    this._levelPolling = enabled;
+    const session = this._session;
+    if (session === null) return;
+    session.setPolling(enabled);
+    if (!enabled) {
+      this._stopWatchdog();
+      return;
+    }
+    if (this._state === 'ready' && !this._suspended) this._startWatchdog();
+  }
+
+  /** 当前是否在向设备要电平（诊断卡与单测用） */
+  levelPolling(): boolean {
+    return this._levelPolling;
   }
 
   // ---- 入站 --------------------------------------------------------------
@@ -614,7 +650,7 @@ export class WebHidTransport implements DeviceBoundTransport {
   /**
    * 设备主动上报的一条 `(addr, raw)`（协议 0x10 的设备→主机方向）。
    *
-   * 地址落在三处之一：42 项标量 → `param`；EQ 可调段 → `band`；其余（预设名、保留位、
+   * 地址落在三处之一：46 项标量 → `param`；EQ 可调段 → `band`；其余（预设名、保留位、
    * 设备内部段）本版本没有本地模型，直接忽略。0x2057 电平不走这里（会话先分流到 onLevel）。
    */
   private _handleEcho(addr: number, raw: number): void {

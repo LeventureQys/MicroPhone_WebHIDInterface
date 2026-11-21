@@ -24,7 +24,8 @@ export const LEVEL_ADDR = 0x2057;
 /** 写 1 进 DFU（P10） */
 export const ENTER_DFU_ADDR = 0x1008;
 export const PRESET_START = 0x2000;
-export const PRESET_END = 0x2071;
+/** 参数表 V0.3 起预设区 118 项（止于 0x2075，含 RGB 与两个模块使能位） */
+export const PRESET_END = 0x2075;
 
 const UNIT_ID = 0x00;
 const FUNC_ACK = 0x02;
@@ -112,7 +113,7 @@ const EQ_BAND_DEFAULTS = [
 ];
 
 /**
- * 当前预设 0x2000–0x2071（114 项）。
+ * 当前预设 0x2000–0x2075（118 项，参数表 V0.3）。
  * rawMin/rawMax 是原始值边界：需求附录 B.3 给的是工程量范围，这里按 A.5 标定式反算后取整。
  */
 function presetRows() {
@@ -128,7 +129,7 @@ function presetRows() {
     spec('preset', 0x2023, 'micGain', 0, 100, ACCESS_READ, 'scalar', 100),
     spec('preset', 0x2024, 'encOnOff', 0, 1, ACCESS_RW, 'scalar', 0),
     spec('preset', 0x2025, 'encLevel', 0, 3, ACCESS_RW, 'scalar', 0),
-    spec('preset', 0x2026, 'eqMode', 0, 4, ACCESS_RW, 'scalar', 1),
+    spec('preset', 0x2026, 'eqMode', 0, 5, ACCESS_RW, 'scalar', 1),
   );
   EQ_BAND_DEFAULTS.forEach((band, index) => {
     const base = 0x2027 + index * 5;
@@ -164,8 +165,8 @@ function presetRows() {
     spec('preset', 0x205e, 'noisegateReleaseMs', 5, 500, ACCESS_RW, 'scalar', 5),
     spec('preset', 0x205f, 'noisegateKneeWidthDb', 6, 12, ACCESS_RW, 'scalar', 6),
     spec('preset', 0x2060, 'noisegateHpFreq', 60, 200, ACCESS_RW, 'scalar', 60),
-    spec('preset', 0x2061, 'drc3Fc1', 50, 10000, ACCESS_RW, 'scalar', 50),
-    spec('preset', 0x2062, 'drc3Fc2', 50, 10000, ACCESS_RW, 'scalar', 50),
+    spec('preset', 0x2061, 'drc3Fc1', 50, 10000, ACCESS_RW, 'scalar', 1000),
+    spec('preset', 0x2062, 'drc3Fc2', 50, 10000, ACCESS_RW, 'scalar', 3000),
   );
   const zones = [
     { base: 0x2063, name: 'drc3Low' },
@@ -174,13 +175,20 @@ function presetRows() {
   ];
   for (const zone of zones) {
     rows.push(
-      spec('preset', zone.base, `${zone.name}PreGain`, 0, 400, ACCESS_RW, 'scalar', 0),
+      spec('preset', zone.base, `${zone.name}PreGain`, 0, 400, ACCESS_RW, 'scalar', 128),
       spec('preset', zone.base + 1, `${zone.name}Threshold`, 0, 800, ACCESS_RW, 'scalar', 0),
       spec('preset', zone.base + 2, `${zone.name}AttackTime`, 1, 400, ACCESS_RW, 'scalar', 1),
       spec('preset', zone.base + 3, `${zone.name}ReleaseTime`, 5, 680, ACCESS_RW, 'scalar', 5),
       spec('preset', zone.base + 4, `${zone.name}Ratio`, 10, 200, ACCESS_RW, 'scalar', 1),
     );
   }
+  // 参数表 V0.3 新增：RGB 灯效与两个模块使能位
+  rows.push(
+    spec('preset', 0x2072, 'rgbOnOff', 0, 1, ACCESS_RW, 'scalar', 1),
+    spec('preset', 0x2073, 'rgbMode', 0, 7, ACCESS_RW, 'scalar', 0),
+    spec('preset', 0x2074, 'noisegateEnable', 0, 1, ACCESS_RW, 'scalar', 1),
+    spec('preset', 0x2075, 'drc3Enable', 0, 1, ACCESS_RW, 'scalar', 1),
+  );
   return rows;
 }
 
@@ -276,7 +284,7 @@ export function splitReports(bytes) {
   return reports;
 }
 
-/** 预设区 114 项 + 设备信息 62 项 + 设备配置 14 项 = 190 项默认原始值 */
+/** 预设区 118 项 + 设备信息 62 项 + 设备配置 14 项 = 194 项默认原始值 */
 export function defaultRegisters() {
   const registers = new Map();
   for (const entry of SPECS) registers.set(entry.addr, entry.defaultRaw);

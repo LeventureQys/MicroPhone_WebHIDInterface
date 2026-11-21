@@ -155,6 +155,8 @@ export function switchControl(opts: {
 }): HTMLElement {
   const root = document.createElement('label');
   root.className = 'switch-row';
+  // 中栏三列布局里长标签会省略号，悬停能看到全称
+  root.title = opts.label;
 
   const label = document.createElement('span');
   label.className = 'switch-label';
@@ -223,6 +225,7 @@ export function macroSlider(opts: {
   value: number;
   min?: number;
   max?: number;
+  step?: number;
   format?: (value: number) => string;
   scale?: [string, string];
   hint?: string;
@@ -230,7 +233,14 @@ export function macroSlider(opts: {
 }): MacroSliderHandle {
   const min = opts.min ?? 0;
   const max = opts.max ?? 100;
+  const step = opts.step && opts.step > 0 ? opts.step : 1;
   const format = opts.format ?? ((value: number): string => String(Math.round(value)));
+
+  const snap = (value: number): number => {
+    const clamped = Math.min(max, Math.max(min, value));
+    const steps = Math.round((clamped - min) / step);
+    return Math.min(max, Math.max(min, Number((min + steps * step).toFixed(6))));
+  };
 
   const root = document.createElement('div');
   root.className = 'pfield pfield--macro';
@@ -242,7 +252,7 @@ export function macroSlider(opts: {
   label.textContent = opts.label;
   const readout = document.createElement('span');
   readout.className = 'pfield-value pfield-value--macro';
-  readout.textContent = format(opts.value);
+  readout.textContent = format(snap(opts.value));
   head.append(label, readout);
 
   const range = document.createElement('input');
@@ -250,8 +260,8 @@ export function macroSlider(opts: {
   range.className = 'pfield-range macro-range';
   range.min = String(min);
   range.max = String(max);
-  range.step = '1';
-  range.value = String(opts.value);
+  range.step = String(step);
+  range.value = String(snap(opts.value));
   range.setAttribute('aria-label', opts.label);
   paintRange(range);
 
@@ -276,14 +286,14 @@ export function macroSlider(opts: {
   }
 
   const setValue = (value: number): void => {
-    const next = Math.min(max, Math.max(min, Math.round(value)));
+    const next = snap(value);
     if (range.value !== String(next)) range.value = String(next);
     paintRange(range);
     readout.textContent = format(next);
   };
 
   range.addEventListener('input', () => {
-    const value = Number(range.value);
+    const value = snap(Number(range.value));
     paintRange(range);
     readout.textContent = format(value);
     opts.onChange(value);

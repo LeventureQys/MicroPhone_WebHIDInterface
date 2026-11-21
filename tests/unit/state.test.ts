@@ -27,10 +27,10 @@ function setup(initial?: Partial<AppState>) {
 }
 
 describe('AppStore', () => {
-  it('boots with 42 params and 14 bands', () => {
+  it('boots with 46 params and 14 bands', () => {
     const { store } = setup();
     const state = store.get();
-    expect(Object.keys(state.params)).toHaveLength(42);
+    expect(Object.keys(state.params)).toHaveLength(46);
     expect(state.bands).toHaveLength(14);
     expect(state.scene).toBe('speech');
     expect(state.transport).toBe('idle');
@@ -53,7 +53,7 @@ describe('AppStore', () => {
     store.setParam('no.such.param', 1);
     expect(write).not.toHaveBeenCalled();
     expect(events()).toBe(0);
-    expect(Object.keys(store.get().params)).toHaveLength(42);
+    expect(Object.keys(store.get().params)).toHaveLength(46);
     expect(localErrors).toEqual([{ kind: 'readOnly', id: 'no.such.param' }]);
   });
 
@@ -223,7 +223,7 @@ describe('AppStore', () => {
     // 未知 id 与未量化的值都按既有规则处理
     store.applyEcho('no.such.param', 1);
     expect(events).toBe(1);
-    expect(Object.keys(store.get().params)).toHaveLength(42);
+    expect(Object.keys(store.get().params)).toHaveLength(46);
   });
 
   it('mirrors the sync phase from the transport', () => {
@@ -310,5 +310,54 @@ describe('AppStore', () => {
     off();
     store.setScene('silence');
     expect(seen).toHaveLength(1);
+  });
+
+  it('stores the custom tone curve with clamping and no device write', () => {
+    const { store, write, events } = setup();
+    store.setCustomEq([1.04, -2.06, 99, -99, 0, 0, 0]);
+    expect(store.get().customEq).toEqual([1, -2.1, 12, -32, 0, 0, 0]);
+    expect(events()).toBe(1);
+    expect(write).not.toHaveBeenCalled();
+
+    store.setCustomEq([...store.get().customEq]);
+    expect(events()).toBe(1);
+  });
+
+  it('counts the noise gate and 3-band DRC switches as plain protocol params', () => {
+    const { store, write } = setup();
+    store.setParam('noisegate.threshold_db', -40);
+    write.mockClear();
+
+    // 参数表 V0.3 的模块使能位：关开关就是旁通，不再把阈值钉到 -91 dB 去近似
+    store.setParam('noisegate.Enable', 0);
+    expect(store.get().params['noisegate.Enable']).toBe(0);
+    expect(store.get().params['noisegate.threshold_db']).toBe(-40);
+    expect(write).toHaveBeenCalledWith([{ id: 'noisegate.Enable', value: 0 }]);
+
+    write.mockClear();
+    store.setParam('drc3.Enable', 0);
+    expect(store.get().params['drc3.Enable']).toBe(0);
+    expect(store.get().params['drc3.low.ratio']).toBe(1);
+    expect(write).toHaveBeenCalledWith([{ id: 'drc3.Enable', value: 0 }]);
+
+    // 旁通状态只剩下均衡器一项
+    expect(store.get().bypass).toEqual({ eq: false });
+  });
+
+  it('bypasses the EQ by writing the seven band enable bits', () => {
+    const { store, transport } = setup();
+    const writeBands = vi.spyOn(transport, 'writeBands');
+
+    store.setBypass('eq', true);
+    expect(store.get().bypass.eq).toBe(true);
+    expect(writeBands).toHaveBeenCalledTimes(1);
+    const updates = writeBands.mock.calls[0][0];
+    expect(updates).toHaveLength(7);
+    expect(updates.every((item) => item.field === 'enable' && item.value === 0)).toBe(true);
+    expect(updates.map((item) => item.band)).toEqual([1, 2, 3, 4, 5, 6, 7]);
+
+    store.setBypass('eq', false);
+    const restore = writeBands.mock.calls[1][0];
+    expect(restore.every((item) => item.value === 1)).toBe(true);
   });
 });

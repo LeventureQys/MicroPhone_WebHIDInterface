@@ -37,9 +37,17 @@ async function boot(): Promise<void> {
   const store = new AppStore(channel, { lang: currentLang() });
   // HID 会话比视图活得久：切语言或开关抽屉时连接不断
   const webhid = createWebHidSession({ bridgeUrl: readBridgeUrl() });
-  // 真机固件不上报 0x2057（恒 0）：电平改由同一台设备的音频输入算，连上就采、断开就停
+  // 真机固件不上报 0x2057（恒 0）：电平改由同一台设备的音频输入算，连上就采、断开就停；
+  // 拔插 / 驱动重载后采集断开时，只要设备还在系统里就自动重开（onEvent 只进控制台日志）
   const audioMeter = new AudioLevelMeter();
-  const link = new DeviceLink({ session: webhid, channel, mock, store, audioLevels: audioMeter });
+  const link = new DeviceLink({
+    session: webhid,
+    channel,
+    mock,
+    store,
+    audioLevels: audioMeter,
+    onEvent: (message) => console.log('[audio-level]', message),
+  });
   await channel.open();
 
   // 后台自动连接（默认开）：系统里插着 M001（VID 0x0A67 / PID 0x0010）但上位机还没连上时

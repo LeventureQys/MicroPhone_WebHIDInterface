@@ -13,6 +13,7 @@ import {
   encodeFrame,
   type ParamFrame,
 } from '../../src/renderer/src/device/proto/frame';
+import { TIMING } from '../../src/renderer/src/device/proto/timing';
 import { LEVEL_ADDR, PRESET_COUNT, PRESET_START } from '../../src/renderer/src/device/registers';
 import type { LevelFrame, ParamEcho, SyncPhase, TransportError } from '../../src/renderer/src/device/transport';
 import { WebHidTransport } from '../../src/renderer/src/device/webhid-transport';
@@ -296,7 +297,7 @@ describe('WebHidTransport', () => {
 
     // 段 1 gain -3.5 dB → EQ_GAIN_SCALE(0.1, -32) → raw 285（0x011D）
     transport.writeBands([{ band: 1, field: 'gain', value: -3.5 }]);
-    await vi.advanceTimersByTimeAsync(150);
+    await vi.advanceTimersByTimeAsync(TIMING.writeThrottleMs + 20);
 
     const frames = writeFrames(device);
     expect(frames).toHaveLength(1);
@@ -326,7 +327,7 @@ describe('WebHidTransport', () => {
       { band: 1, field: 'gain', value: -3.5 },
       { band: 1, field: 'q', value: 1.2 },
     ]);
-    await vi.advanceTimersByTimeAsync(150);
+    await vi.advanceTimersByTimeAsync(TIMING.writeThrottleMs + 20);
 
     const frames = writeFrames(device);
     expect(frames).toHaveLength(1);
@@ -348,7 +349,7 @@ describe('WebHidTransport', () => {
     await transport.open();
 
     transport.writeBands([{ band: 9, field: 'gain', value: 1 }]);
-    await vi.advanceTimersByTimeAsync(150);
+    await vi.advanceTimersByTimeAsync(TIMING.writeThrottleMs + 20);
 
     expect(writeFrames(device)).toHaveLength(0);
     expect(errors.map((error) => error.kind)).toEqual(['range']);
@@ -430,7 +431,7 @@ describe('WebHidTransport', () => {
 
     transport.cancelDfu();
     transport.write([{ id: 'enc.Level', value: 1 }]);
-    await vi.advanceTimersByTimeAsync(150);
+    await vi.advanceTimersByTimeAsync(TIMING.writeThrottleMs + 20);
     expect(writeFrames(device)).toHaveLength(1);
 
     // 拔线必须重新能被感知（挂起期间这个事件是被吞掉的）
@@ -465,7 +466,7 @@ describe('WebHidTransport', () => {
 
     // 写 ACK 之后设备进入落 Flash：回执还给了，但随后一段时间没有任何 IN 报告
     transport.write([{ id: 'enc.Level', value: 2 }]);
-    await vi.advanceTimersByTimeAsync(150);
+    await vi.advanceTimersByTimeAsync(TIMING.writeThrottleMs + 20);
     device.responder = null;
 
     // 2.5 s 已超过 inboundWatchdogMs，但还在写后宽限里，不能判成掉线
@@ -505,7 +506,7 @@ describe('WebHidTransport', () => {
     await transport.open();
 
     transport.write([{ id: 'enc.OnOff', value: 1 }]);
-    await vi.advanceTimersByTimeAsync(120);
+    await vi.advanceTimersByTimeAsync(TIMING.writeThrottleMs + 20);
 
     const frames = writeFrames(device);
     expect(frames).toHaveLength(1);
@@ -521,7 +522,7 @@ describe('WebHidTransport', () => {
     await transport.open();
 
     transport.write([{ id: 'gain.Mic', value: 12 }]);
-    await vi.advanceTimersByTimeAsync(120);
+    await vi.advanceTimersByTimeAsync(TIMING.writeThrottleMs + 20);
 
     expect(writeFrames(device)).toHaveLength(0);
     expect(errors).toHaveLength(1);
@@ -530,16 +531,17 @@ describe('WebHidTransport', () => {
     expect(errors[0].addr).toBe(0x2023);
   });
 
-  it('reads back 42 scalar params plus the device snapshot', async () => {
+  it('reads back 46 scalar params plus the device snapshot', async () => {
     const { transport } = setup();
     await transport.open();
 
     const result = await transport.readAll();
 
-    expect(Object.keys(result.preset)).toHaveLength(42);
+    expect(Object.keys(result.preset)).toHaveLength(46);
     expect(result.preset).not.toHaveProperty('micLevel');
     expect(result.preset['noisegate.threshold_db']).toBe(-70);
     expect(result.preset['enc.Level']).toBe(2);
+    expect(result.preset['noisegate.Enable']).toBe(0);
     expect(result.device?.modelCode).toBe('JYM001');
     expect(result.device?.firmware).toEqual({ x: 1, y: 2, z: 3, build: 45 });
     expect(result.device?.vid).toBe(0x0a67);
@@ -681,14 +683,14 @@ describe('WebHidTransport', () => {
     await transport.suspend();
 
     transport.write([{ id: 'enc.OnOff', value: 1 }]);
-    await vi.advanceTimersByTimeAsync(120);
+    await vi.advanceTimersByTimeAsync(TIMING.writeThrottleMs + 20);
     expect(writeFrames(device)).toHaveLength(0);
 
     await transport.resume();
     expect(transport.state()).toBe('ready');
 
     transport.write([{ id: 'enc.OnOff', value: 1 }]);
-    await vi.advanceTimersByTimeAsync(120);
+    await vi.advanceTimersByTimeAsync(TIMING.writeThrottleMs + 20);
     expect(writeFrames(device)).toHaveLength(1);
   });
 

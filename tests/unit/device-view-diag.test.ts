@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import { DiagnosticsHub } from '../../src/renderer/src/device/diagnostics';
 import type { DeviceBoundTransport, DiagEntry, SelfCheckResult } from '../../src/renderer/src/device/transport';
-import type { DeviceLink } from '../../src/renderer/src/device/link';
+import type { DeviceLink, LinkState } from '../../src/renderer/src/device/link';
 import { WebHidSession } from '../../src/renderer/src/device/webhid/session';
 import { setLang, t } from '../../src/renderer/src/i18n';
 import { createDeviceView } from '../../src/renderer/src/ui/views/device-view';
@@ -15,6 +15,7 @@ function entry(summary: string, level: DiagEntry['level'] = 'info'): DiagEntry {
 function fakeLink(options: {
   readonly transport: DeviceBoundTransport | null;
   readonly device?: unknown;
+  readonly audio?: LinkState['audio'];
 }): DeviceLink {
   return {
     transport: () => options.transport,
@@ -27,6 +28,7 @@ function fakeLink(options: {
       errorCode: null,
       device: options.device ?? null,
       warning: null,
+      audio: options.audio,
     }),
     onChange: () => () => undefined,
   } as unknown as DeviceLink;
@@ -70,7 +72,10 @@ function mutableLink(initialDevice: unknown): MutableLink {
   };
 }
 
-function fakeTransport(selfCheck: () => Promise<SelfCheckResult>): DeviceBoundTransport {
+function fakeTransport(
+  selfCheck: () => Promise<SelfCheckResult>,
+  levelPolling?: () => boolean,
+): DeviceBoundTransport {
   return {
     stats: () => ({
       outFrames: 7,
@@ -82,6 +87,7 @@ function fakeTransport(selfCheck: () => Promise<SelfCheckResult>): DeviceBoundTr
       queueDepth: 0,
     }),
     selfCheck,
+    levelPolling,
   } as unknown as DeviceBoundTransport;
 }
 
@@ -238,5 +244,56 @@ describe('device view / 诊断卡（5.1b）', () => {
     const { root, view } = mount(undefined);
     expect(root.querySelector('.device-save-note')?.textContent).toBe(t('device.saveNote'));
     (view as HTMLElement & { destroy?: () => void }).destroy?.();
+  });
+
+  it('5e. 设备轮询行：音频电平接管后显示"关"，退回设备上报时显示"开"', () => {
+    const selfCheck = async (): Promise<SelfCheckResult> => ({ ok: true, steps: [] });
+
+    const off = mount(new DiagnosticsHub(), fakeLink({ transport: fakeTransport(selfCheck, () => false) }));
+    expect(off.root.querySelector<HTMLElement>('[data-diag="poll"]')?.textContent).toBe(t('diag.poll.off'));
+    (off.view as HTMLElement & { destroy?: () => void }).destroy?.();
+
+    const on = mount(new DiagnosticsHub(), fakeLink({ transport: fakeTransport(selfCheck, () => true) }));
+    expect(on.root.querySelector<HTMLElement>('[data-diag="poll"]')?.textContent).toBe(t('diag.poll.on'));
+
+    const none = mount(undefined);
+    expect(none.root.querySelector<HTMLElement>('[data-diag="poll"]')?.textContent).toBe(t('diag.device.none'));
+    (none.view as HTMLElement & { destroy?: () => void }).destroy?.();
+    (on.view as HTMLElement & { destroy?: () => void }).destroy?.();
+  });
+
+  it('5f. 电平来源行：采音频输入 / 重连中 / 退回设备上报各有文案', () => {
+    const selfCheck = async (): Promise<SelfCheckResult> => ({ ok: true, steps: [] });
+    const transport = fakeTransport(selfCheck, () => false);
+
+    const using = mount(
+      undefined,
+      fakeLink({
+        transport,
+        audio: { label: '麦克风 (USB Audio Device)', source: 'audio', matched: true },
+      }),
+    );
+    expect(using.root.querySelector<HTMLElement>('[data-diag="audio"]')?.textContent).toBe(
+      t('device.audio.using', { label: '麦克风 (USB Audio Device)' }),
+    );
+    (using.view as HTMLElement & { destroy?: () => void }).destroy?.();
+
+    const retrying = mount(
+      undefined,
+      fakeLink({ transport, audio: { label: null, source: 'retrying', error: 'unavailable' } }),
+    );
+    expect(retrying.root.querySelector<HTMLElement>('[data-diag="audio"]')?.textContent).toBe(
+      t('device.audio.retrying'),
+    );
+    (retrying.view as HTMLElement & { destroy?: () => void }).destroy?.();
+
+    const fallback = mount(
+      undefined,
+      fakeLink({ transport, audio: { label: null, source: 'device', error: 'denied' } }),
+    );
+    expect(fallback.root.querySelector<HTMLElement>('[data-diag="audio"]')?.textContent).toBe(
+      t('device.audio.error.denied'),
+    );
+    (fallback.view as HTMLElement & { destroy?: () => void }).destroy?.();
   });
 });

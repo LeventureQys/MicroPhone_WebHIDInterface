@@ -60,6 +60,7 @@ class FakeMedia implements AudioMedia {
   /** 每次 read() 都现取这段样本，测试可以在 open() 之后再改 */
   sample = Float32Array.from([0.5, -0.5, 0.5, -0.5]);
   failure: unknown = null;
+  private readonly watchers = new Set<() => void>();
 
   async listInputs(): Promise<readonly AudioInputDevice[]> {
     return this.inputs;
@@ -73,10 +74,24 @@ class FakeMedia implements AudioMedia {
     this.opened.push(capture);
     return capture;
   }
+
+  watch(cb: () => void): () => void {
+    this.watchers.add(cb);
+    return () => {
+      this.watchers.delete(cb);
+    };
+  }
+
+  /** 模拟系统音频设备表变化（插拔 / 驱动重载） */
+  emitDeviceChange(): void {
+    for (const cb of [...this.watchers]) cb();
+  }
 }
 
 class FakeCapture implements AudioCapture {
   closed = 0;
+  private aliveFlag = true;
+  private readonly endedListeners = new Set<() => void>();
 
   constructor(
     readonly label: string,
@@ -89,6 +104,28 @@ class FakeCapture implements AudioCapture {
 
   close(): void {
     this.closed += 1;
+  }
+
+  alive(): boolean {
+    return this.aliveFlag;
+  }
+
+  onEnded(cb: () => void): () => void {
+    this.endedListeners.add(cb);
+    return () => {
+      this.endedListeners.delete(cb);
+    };
+  }
+
+  /** 模拟系统把这条采集断掉：track ended + 回调（真实实现的行为） */
+  kill(): void {
+    this.aliveFlag = false;
+    for (const cb of [...this.endedListeners]) cb();
+  }
+
+  /** 只让健康度变 false、不回调：验证出帧时的兜底检查 */
+  expire(): void {
+    this.aliveFlag = false;
   }
 }
 
@@ -149,7 +186,7 @@ describe('AudioLevelMeter', () => {
     ];
 
     const info = await meter.start(['USB Audio Device', 'JYM001']);
-    expect(info).toEqual({ label: '麦克风 (USB Audio Device)', matched: true });
+    expect(info).toEqual({ label: '麦克风 (USB Audio Device)', id: 'm001', matched: true });
     expect(media.openCalls).toEqual(['m001']);
 
     timers.run();
@@ -172,6 +209,7 @@ describe('AudioLevelMeter', () => {
     const info = await meter.start(['USB Audio Device']);
 
     expect(info.matched).toBe(false);
+    expect(info.id).toBeNull();
     expect(media.openCalls).toEqual([null]);
     meter.stop();
   });
@@ -250,5 +288,80 @@ describe('AudioLevelMeter', () => {
     expect(quiet.inputPeak).toBeLessThan(loud.inputPeak);
     expect(quiet.inputPeak).toBeGreaterThan(-96);
     meter.stop();
+  });
+
+  it('采集被系统断开时通知 onLost、healthy() 转 false，并且不再出帧', async () => {
+    const { media, timers, meter, frames } = build();
+    media.inputs = [{ id: 'm001', label: '麦克风 (USB Audio Device)' }];
+    let lost = 0;
+    meter.onLost(() => {
+      lost += 1;
+    });
+
+    await meter.start(['USB Audio Device']);
+    expect(meter.healthy()).toBe(true);
+    timers.run();
+    expect(frames).toHaveLength(1);
+
+    media.opened[0].kill();
+
+    expect(meter.healthy()).toBe(false);
+    expect(meter.active()).toBeNull();
+    expect(lost).toBe(1);
+    expect(media.opened[0].closed).toBe(1);
+    timers.run();
+    expect(frames).toHaveLength(1);
+  });
+
+  it('track 没发 ended、只是不再活时，出帧前的健康检查也能发现并通知', async () => {
+    const { media, timers, meter } = build();
+    media.inputs = [{ id: 'm001', label: '麦克风 (USB Audio Device)' }];
+    let lost = 0;
+    meter.onLost(() => {
+      lost += 1;
+    });
+    await meter.start(['USB Audio Device']);
+
+    media.opened[0].expire();
+    expect(meter.healthy()).toBe(false);
+
+    timers.run();
+    expect(lost).toBe(1);
+    expect(meter.active()).toBeNull();
+    expect(timers.pending).toBe(0);
+  });
+
+  it('strict 模式匹配不到设备端点时报 unavailable，不退回系统默认输入', async () => {
+    const { media, meter } = build();
+    media.inputs = [{ id: 'laptop', label: '麦克风阵列 (Realtek Audio)' }];
+
+    await expect(meter.start(['USB Audio Device'], { strict: true })).rejects.toMatchObject({
+      kind: 'unavailable',
+    });
+    expect(media.openCalls).toEqual([]);
+    expect(meter.active()).toBeNull();
+  });
+
+  it('find() 只读枚举按提示词挑端点，watchDevices 透传系统设备表变化', async () => {
+    const { media, meter } = build();
+    media.inputs = [{ id: 'm001', label: '麦克风 (USB Audio Device)' }];
+
+    expect(await meter.find(['USB Audio Device'])).toEqual({
+      id: 'm001',
+      label: '麦克风 (USB Audio Device)',
+    });
+    expect(await meter.find(['JYM001'])).toBeNull();
+    // 只读探测不能打开采集
+    expect(media.openCalls).toEqual([]);
+
+    let changes = 0;
+    const off = meter.watchDevices(() => {
+      changes += 1;
+    });
+    media.emitDeviceChange();
+    expect(changes).toBe(1);
+    off();
+    media.emitDeviceChange();
+    expect(changes).toBe(1);
   });
 });

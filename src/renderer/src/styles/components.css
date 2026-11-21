@@ -928,7 +928,8 @@
 
 .scene-row {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  /* 安静房间 / 会议 / 播客 / 唱歌 / 自定义 五个场景 */
+  grid-template-columns: repeat(5, minmax(0, 1fr));
   gap: 8px;
 }
 
@@ -1210,7 +1211,13 @@
   flex: 1 1 auto;
   flex-direction: column;
   justify-content: space-between;
-  gap: 16px;
+  gap: 12px;
+}
+
+/* 中栏变挤（两个阈值 + 音色 + 三个输入开关）：说明文字让位给控件 */
+.console .macro-hint,
+.console-middle .card-desc {
+  display: none;
 }
 
 .tune-grid > .pfield + .pfield {
@@ -1264,6 +1271,62 @@
   background: #2a303b;
   color: var(--text);
   box-shadow: 0 1px 2px rgba(0, 0, 0, 0.35), inset 0 1px 0 rgba(255, 255, 255, 0.05);
+}
+
+/* 快速调音卡里的三个输入开关（原高级参数「增益」卡） */
+.tune-switches {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.tune-switch-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 4px 10px;
+}
+
+.tune-switch-grid .switch-row {
+  min-width: 0;
+}
+
+.tune-switch-grid .switch-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-dim);
+  font-size: 12px;
+}
+
+/* 模块旁通开关：卡片顶部一行，不和字段标题抢层级 */
+.module-bypass {
+  padding-bottom: 6px;
+  border-bottom: 1px solid var(--line);
+}
+
+.module-bypass .switch-label {
+  color: var(--text);
+  font-size: 12.5px;
+  font-weight: 500;
+}
+
+.module-bypass-note {
+  margin: 0 0 6px;
+}
+
+.is-bypassed .pfield-label,
+.is-bypassed .eq-select,
+.is-bypassed .eq-input {
+  opacity: 0.45;
+}
+
+.segmented.is-disabled {
+  opacity: 0.45;
+}
+
+.drc-recommend-row {
+  display: flex;
+  margin: -4px 0 8px;
 }
 
 .switch-grid {
@@ -1659,10 +1722,24 @@
   margin-top: 0;
 }
 
+/* 旁通 / 提示 / 推荐按钮是整行，两个分频点才占两列 */
+.advanced-section[data-section='drc'] .panel-grid > .card:first-child .module-bypass,
+.advanced-section[data-section='drc'] .panel-grid > .card:first-child .module-bypass-note,
+.advanced-section[data-section='drc'] .panel-grid > .card:first-child .drc-recommend-row {
+  grid-column: 1 / -1;
+}
+
 /* EQ 逐段表 */
 .eq-table-toolbar {
   display: flex;
   flex: none;
+  align-items: center;
+  gap: 12px;
+}
+
+.eq-table-toolbar .module-bypass {
+  padding-bottom: 0;
+  border-bottom: 0;
 }
 
 .eq-list {

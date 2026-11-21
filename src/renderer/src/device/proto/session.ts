@@ -322,6 +322,10 @@ export class ParamSession {
   private queue: Task[] = [];
   private inflight: Inflight | null = null;
   private throttleTimer: unknown = null;
+  /** 写帧最小间隔的等待计时器（`writeGapMs`） */
+  private pumpTimer: unknown = null;
+  /** 写超时后的冷却截止时刻：冷却期内不排新的写帧，避免把卡在 Flash 里的设备压死 */
+  private writePausedUntil = 0;
   private pollTimer: unknown = null;
   private pollingWanted = false;
   private inbound: Uint8Array = EMPTY;
@@ -529,9 +533,10 @@ export class ParamSession {
     }
     if (!queued) return;
     this.lastWriteActivity = this.clock.now();
-    if (this.throttleTimer === null) {
-      this.throttleTimer = this.timers.setTimeout(() => this.flushWrites(), this.timing.writeThrottleMs);
-    }
+    // 尾沿触发：拖拽期间每来一次新值就把窗口往后推，停手后才发一帧。
+    // 固定窗口会按帧/秒持续压设备（真机 2026-11-13 反馈的"频繁调节会卡死"）。
+    this.clearThrottle();
+    this.throttleTimer = this.timers.setTimeout(() => this.flushWrites(), this.timing.writeThrottleMs);
     this.emitStats();
   }
 
@@ -620,6 +625,8 @@ export class ParamSession {
     if (this.disposed) return;
     this.stopPolling();
     this.clearThrottle();
+    this.clearPumpTimer();
+    this.pendingWrites.clear();
     const inflight = this.inflight;
     if (inflight !== null) {
       this.clearInflightTimer(inflight);
@@ -664,6 +671,19 @@ export class ParamSession {
     if (this.phaseValue === 'error') {
       this.emitStats();
       return;
+    }
+    // 写帧之间留最小间隔：批量写（恢复默认等）一次排出多组时，不能让它们背靠背压到设备上。
+    // 读请求不受这条限制，诊断/回读仍按原节奏走。
+    if (this.pumpTimer === null && this.queue[0].expect === 'ack' && this.lastWriteActivity > 0) {
+      const wait = this.timing.writeGapMs - (this.clock.now() - this.lastWriteActivity);
+      if (wait > 0) {
+        this.pumpTimer = this.timers.setTimeout(() => {
+          this.pumpTimer = null;
+          this.pump();
+        }, wait);
+        this.emitStats();
+        return;
+      }
     }
     const task = this.queue.shift() as Task;
     this.inflight = { task, attempts: 0, timer: null, abandoned: false, drain: null, releaseDrain: null };
@@ -733,6 +753,13 @@ export class ParamSession {
       return;
     }
     this.counts.timeouts += 1;
+    if (inflight.task.expect === 'ack') {
+      // 写超时说明设备可能正卡在 Flash 里：冷却一段时间再排下一条写，别把主循环压死
+      this.writePausedUntil = Math.max(
+        this.writePausedUntil,
+        this.clock.now() + this.timing.writePauseAfterTimeoutMs,
+      );
+    }
     this.pushDiag({
       at: this.clock.now(),
       dir: 'out',
@@ -926,6 +953,7 @@ export class ParamSession {
       this.releaseInflight(inflight);
     }
     this.clearThrottle();
+    this.clearPumpTimer();
     this.pendingWrites.clear();
     this.stopPolling();
     const dropped = this.queue;
@@ -961,10 +989,22 @@ export class ParamSession {
     }
   }
 
+  private clearPumpTimer(): void {
+    if (this.pumpTimer === null) return;
+    this.timers.clearTimeout(this.pumpTimer);
+    this.pumpTimer = null;
+  }
+
   private flushWrites(): void {
     this.throttleTimer = null;
     if (this.disposed) return;
     if (this.pendingWrites.size === 0) return;
+    // 写超时后的冷却期：设备可能正卡在 Flash 写里，这时再发写只会加重卡死
+    const wait = this.writePausedUntil - this.clock.now();
+    if (wait > 0) {
+      this.throttleTimer = this.timers.setTimeout(() => this.flushWrites(), wait);
+      return;
+    }
     const entries = [...this.pendingWrites.entries()].sort((left, right) => left[0] - right[0]);
     this.pendingWrites.clear();
     for (const group of groupWrites(entries)) this.queue.push(this.createWriteTask(group));
@@ -1169,6 +1209,7 @@ export class ParamSession {
   private cancelWork(): Promise<void> | null {
     this.stopPolling();
     this.clearThrottle();
+    this.clearPumpTimer();
     this.pendingWrites.clear();
     const interrupted: TransportError = { kind: 'disconnected', message: '请求被新的同步请求中断' };
     const dropped = this.queue;

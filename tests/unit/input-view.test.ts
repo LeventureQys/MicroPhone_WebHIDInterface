@@ -14,34 +14,44 @@ function mount() {
 }
 
 describe('input view', () => {
-  it('renders a control for every gain-module parameter', () => {
+  it('renders noise-gate and ENC controls but no gain card or EQ mode', () => {
     const { view, destroy } = mount();
-    for (const spec of paramsOf('gain')) {
+    for (const spec of [...paramsOf('noisegate'), ...paramsOf('enc')]) {
       expect(view.querySelector(`[data-param="${spec.id}"]`), `missing control for ${spec.id}`).not.toBeNull();
     }
+    // 增益卡与均衡器模式卡已按 2026-11-13 需求移除
+    expect(view.querySelector('[data-param="gain.Mic"]')).toBeNull();
+    expect(view.querySelector('[data-param="eq.mode"]')).toBeNull();
     destroy?.();
   });
 
-  it('exposes the eq.mode entry that used to have no control at all', () => {
+  it('renders the noise-gate enable bit as a real switch, keeping the threshold untouched', () => {
     const { store, view, destroy } = mount();
-    const mode = view.querySelector<HTMLElement>('.segmented[data-param="eq.mode"]');
-    expect(mode).not.toBeNull();
-    expect(mode?.querySelectorAll('.seg-btn')).toHaveLength(5);
+    store.setParam('noisegate.threshold_db', -40);
+    const enable = view.querySelector<HTMLInputElement>('[data-enable="noisegate"] input[type="checkbox"]');
+    expect(enable).not.toBeNull();
+    expect(enable?.checked).toBe(true);
 
-    // 点第 4 档（index 3）→ 写进 store
-    const buttons = mode?.querySelectorAll<HTMLButtonElement>('.seg-btn') ?? [];
-    buttons[3]?.click();
-    expect(store.get().params['eq.mode']).toBe(3);
-    expect(mode?.querySelector('.seg-btn.is-active')?.textContent).toBe('3');
+    enable?.click();
+    // 参数表 V0.3：关开关就是真正的旁通，阈值不动
+    expect(store.get().params['noisegate.Enable']).toBe(0);
+    expect(store.get().params['noisegate.threshold_db']).toBe(-40);
 
+    enable?.click();
+    expect(store.get().params['noisegate.Enable']).toBe(1);
     destroy?.();
   });
 
-  it('keeps the eq.mode segment in sync with store changes', () => {
+  it('turns ENC off and disables the level selector', () => {
     const { store, view, destroy } = mount();
-    store.setParam('eq.mode', 2);
-    const mode = view.querySelector<HTMLElement>('.segmented[data-param="eq.mode"]');
-    expect(mode?.querySelector('.seg-btn.is-active')?.textContent).toBe('2');
+    store.setParam('enc.OnOff', 1);
+    const toggle = view.querySelector<HTMLInputElement>('[data-param="enc.OnOff"] input[type="checkbox"]');
+    expect(toggle?.checked).toBe(true);
+
+    toggle?.click();
+    expect(store.get().params['enc.OnOff']).toBe(0);
+    const level = view.querySelector<HTMLElement>('[data-param="enc.Level"]');
+    expect(level?.querySelector<HTMLButtonElement>('.seg-btn')?.disabled).toBe(true);
     destroy?.();
   });
 });

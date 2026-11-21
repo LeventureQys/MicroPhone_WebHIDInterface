@@ -219,18 +219,46 @@ export class WebHidSession extends EventTarget {
   }
 
   /**
-   * 只读探测真机：列出系统里能看到的 HID 设备，不改会话状态、不建设备句柄表。
+   * 只读探测真机：会话还没连上（idle/error）时也能查"插着没有"，不改会话状态、不建设备句柄表。
    *
-   * 后台自动连接用它：会话还没连上（idle/error）时也要能查"插着没有"，
-   * 而 `refresh()` 只在 status === 'ready' 时工作。id 与 `connect('native')` 合成的一致。
+   * 传 VID/PID 时走套件的存在性探测（只问 `getDevices()` 并过滤），后台自动连接用这条；
+   * 不传时列出全部设备（单测与诊断），id 与 `connect('native')` 合成的保持一致。
    */
-  async probeNative(): Promise<readonly WebHidDeviceSummary[]> {
+  async probeNative(target?: {
+    readonly vendorId: number;
+    readonly productId: number;
+  }): Promise<readonly WebHidDeviceSummary[]> {
     if (!this.#kit.nativeAvailable()) return Object.freeze([]);
     try {
+      if (target) {
+        // 自动连接只关心 VID/PID 在不在：走只读存在性探测，不解析描述符、不建设备表
+        const matches = await this.#kit.probeNative(target.vendorId, target.productId);
+        return Object.freeze(
+          matches.map((item, index) => ({
+            id: `native-${item.vendorId.toString(16).padStart(4, '0')}-${item.productId
+              .toString(16)
+              .padStart(4, '0')}-${index}`,
+            mode: 'native' as const,
+            productName: item.productName || `HID ${item.vendorId}/${item.productId}`,
+            vendorId: item.vendorId,
+            productId: item.productId,
+            opened: item.opened,
+          })),
+        );
+      }
       return this.#preview(await this.#kit.nativeDevices(), 'native');
     } catch {
       return Object.freeze([]);
     }
+  }
+
+  /**
+   * 原生 HID 插拔通知：有它时后台连接不必高频轮询系统设备表。
+   * 返回退订函数；环境不支持时是 no-op。
+   */
+  watchNative(cb: () => void): () => void {
+    if (!this.#kit.nativeAvailable()) return () => undefined;
+    return this.#kit.watchNative(cb);
   }
 
   /** 当前环境是否具备原生 WebHID（后台自动连接据此决定要不要轮询） */

@@ -1,9 +1,9 @@
 import { DEFAULT_BANDS } from '../../domain/defaults';
-import type { AppStore } from '../../domain/state';
+import type { AppState, AppStore } from '../../domain/state';
 import { EqModel } from '../../eq/model';
 import { EQ_TYPE_LABEL, type EqBand, type EqFilterType } from '../../eq/types';
 import { t } from '../../i18n';
-import { card } from '../controls';
+import { card, setSwitchChecked, switchControl } from '../controls';
 
 const TYPE_VALUES: EqFilterType[] = [0, 1, 2, 3, 4];
 
@@ -13,11 +13,19 @@ const TYPE_VALUES: EqFilterType[] = [0, 1, 2, 3, 4];
  */
 export function createEqBandTable(store: AppStore): HTMLElement {
   const model = new EqModel(store.get().bands);
+  const state = store.get();
 
   const built = card({ title: t('eq.bandTitle') });
 
   const toolbar = document.createElement('div');
   toolbar.className = 'eq-table-toolbar';
+  const bypass = switchControl({
+    checked: state.bypass.eq,
+    label: t('module.bypass'),
+    onChange: (checked) => store.setBypass('eq', checked),
+  });
+  bypass.classList.add('module-bypass');
+  bypass.dataset.bypass = 'eq';
   const reset = document.createElement('button');
   reset.type = 'button';
   reset.className = 'btn btn--ghost btn--small';
@@ -30,7 +38,12 @@ export function createEqBandTable(store: AppStore): HTMLElement {
     }
     commit();
   });
-  toolbar.append(reset);
+  toolbar.append(bypass, reset);
+
+  const bypassNote = document.createElement('p');
+  bypassNote.className = 'macro-hint module-bypass-note';
+  bypassNote.textContent = t('module.bypass.eq');
+  bypassNote.hidden = !state.bypass.eq;
 
   const list = document.createElement('div');
   list.className = 'eq-list';
@@ -154,7 +167,7 @@ export function createEqBandTable(store: AppStore): HTMLElement {
 
   // 复位按钮放卡头右侧，和标题同一行
   built.root.querySelector('.card-head')?.append(toolbar);
-  built.body.append(list, internal);
+  built.body.append(bypassNote, list, internal);
 
   function syncRows(): void {
     for (const [index, rowInputs] of inputs) {
@@ -169,11 +182,26 @@ export function createEqBandTable(store: AppStore): HTMLElement {
   }
 
   function commit(): void {
+    // 手改具体段值后不再属于任何固定音色：主界面按「自定义」显示，且曲线重新可拖
+    store.setTone('custom');
     store.setBands(model.allBands());
     syncRows();
   }
 
-  const unsubscribe = store.onChange((next) => {
+  const applyBypass = (bypassed: boolean): void => {
+    setSwitchChecked(bypass, bypassed);
+    bypassNote.hidden = !bypassed;
+    for (const input of list.querySelectorAll<HTMLInputElement | HTMLSelectElement>('input, select')) {
+      input.disabled = bypassed;
+    }
+    reset.disabled = bypassed;
+    list.classList.toggle('is-bypassed', bypassed);
+  };
+  applyBypass(state.bypass.eq);
+
+  const unsubscribe = store.onChange((next: AppState) => {
+    applyBypass(next.bypass.eq);
+
     const current = model.allBands();
     const changed = next.bands.some((band: EqBand, index: number) => {
       const mine = current[index];

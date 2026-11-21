@@ -344,6 +344,8 @@ describe('S-a 唯一在途槽 / R3-1 严格串行', () => {
       expect(harness.device.requests).toHaveLength(sent);
       expect(harness.session.stats().queueDepth).toBe(VOLATILE_ADDRS.length - sent);
       expect(harness.device.deliverOne()).toBe(true);
+      // 写帧之间有 writeGapMs 的最小间隔：回执后还要等它才发下一帧
+      if (sent < VOLATILE_ADDRS.length) harness.timers.advance(TIMING.writeGapMs);
     }
 
     const written = harness.device.requests.map((frame) => (frame.data[0] << 8) | frame.data[1]);
@@ -525,7 +527,8 @@ describe('S-b 写合并与节流 / R3-6', () => {
       harness.session.write([{ addr: 0x2024, raw: index }]);
       harness.timers.advance(16);
     }
-    harness.timers.advance(200);
+    // 尾沿触发：拖拽结束后再等一个完整窗口才落最后一帧
+    harness.timers.advance(TIMING.writeThrottleMs + TIMING.writeGapMs);
 
     expect(harness.events.sends).toBeLessThanOrEqual(20);
     expect(harness.events.sends).toBeGreaterThan(0);
@@ -543,7 +546,33 @@ describe('S-b 写合并与节流 / R3-6', () => {
     expect(harness.device.registers.get(0x2024)).toBe(120);
   });
 
-  it('同窗口相邻预设地址合成一条 0x11；不相邻地址各走一条 0x10', () => {
+  it('waits for the user to stop before sending a write frame (trailing edge)', () => {
+    const harness = createHarness();
+    // 模拟一次 1 秒的连续拖拽：每 16 ms 一个新值，拖拽期间一帧都不该发
+    for (let index = 1; index <= 60; index += 1) {
+      harness.session.write([{ addr: 0x2024, raw: index }]);
+      harness.timers.advance(16);
+    }
+    expect(harness.events.sends).toBe(0);
+
+    harness.timers.advance(TIMING.writeThrottleMs);
+    expect(harness.events.sends).toBe(1);
+    expect(harness.device.registers.get(0x2024)).toBe(60);
+  });
+
+  it('spaces consecutive write frames by writeGapMs', () => {
+    const harness = createHarness();
+    harness.session.write([{ addr: 0x2024, raw: 1 }]);
+    harness.session.write([{ addr: 0x2026, raw: 2 }]);
+    harness.timers.advance(TIMING.writeThrottleMs);
+
+    // 两个地址不相邻 → 两条 0x10；第二条要等写帧间隔
+    expect(harness.events.sends).toBe(1);
+    harness.timers.advance(TIMING.writeGapMs);
+    expect(harness.events.sends).toBe(2);
+  });
+
+  it('same-window adjacent preset addresses merge into one 0x11; non-adjacent use 0x10', () => {
     const harness = createHarness();
     harness.session.write([
       { addr: 0x205d, raw: 5 },
@@ -565,7 +594,7 @@ describe('S-b 写合并与节流 / R3-6', () => {
       { addr: 0x2024, raw: 1 },
       { addr: 0x2026, raw: 2 },
     ]);
-    harness.timers.advance(TIMING.writeThrottleMs);
+    harness.timers.advance(TIMING.writeThrottleMs + TIMING.writeGapMs);
 
     const randFrames = harness.device.requests.slice(before);
     expect(randFrames).toHaveLength(2);
@@ -577,7 +606,7 @@ describe('S-b 写合并与节流 / R3-6', () => {
     const harness = createHarness();
     harness.session.write([{ addr: 0x1007, raw: 1 }]);
     harness.session.write([{ addr: 0x1008, raw: 2 }]);
-    harness.timers.advance(TIMING.writeThrottleMs);
+    harness.timers.advance(TIMING.writeThrottleMs + TIMING.writeGapMs);
 
     const frames = harness.device.requests;
     expect(frames).toHaveLength(2);
@@ -696,6 +725,11 @@ describe('R4-2 回读期间写排队', () => {
     expect(harness.session.phase()).toBe('ready');
 
     harness.device.deliverAll();
+    // 相邻写帧要等 writeGapMs：每等一次才排出下一帧，回执也不自动投递
+    for (let round = 0; round < addrs.length; round += 1) {
+      harness.timers.advance(TIMING.writeGapMs);
+      harness.device.deliverAll();
+    }
     const writeFrames = harness.device.requests.slice(2);
     expect(writeFrames).toHaveLength(3);
     expect(writeFrames.map((frame) => (frame.data[0] << 8) | frame.data[1])).toEqual(addrs);

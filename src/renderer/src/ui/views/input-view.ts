@@ -1,24 +1,14 @@
-import { paramsOf, type ParamSpec } from '../../domain/params';
+import { paramsOf } from '../../domain/params';
 import type { AppState, AppStore } from '../../domain/state';
-import { formatValue } from '../../domain/values';
 import { t } from '../../i18n';
-import {
-  card,
-  readonlyField,
-  segmented,
-  setSegmentedValue,
-  setSwitchChecked,
-  switchControl,
-} from '../controls';
+import { card, segmented, setSegmentedValue, setSwitchChecked, switchControl } from '../controls';
 import { createParamFields } from './param-list';
 
-/** 布尔开关：寄存器表里 min 0 / max 1 / step 1 的项就是二值项 */
-function isBooleanSpec(spec: ParamSpec): boolean {
-  return spec.min === 0 && spec.max === 1 && spec.step === 1;
-}
-
-function readoutOf(node: HTMLElement): HTMLElement | null {
-  return node.querySelector<HTMLElement>('.pfield-readout strong');
+function hint(text: string): HTMLElement {
+  const note = document.createElement('p');
+  note.className = 'macro-hint';
+  note.textContent = text;
+  return note;
 }
 
 export function createInputView(store: AppStore): HTMLElement {
@@ -28,54 +18,27 @@ export function createInputView(store: AppStore): HTMLElement {
 
   const state = store.get();
 
-  // 增益卡：`gain` 模块共 5 项——Mic/Hp 增益只读，静音 / 信号静音 / 监听 3 项可写。
-  // 3.2 之前整卡按只读渲染，导致这 3 个可写项在抽屉里既没有控件也点不动（§4.12）
-  const gainSpecs = paramsOf('gain');
-  const gainCard = card({
-    title: t('module.gain'),
-    desc: t('module.gain.desc'),
-  });
-
-  const booleanSpecs = gainSpecs.filter((spec) => !spec.readonly && isBooleanSpec(spec));
-  const sliderSpecs = gainSpecs.filter((spec) => !spec.readonly && !isBooleanSpec(spec));
-
-  const gainFields = createParamFields(store, sliderSpecs);
-  const sliderById = new Map(sliderSpecs.map((spec, index) => [spec.id, gainFields.nodes[index]]));
-
-  const switchById = new Map<string, HTMLElement>();
-  for (const spec of booleanSpecs) {
-    const node = switchControl({
-      checked: (state.params[spec.id] ?? 0) === 1,
-      label: t(`param.${spec.id}.label`),
-      onChange: (checked) => store.setParam(spec.id, checked ? 1 : 0),
-    });
-    // 与 paramSlider 对齐：每张控件都带 data-param，自动化与验收脚本按 id 定位
-    node.dataset.param = spec.id;
-    switchById.set(spec.id, node);
-  }
-
-  const readonlyById = new Map<string, { spec: ParamSpec; node: HTMLElement; readout: HTMLElement | null }>();
-  for (const spec of gainSpecs) {
-    if (!spec.readonly) continue;
-    const node = readonlyField(spec, state.params[spec.id] ?? spec.default);
-    readonlyById.set(spec.id, { spec, node, readout: readoutOf(node) });
-  }
-
-  // 按 paramsOf('gain') 的声明顺序落位，保持与寄存器表行序一致
-  for (const spec of gainSpecs) {
-    const node = readonlyById.get(spec.id)?.node ?? switchById.get(spec.id) ?? sliderById.get(spec.id);
-    if (node) gainCard.body.append(node);
-  }
-
-  // 噪声门
+  // 噪声门：V0.3 参数表补了模块使能位 0x2074，开关就是真正的旁通（直通），
+  // 不再像 2026-11-13 那版把阈值钉到 -91 dB 来近似。
   const gateCard = card({
     title: t('module.noisegate'),
     desc: t('module.noisegate.desc'),
   });
-  const gateFields = createParamFields(store, paramsOf('noisegate'));
-  gateCard.body.append(...gateFields.nodes);
+  const gateEnable = switchControl({
+    checked: (state.params['noisegate.Enable'] ?? 0) === 1,
+    label: t('param.noisegate.Enable.label'),
+    onChange: (checked) => store.setParam('noisegate.Enable', checked ? 1 : 0),
+  });
+  gateEnable.classList.add('module-bypass');
+  gateEnable.dataset.enable = 'noisegate';
+  gateEnable.dataset.param = 'noisegate.Enable';
+  const gateFields = createParamFields(
+    store,
+    paramsOf('noisegate').filter((spec) => spec.id !== 'noisegate.Enable'),
+  );
+  gateCard.body.append(gateEnable, hint(t('module.noisegate.bypassHint')), ...gateFields.nodes);
 
-  // 环境降噪
+  // 环境降噪：`enc.OnOff` 就是真正的使能位，关闭时档位不可操作
   const encCard = card({
     title: t('module.enc'),
     desc: t('module.enc.desc'),
@@ -83,18 +46,15 @@ export function createInputView(store: AppStore): HTMLElement {
   const onOffSpec = paramsOf('enc').find((spec) => spec.field === 'OnOff');
   const levelSpec = paramsOf('enc').find((spec) => spec.field === 'Level');
 
-  let switchNode: HTMLElement | null = null;
+  const encSwitch = switchControl({
+    checked: (state.params['enc.OnOff'] ?? 0) === 1,
+    label: t('param.enc.OnOff.label'),
+    onChange: (checked) => store.setParam('enc.OnOff', checked ? 1 : 0),
+  });
+  encSwitch.dataset.param = onOffSpec?.id ?? 'enc.OnOff';
+  encCard.body.append(encSwitch);
+
   let levelNode: HTMLElement | null = null;
-
-  if (onOffSpec) {
-    switchNode = switchControl({
-      checked: (state.params[onOffSpec.id] ?? 0) === 1,
-      label: t(`param.${onOffSpec.id}.label`),
-      onChange: (checked) => store.setParam(onOffSpec.id, checked ? 1 : 0),
-    });
-    encCard.body.append(switchNode);
-  }
-
   if (levelSpec) {
     const levelLabel = document.createElement('div');
     levelLabel.className = 'pfield';
@@ -111,67 +71,30 @@ export function createInputView(store: AppStore): HTMLElement {
       value: state.params[levelSpec.id] ?? 1,
       onChange: (value) => store.setParam(levelSpec.id, value),
     });
+    levelNode.dataset.param = levelSpec.id;
     levelLabel.append(levelNode);
     encCard.body.append(levelLabel);
   }
 
-  // 均衡器模式（`eq.mode` / `0x2026`）：42 项里此前唯一没有控件入口的参数，补成一张小卡，
-  // 否则用户只能在设备上切模式（验收 A20）
-  const eqModeSpec = paramsOf('eq').find((spec) => spec.field === 'mode');
-  let modeNode: HTMLElement | null = null;
-  let modeCard: HTMLElement | null = null;
-
-  if (eqModeSpec) {
-    const built = card({
-      title: t('module.eq'),
-      desc: t('module.eq.desc'),
-    });
-    const modeField = document.createElement('div');
-    modeField.className = 'pfield';
-    const head = document.createElement('div');
-    head.className = 'pfield-head';
-    const label = document.createElement('span');
-    label.className = 'pfield-label';
-    label.textContent = t(`param.${eqModeSpec.id}.label`);
-    head.append(label);
-    // 协议里模式是 0–4 的枚举，取值语义未定，按原始档位展示（与 ENC 档位同一处理）
-    modeNode = segmented<number>({
-      options: [0, 1, 2, 3, 4].map((value) => ({ value, label: String(value) })),
-      value: state.params[eqModeSpec.id] ?? 0,
-      onChange: (value) => store.setParam(eqModeSpec.id, value),
-    });
-    modeNode.dataset.param = eqModeSpec.id;
-    modeField.append(head, modeNode);
-    built.body.append(modeField);
-    modeCard = built.root;
-  }
-
-  const cards: HTMLElement[] = [gainCard.root, gateCard.root, encCard.root];
-  if (modeCard) cards.push(modeCard);
-  grid.append(...cards);
+  grid.append(gateCard.root, encCard.root);
   root.append(grid);
 
   const sync = (next: AppState): void => {
     gateFields.sync(next);
-    gainFields.sync(next);
-    for (const [id, node] of switchById) {
-      setSwitchChecked(node, (next.params[id] ?? 0) === 1);
-    }
-    for (const [id, entry] of readonlyById) {
-      if (!entry.readout) continue;
-      entry.readout.textContent = formatValue(entry.spec, next.params[id] ?? entry.spec.default);
-    }
-    if (onOffSpec && switchNode) {
-      setSwitchChecked(switchNode, (next.params[onOffSpec.id] ?? 0) === 1);
-    }
+    setSwitchChecked(gateEnable, (next.params['noisegate.Enable'] ?? 0) === 1);
+
+    setSwitchChecked(encSwitch, (next.params['enc.OnOff'] ?? 0) === 1);
     if (levelSpec && levelNode) {
       setSegmentedValue(levelNode, next.params[levelSpec.id] ?? 1);
-    }
-    if (eqModeSpec && modeNode) {
-      setSegmentedValue(modeNode, next.params[eqModeSpec.id] ?? 0);
+      const off = (next.params['enc.OnOff'] ?? 0) !== 1;
+      for (const button of levelNode.querySelectorAll<HTMLButtonElement>('.seg-btn')) {
+        button.disabled = off;
+      }
+      levelNode.classList.toggle('is-disabled', off);
     }
   };
 
+  sync(state);
   const unsubscribe = store.onChange(sync);
 
   (root as HTMLElement & { destroy?: () => void }).destroy = () => unsubscribe();

@@ -15,7 +15,6 @@ import {
   type KitNativeHIDDevice,
 } from '@webhid-kit';
 import type { WebHidDeviceHandle, WebHidKit, WebHidKitBridge, WebHidUsageFilter } from './types';
-
 /**
  * 真机句柄的身份字段在 `handle.device` 上，`NativeHidHandle` 自己不转发；
  * 会话侧（`device/webhid/session.ts`）按契约直接读 `vendorId/productId`，缺了会抛
@@ -75,6 +74,43 @@ export function createWebHidKit(): WebHidKit {
 
     nativeAvailable: () => isNativeWebHidAvailable(),
     nativeDevices: async () => (await getNativeDevices()).map(adaptNativeHandle),
+    // 只读存在性：直接问 navigator.hid.getDevices() 并按 VID/PID 过滤，**不**构造 NativeHidHandle。
+    // 上游 getNativeDevices() 会对每台设备 computeLayout(描述符)，系统里键盘鼠标一堆，
+    // 后台每 1.5 s 跑一次会把枚举线程拖住（2026-11-13 反馈“不需要频繁获取描述符”）。
+    probeNative: async (vendorId: number, productId: number) => {
+      const hid = (globalThis as { navigator?: { hid?: { getDevices?: () => Promise<unknown[]> } } }).navigator?.hid;
+      if (!hid || typeof hid.getDevices !== 'function') return [];
+      const devices = await hid.getDevices();
+      const matches: Array<{ vendorId: number; productId: number; productName: string; opened: boolean }> = [];
+      for (const raw of devices as Array<{ vendorId?: number; productId?: number; productName?: string; opened?: boolean }>) {
+        if (raw.vendorId !== vendorId || raw.productId !== productId) continue;
+        matches.push({
+          vendorId,
+          productId,
+          productName: raw.productName ?? '',
+          opened: Boolean(raw.opened),
+        });
+      }
+      return matches;
+    },
+    watchNative: (cb: () => void) => {
+      const hid = (globalThis as {
+        navigator?: {
+          hid?: {
+            addEventListener?: (type: string, handler: () => void) => void;
+            removeEventListener?: (type: string, handler: () => void) => void;
+          };
+        };
+      }).navigator?.hid;
+      if (!hid || typeof hid.addEventListener !== 'function') return () => undefined;
+      const handler = (): void => cb();
+      hid.addEventListener('connect', handler);
+      hid.addEventListener('disconnect', handler);
+      return () => {
+        hid.removeEventListener?.('connect', handler);
+        hid.removeEventListener?.('disconnect', handler);
+      };
+    },
     // 上游 native.js:98 的签名是 requestNativeDevice({ filters, exclusionFilters } = {})；
     // filters 为空时退回不带参调用，保持与改动前逐字一致的行为
     requestNativeDevice: async (filters?: readonly WebHidUsageFilter[]) => {

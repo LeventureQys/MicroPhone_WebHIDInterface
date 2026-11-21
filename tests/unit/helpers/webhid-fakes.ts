@@ -144,6 +144,32 @@ export class FakeKit implements WebHidKit {
     this.requestedFilters.push(filters);
     return this.options.requestResult ?? [];
   }
+
+  /** 只读存在性探测：FakeKit 已持有句柄列表，直接按 VID/PID 过滤，不模拟"解析描述符" */
+  async probeNative(vendorId: number, productId: number) {
+    return (this.options.nativeDevices ?? [])
+      .filter((device) => device.vendorId === vendorId && device.productId === productId)
+      .map((device) => ({
+        vendorId: device.vendorId,
+        productId: device.productId,
+        productName: device.productName,
+        opened: device.opened,
+      }));
+  }
+
+  /** 单测用：保存订阅并在 `emitNativeChange()` 时一起触发 */
+  private readonly nativeWatchers = new Set<() => void>();
+
+  watchNative(cb: () => void): () => void {
+    this.nativeWatchers.add(cb);
+    return () => {
+      this.nativeWatchers.delete(cb);
+    };
+  }
+
+  emitNativeChange(): void {
+    for (const cb of [...this.nativeWatchers]) cb();
+  }
 }
 
 /** 等一轮宏任务：会话内的 setTimeout 合并渲染都在这之后 */

@@ -7,7 +7,9 @@ const EXPECTED_TIMING = {
   requestRetries: 2,
   writeTimeoutMs: 3000,
   writeRetries: 1,
-  writeThrottleMs: 120,
+  writeThrottleMs: 300,
+  writeGapMs: 200,
+  writePauseAfterTimeoutMs: 1000,
   writeSettleMs: 600,
   writeGraceMs: 8000,
   pollIntervalMs: 20,
@@ -30,9 +32,9 @@ const EXPECTED_TIMING = {
 };
 
 describe('TIMING', () => {
-  it('24 个字段值与设计文档 §5.4.4 逐字一致', () => {
+  it('26 个字段值与设计文档 §5.4.4 逐字一致', () => {
     expect({ ...TIMING }).toEqual(EXPECTED_TIMING);
-    expect(Object.keys(TIMING)).toHaveLength(24);
+    expect(Object.keys(TIMING)).toHaveLength(26);
   });
 
   it('对象被冻结，运行期改不动（C8：时间常量只读且集中）', () => {

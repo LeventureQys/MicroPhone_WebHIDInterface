@@ -1,7 +1,7 @@
 import type { RegisterRegion, RegisterScale } from '../device/registers';
 import { defaultOf, findRegister } from '../device/registers';
 
-export type ModuleId = 'gain' | 'noisegate' | 'comp' | 'limit' | 'eq' | 'enc' | 'drc3';
+export type ModuleId = 'gain' | 'noisegate' | 'comp' | 'limit' | 'eq' | 'enc' | 'drc3' | 'rgb';
 
 export type ParamUnit = 'dB' | 'Hz' | 'ms' | 's' | '';
 
@@ -19,7 +19,7 @@ export interface ParamSpec {
   readonly default: number;
   /** true = 只读展示，不提供控件 */
   readonly readonly: boolean;
-  /** 寄存器地址（真值源：M001参数表V0.1.xlsx） */
+  /** 寄存器地址（真值源：M001参数表V0.3.xlsx） */
   readonly addr: number;
   /** 工程量 ↔ 寄存器原始值的标定式 */
   readonly scale: RegisterScale;
@@ -34,9 +34,12 @@ interface ParamSeed {
 }
 
 /**
- * 42 项参数的 id → 地址映射。范围 / 步进 / 单位 / 默认值 / 权限 / 标定全部由
+ * 46 项参数的 id → 地址映射。范围 / 步进 / 单位 / 默认值 / 权限 / 标定全部由
  * `device/registers.ts` 按地址查表得到，这里不复制任何数值（需求 R2-2）。
  * 顺序按设计文档 §5.3 定稿表，便于逐行人工比对。
+ *
+ * 2026-11-16 参数表 V0.3：新增 4 项（`0x2072`–`0x2075`）——RGB 开关/模式、
+ * 噪声门使能、三分频动态使能。后两项就是「所有音效模块都要有 bypass 开关」的协议位。
  */
 const SEEDS: readonly ParamSeed[] = Object.freeze([
   { id: 'gain.Mic', module: 'gain', addr: 0x2023 },
@@ -63,6 +66,8 @@ const SEEDS: readonly ParamSeed[] = Object.freeze([
   { id: 'limit.Attack', module: 'limit', addr: 0x2054 },
   { id: 'limit.Release', module: 'limit', addr: 0x2055 },
 
+  // 噪声门使能位（V0.3 新增，0x2074）：排在本模块最前，界面开关就在参数滑杆上方
+  { id: 'noisegate.Enable', module: 'noisegate', addr: 0x2074 },
   { id: 'noisegate.threshold_db', module: 'noisegate', addr: 0x205b },
   { id: 'noisegate.ratio', module: 'noisegate', addr: 0x205c },
   { id: 'noisegate.attack_ms', module: 'noisegate', addr: 0x205d },
@@ -70,6 +75,8 @@ const SEEDS: readonly ParamSeed[] = Object.freeze([
   { id: 'noisegate.knee_width_db', module: 'noisegate', addr: 0x205f },
   { id: 'noisegate.hp_freq', module: 'noisegate', addr: 0x2060 },
 
+  // 三分频动态使能位（V0.3 新增，0x2075）
+  { id: 'drc3.Enable', module: 'drc3', addr: 0x2075 },
   { id: 'drc3.fc1', module: 'drc3', addr: 0x2061 },
   { id: 'drc3.fc2', module: 'drc3', addr: 0x2062 },
   { id: 'drc3.low.preGain', module: 'drc3', addr: 0x2063 },
@@ -87,6 +94,9 @@ const SEEDS: readonly ParamSeed[] = Object.freeze([
   { id: 'drc3.mid.attackTime', module: 'drc3', addr: 0x206f },
   { id: 'drc3.mid.releaseTime', module: 'drc3', addr: 0x2070 },
   { id: 'drc3.mid.ratio', module: 'drc3', addr: 0x2071 },
+
+  { id: 'rgb.OnOff', module: 'rgb', addr: 0x2072 },
+  { id: 'rgb.Mode', module: 'rgb', addr: 0x2073 },
 ]);
 
 function toParam(seed: ParamSeed): ParamSpec {
@@ -110,7 +120,7 @@ function toParam(seed: ParamSeed): ParamSpec {
   });
 }
 
-/** 42 项标量参数，全部由 `REGISTERS` 派生 */
+/** 46 项标量参数，全部由 `REGISTERS` 派生 */
 export const PARAMS: readonly ParamSpec[] = Object.freeze(SEEDS.map(toParam));
 
 const BY_ID = new Map(PARAMS.map((item) => [item.id, item]));

@@ -57,6 +57,17 @@ $env:PATH = "C:\Users\a5935\.dsh\dsh-runtimes\dsh-primary-runtime\dependencies\n
 
 `start.cmd` 只是入口，逻辑在 `scripts/start.ps1`；该文件必须保存为 **UTF-8 带 BOM**，否则 PowerShell 5.1 按 GBK 解码中文会直接语法错误。脚本默认给 Electron 加 `--no-sandbox`（已知坑 14 / 18），自动化调用时设 `MICSTUDIO_NO_PAUSE=1` 可跳过失败后的 `pause`。
 
+一键打包（把本节的环境准备全做掉：定位 DSH 运行时、生成 pnpm shim、设镜像、清 `ELECTRON_RUN_AS_NODE`，然后类型检查 + 单测 + `electron-vite build` + electron-builder + 冒烟启动）：
+
+```powershell
+.\dist.cmd                        # → release/MicStudio-<ver>-portable.exe（默认唯一产物，双击即启动）
+.\dist.cmd -Installer -Zip        # 附带 NSIS 安装包（本机未验证）与 win-unpacked 绿色版 zip
+.\dist.cmd -Clean -OpenFolder     # 先清 release/ 旧产物，完成后打开目录
+.\dist.cmd -SkipChecks -SkipSmoke # 只调打包链路时用（产物只保证能编译）
+```
+
+入口 `dist.cmd`，逻辑在 `scripts/dist.ps1`（同样必须存 **UTF-8 带 BOM**）。脚本另外生成 `release/build-info.txt`（版本 / 提交 / 体积 / SHA256）与 `release/使用说明.txt`（给最终用户的双击说明）；冒烟截图在 `artifacts/dist-smoke-<ver>.png`，启动日志复制到 `artifacts/dist-smoke-startup.log`。冒烟用 `Start-Process`（ShellExecute，等价双击）拉起 portable 并带 `--no-sandbox`：不带它时本机解包器会立刻以 `0x80000003` 退出（已知坑 14 / 18），与产物本身无关。
+
 打包与安装依赖必须先设镜像（GitHub 直连不通）：
 
 ```powershell
@@ -81,26 +92,30 @@ $env:MICSTUDIO_USER_DATA = 'D:\WorkShop\MicroPhone_WebHIDInterface\.userdata'
 
 ## Reference truth
 
-Ground truth（地址 / 标定 / 权限 / 默认值，唯一权威）：`Document/Protocol/M001参数表V0.1.xlsx`；`Document/Protocol/效果器参数范围.xlsx` 仅作中文标签与单位参考。
+Ground truth（地址 / 标定 / 权限 / 默认值，唯一权威）：`Document/Update/hardware/v0.0.6/M001参数表V0.3.xlsx`；`Document/Update/hardware/v0.0.6/usb audio demo buglist_20261116.docx` 是这一轮的界面需求单（黄色 = 上位机改）；`Document/Protocol/效果器参数范围.xlsx` 仅作中文标签与单位参考。
+
+> 2026-11-21 换版：参数表 V0.3（表内黄色标记）取代 V0.1 —— `0x2026` 上限 4→5、三分频 `fc1/fc2` 默认 50/50→1000/3000、三区 `preGain` 默认 0→128（=1.28）、新增 `0x2072`–`0x2075`（RGB 开关 / RGB 模式 / NoiseGate 使能 / 3BandDrc 使能），预设区由 114 项变 118 项。V0.1 仍在 `Document/Protocol/` 备查但**已作废**，不要照着它改代码。落地记录见 `Document/Update/hardware/v0.0.6/修复记录-参数表V0.3-20261121.md`。
 
 | 参照 | 本仓 | 备注 |
 |---|---|---|
-| `Document/Protocol/M001参数表V0.1.xlsx` | `src/renderer/src/device/registers.ts`、`src/renderer/src/domain/params.ts` | 地址 / 原始值域 / 标定 / 读写权限 / 默认值 |
+| `Document/Update/hardware/v0.0.6/M001参数表V0.3.xlsx` | `src/renderer/src/device/registers.ts`、`src/renderer/src/domain/params.ts`、`tools/vdevice/device-stack.mjs` | 地址 / 原始值域 / 标定 / 读写权限 / 默认值（118 项预设区，止于 `0x2075`） |
+| `Document/Protocol/M001参数表V0.1.xlsx` | 同上 | **已作废**，只用于追溯历史结论 |
 | `Document/Protocol/Modbus通讯协议说明_20261026.md` | `src/renderer/src/device/protocol.ts`、`device/proto/**`、`tools/vdevice/device-stack.mjs` | 帧结构 / CRC / 功能码 / Report ID / 0x10 双向复用（2026-10-26 换版，协议层唯一权威；评审见 `协议评审-Modbus协议_20261026.md`） |
-| `Document/Protocol/效果器参数范围.xlsx` | `src/renderer/src/domain/params.ts` | 仅中文标签与单位；数值以寄存器表为准 |
+| `Document/Protocol/效果器参数范围.xlsx` | `src/renderer/src/domain/params.ts` | 仅中文标签与单位；数值以寄存器表为准（三分频 preGain 1.28 / fc 1000-3000 与 V0.3 一致） |
+| `Document/Update/hardware/v0.0.6/usb audio demo buglist_20261116.docx` | `ui/views/**`、`domain/scenes.ts` | 2026-11-16 界面需求单（文字/布局/自定义场景/模块 bypass） |
 | `Document/Update/Alpha/v1.0.0/需求文档.md` | 全部功能范围 | 需求边界 |
 | `Document/Update/Alpha/v1.0.0/设计文档.md` | 全部实现契约 | 接口签名与视觉规范 |
-| `Document/Update/Alpha/v1.1.0/设计文档.md` | v1.1.0 契约与 §12 变更记录 R-1…R-28 | 与 v1.0.0 冲突时以本文件为准 |
+| `Document/Update/Alpha/v1.1.0/设计文档.md` | v1.1.0 契约与 §12 变更记录 R-1…R-38 | 与 v1.0.0 冲突时以本文件为准 |
 | 参照实现 AudioEQ_Visualized_Web（MIT） | `src/renderer/src/eq/**` | 频响算法与 Canvas 分层渲染 |
 | `third_party/web_hid_utils/docs/*.md`、`packages/webhid-kit/README.md` | `src/renderer/src/device/webhid/**` | WebHID 强制约束、桥接协议、套件 API |
 
-裁决：地址 / 标定 / 权限 / 默认值以 `M001参数表V0.1.xlsx` 为准（实现即 `device/registers.ts`）；帧结构 / CRC / 功能码 / Report ID / 上报语义以 `Modbus通讯协议说明_20261026.md` 为准（实现即 `device/proto/**` + `device/protocol.ts`）；中文标签与单位可参考 `效果器参数范围.xlsx`，但数值冲突时以寄存器表为准；曲线渲染细节以参照实现为准并做渲染适配。
+裁决：地址 / 标定 / 权限 / 默认值以 `M001参数表V0.3.xlsx` 为准（实现即 `device/registers.ts`）；帧结构 / CRC / 功能码 / Report ID / 上报语义以 `Modbus通讯协议说明_20261026.md` 为准（实现即 `device/proto/**` + `device/protocol.ts`）；中文标签与单位可参考 `效果器参数范围.xlsx`，但数值冲突时以寄存器表为准；曲线渲染细节以参照实现为准并做渲染适配。
 
 ## Architecture
 
 Electron 主进程只负责窗口、菜单、WebHID 会话策略与 IPC；渲染进程是唯一业务层：`AppStore` 是状态唯一写入口，参数改动经 `Transport` 出站（Alpha 用 `MockTransport`），`EqModel` + `computeCurve` 产出曲线数据、Canvas 分层绘制。主进程不参与业务计算，渲染进程不碰 Node API。
 
-界面是**一屏工作台**（`ui/views/console-view.ts`），没有导航与路由：所有日常逻辑同屏——顶部一键场景（`domain/scenes.ts`），左侧实时电平 + 增益 + 设备摘要，中间降噪强度 / 声音平稳 / 音色风格三个业务控件，右侧可拖拽的 7 段音色曲线，底部环境降噪与防爆音开关。协议原始参数收进顶栏「高级参数」抽屉（`ui/views/advanced-view.ts`，由 `ui/modal.ts` 承载），设备与设置也以抽屉打开，不切页。业务旋钮到协议字段的换算集中在 `domain/quick-controls.ts`，不改变 xlsx 的范围与步进。
+界面是**一屏工作台**（`ui/views/console-view.ts`），没有导航与路由：所有日常逻辑同屏——顶部一键场景（`domain/scenes.ts`，顺序 安静房间 → 会议 → 播客 → 唱歌 → 自定义），左侧实时电平 + 只读增益 + 设备摘要，中间**噪声门阈值 / 压缩器阈值**（直接写协议 dB，不再是 0..100 抽象强度）、音色（原声 / 人声增强 / 温暖 / 明亮 / 自定义）、三个输入开关（麦克风静音 / 监听 / 电平信号静音），右侧 7 段音色曲线，底部环境降噪与防爆音开关。**只有选中「自定义」音色时主界面曲线才可拖**；其它音色的细调走「逐段精调」抽屉。协议原始参数收进顶栏「高级参数」抽屉（`ui/views/advanced-view.ts`，由 `ui/modal.ts` 承载），设备与设置也以抽屉打开，不切页。`domain/quick-controls.ts` 只保留固定音色表、自定义曲线比较与防爆音使能换算，不再做强度↔阈值映射。
 
 设备抽屉（`ui/views/device-view.ts`）走 `device/webhid/` 适配层调用第三方套件：只做「发现设备 / 开关设备 / 报告解码」，不参与参数 ↔ 字节映射，因此**不实现** `Transport`，`AppStore` 的 Mock 链路不变。详见 §WebHID 接入。
 
@@ -111,10 +126,10 @@ Electron 主进程只负责窗口、菜单、WebHID 会话策略与 IPC；渲染
 - `src/renderer/src/ui/views/console-view.ts`：一屏工作台（主界面）
 - `src/renderer/src/ui/views/advanced-view.ts`：高级参数抽屉（复用 input/dynamics/drc 视图与 EQ 段表）
 - `src/renderer/src/ui/modal.ts`：抽屉/弹层宿主，Esc、遮罩点击、内容 destroy
-- `src/renderer/src/domain/scenes.ts`：一键场景（场景 → 5 个协议字段 + 7 段 EQ）
-- `src/renderer/src/domain/quick-controls.ts`：业务旋钮 ↔ 协议参数映射
+- `src/renderer/src/domain/scenes.ts`：一键场景（场景 → 5 个协议字段 + 7 段 EQ；顺序 安静房间/会议/播客/唱歌/自定义）
+- `src/renderer/src/domain/quick-controls.ts`：固定音色表、自定义曲线比较、防爆音使能换算（不再做 0..100 强度映射）
 - `src/renderer/src/device/webhid`：webhid-kit 适配层（`types` 契约 / `kit` 唯一 import / `session` 状态机）
-- `src/renderer/src/device/registers.ts`：寄存器真值表（地址 / 原始值域 / 标定 / 权限 / 默认值）+ `toRaw`/`fromRaw`；`domain/params.ts` 的 42 项由它派生
+- `src/renderer/src/device/registers.ts`：寄存器真值表（地址 / 原始值域 / 标定 / 权限 / 默认值）+ `toRaw`/`fromRaw`；`domain/params.ts` 的 46 项由它派生
 - `src/renderer/src/device/proto`：参数协议纯函数层（`crc` CRC-16 / `frame` 组帧与流式拆帧 / `codec` 编解码 / `timing` 唯一定时器出口 / `session` 串行队列 + 超时重试 + 写合并 + 电平轮询）
 - `src/renderer/src/device/dfu`：固件升级层（`frame` SigmaBus 帧 / `image` 打包解析与预检 / `session` DFU 状态机）
 - `src/renderer/src/device/link.ts`：设备连接编排（WebHid 会话 ↔ 通道 ↔ 参数同步 ↔ DFU）
@@ -183,9 +198,15 @@ Remove-Item Env:ELECTRON_RUN_AS_NODE -ErrorAction SilentlyContinue
 2. 真机通道的 `select-hid-device` 改为**按 `Usage Page 0xFF01 / Usage 0x01` 白名单放行**（`shared/webhid-whitelist.ts` 的 `shouldAllowSelection`：空白名单→拒；entries 非空→放；vids/pids 全空→放；否则按 VID/PID 复核）。usage 过滤实际发生在渲染进程 `requestDevice({ filters })`。
 3. 上游 `forget()` 只撤销本会话授权，不等于操作系统级撤销。
 
-**后台自动连接（2026-11-07，`device/auto-connect.ts`）**：应用启动即在后台每 1.5 s 查一次系统里的 `VID 0x0A67 / PID 0x0010`（M001）；设备插着但上位机没连上就自动 `connect('native')` + `link.attach()`，不必用户先点「连接」再点「打开」。只在真机通道生效：连的是虚拟桥接（`ready` + `virtual`）时完全不碰；用户在设备页点「断开 / 关闭」→ `pause()`，要等设备拔掉一次或再次手动连接才重新自动连；升级中（`status='dfu'`）与正在连接时不动；参数同步失败（设备停在 Bootloader）立即 `parked` 停手，避免一直对着升级模式空转。设置页「通道」卡有开关（`micstudio.autoConnect`，默认开，老配置缺键时按开处理）。实测（2026-11-07，本机真插 M001）：启动日志 `[auto-connect] 发现 USB Audio Device（native-0a67-0010-0），尝试自动连接` → `自动连接成功`，顶栏直接「已连接 / 已同步」，回读增益 97/34。`WebHidSession` 为此补了 `probeNative()`（会话没连上时也能只读枚举，不建设备表）与 `nativeAvailable()`；`refresh()` 在设备表没变时不再 patch，避免 1.5 s 一次的整表重绘。
+**后台自动连接（2026-11-07，`device/auto-connect.ts`；2026-11-13 降频）**：应用启动后在后台检查系统里的 `VID 0x0A67 / PID 0x0010`（M001）；设备插着但上位机没连上就自动 `connect('native')` + `link.attach()`，不必用户先点「连接」再点「打开」。**2026-11-13 起不再每 1.5 s 轮询**：`WebHidSession.watchNative()` 订阅 `navigator.hid` 的 connect/disconnect（插拔立即触发，300 ms 合并），轮询只作 5 s 兜底；探测走 `kit.probeNative(vid, pid)`——只问 `getDevices()` 并按 VID/PID 过滤，**不解析系统里其它 HID（键盘鼠标）的报告描述符、不构造 `NativeHidHandle`**，解决用户反馈的“上位机不需要频繁查询 USB 连接状态和获取设备描述符”。只在真机通道生效：连的是虚拟桥接（`ready` + `virtual`）时完全不碰；用户在设备页点「断开 / 关闭」→ `pause()`，要等设备拔掉一次或再次手动连接才重新自动连；升级中（`status='dfu'`）与正在连接时不动；参数同步失败时看 `wasReady`：**从没连上过**（开机就在 Bootloader）立即 `parked` 停手，避免一直对着升级模式空转；**连上过再掉下去**则按失败退避重试（最多 `maxAttempts`=3 次）后才 `parked`，设备刚复位 / 还没缓过来时能自己连回来。设置页「通道」卡有开关（`micstudio.autoConnect`，默认开，老配置缺键时按开处理）。实测（2026-11-07，本机真插 M001）：启动日志 `[auto-connect] 发现 USB Audio Device（native-0a67-0010-0），尝试自动连接` → `自动连接成功`，顶栏直接「已连接 / 已同步」，回读增益 97/34。`WebHidSession` 为此补了 `probeNative(target?)`（会话没连上时也能只读探测，不建设备表）、`watchNative()` 与 `nativeAvailable()`；`refresh()` 在设备表没变时不再 patch。
+
+**掉线后自动重连（2026-11-07 用户要求"丢失了连接就尝试重新连接"）**：`AutoConnector` **不会**因为掉线而 `pause()`（`pause` 只由用户在设备页点「断开 / 关闭」触发）。拔线 → `WebHidTransport._onDisconnect` → 链路 error → 后台这一拍发现设备不在 → `paused/wasReady/attempts` 全被重置 → 插回后由 HID connect 事件立即（无事件时 ≤5 s）自动 `link.attach()` 回 ready，期间不需要用户点任何按钮。重连时若参数同步失败：`wasReady` 为真（这台设备这一轮连上过）→ `fail()` 退避重试 3 次（5/10/20 s）再 `parked`；为假（开机就停在升级模式）→ 一次就 `parked`。重连成功后 `DeviceLink._startAudioLevels()` 会再跑一遍，设备轮询仍然是关的（单测「keeps the device polling off after a reconnect」）。排查口径：真机拔插后没自动回来，先看 `[auto-connect]` 日志停在 `自动连接成功` / `设备参数同步失败` / `自动连接失败` 哪一条，再看 `state()` 的 `paused/parked/attempts`。单测：`tests/unit/auto-connect.test.ts` 的「re-attaches automatically after the link drops」「waits for the device to come back and reconnects on replug」「retries a failed reconnect instead of parking after one sync failure」「still parks after the reconnect retries are used up」「probes only the target VID/PID…」「subscribes to USB hot-plug events…」。
 
 **电平来源（2026-11-07，`device/audio-meter.ts`）**：真机固件不上报 `0x2057`（始终 0），电平条改由**同一台设备的音频输入**算。`DeviceLink` 连上后 `AudioLevelMeter.start([HID productName, 'JYM001', 'M001'])` → `enumerateDevices()` 按 label 子串匹配端点（同分优先具体端点，不选 `Default - ` 别名；首次授权前 label 为空时先开一次默认输入拿权限再重挑）→ `getUserMedia`（显式关掉 `echoCancellation/noiseSuppression/autoGainControl`）→ `AnalyserNode.getFloatTimeDomainData`（fftSize 1024，33 ms 一帧）→ 算 RMS/峰值（峰值 300 ms 线性回落）→ `LevelFrame`（输出通道恒 -96）→ `ChannelTransport.useLevelSource()`。挂着外部源时设备上报的 `0x2057` 帧被丢弃；断开 / 停在 Bootloader 时 `stop()` 并摘源。主进程必须放行麦克风：`installWebHidHandlers` 的 permission check/request 允许 `media` 且只放 `audio`（摄像头拒绝），`index.ts` 加 `autoplay-policy=no-user-gesture-required`（否则 `AudioContext` 停在 `suspended`，`AnalyserNode` 不推进）。设备页诊断卡新增「电平来源」行；拿不到麦克风时按 `denied/unavailable/unknown` 显示原因并退回设备上报。实测（2026-11-07，本机真插 M001）：诊断显示「音频输入：麦克风 (USB Audio Device) (0a67:0010)」，电平条 **RMS -44.6 / 峰值 -32.8**（改前是 -60 / —）。
+
+**连上就不再向设备要电平（2026-11-07，用户反馈"已连接还一直请求，怕把下位机卡死"）**：`0x2057` 的 20 ms 轮询是 50 帧/s ≈ 18 万帧/小时，而真机固件对它恒回 0、读数又被音频输入接管后丢弃——纯空转流量，长期压着下位机主循环。现在 `DeviceLink._startAudioLevels()` 一旦让音频输入接管电平就调 `WebHidTransport.setLevelPolling(false)`：`ParamSession.setPolling(false)` 停轮询，**入站看门狗一起停**（没有周期请求就没有"设备沉默"可判，否则 2 s 后自己判掉线；真实拔线仍由 HID `disconnect` 事件立即上报，设备不答则会在写参数超时时暴露）。**权限被拒或设备确实不在系统里**时（`LinkState.audio.source === 'device'`）才 `setLevelPolling(true)` 退回设备上报；设备还在、只是音频端点还在重枚举时是 `'retrying'`，轮询保持关闭（见下一段）。`_levelPolling` 是 transport 的字段，`_startSession()` / `resume()` 都按它决定 `setPolling()` 与看门狗，跨 `sync()` 与 DFU `suspend()+resume()` 保留，重建会话不会自己开回来。设备页诊断卡新增「设备轮询」行：`开（电平走设备上报）` / `关（电平走音频输入，不再发请求）`（`diag.device.poll` / `diag.poll.on` / `diag.poll.off`，`DeviceBoundTransport.levelPolling?()`）。单测：`tests/unit/transport.test.ts` 的四条轮询开关用例、`tests/unit/link.test.ts` 的两条（音频接管后零出帧 / 麦克风不可用仍轮询）、`tests/unit/device-view-diag.test.ts` 的 5e。实测（2026-11-07，虚拟下位机 `pnpm run vdevice` + 本机真实麦克风，探针 `scripts/probes/level-poll-idle.js`，截图 `artifacts/level-poll-idle.png`）：连接后 `[probe]` 读到 `poll=关（电平走音频输入，不再发请求）`、诊断帧计数在 1.5 s / +3 s 三次采样恒为 30（改前 50 帧/s 会一直涨）、4 s 后 `model` 仍是 `JYM001`（关轮询没有被入站看门狗误判成掉线），电平条照常走音频输入。
+
+**拔插后音频监听自愈（2026-11-14，用户反馈"重插后电平条监听有时候会失效"）**：电平条采的是设备音频输入，而 Windows 重新枚举音频端点比 HID 慢——`attach()` 刚 ready 时 `getUserMedia` 常报 `NotFound/NotReadable`，旧实现这时直接把 `source` 置 `'device'` + 打开 `0x2057` 轮询，而固件恒 0，电平条就从此躺底；另外驱动重载 / 端点重建时 track 只 `ended`，旧实现也没人发现，采集会一直读旧缓冲。现在加了三层检查，**只要设备还在系统里就以音频驱动监听为准**：①`AudioCapture` 补 `alive()` / `onEnded()`（track `ended`、`AudioContext` `closed`），`AudioLevelMeter` 每次出帧先验健康度，断了就 `stop()` 并派 `onLost`；②`DeviceLink` 新增音频自检循环（`audioWatchMs` 默认 2 s；`onLost` / `navigator.mediaDevices.devicechange` 在 300 ms 合并窗口内触发），采集死了（含没有 `onLost` 的僵尸采集——出帧前的 `healthy()` 检查能发现）或采的是系统默认输入而设备端点已回来时 `_startAudioLevels({strict:true})` 重开——**strict 模式匹配不到设备端点就报 `unavailable`，绝不退回默认输入**（否则会把笔记本麦克风当成 M001 的电平）；③打开失败时按 `_devicePresent()`（HID 句柄已打开、未被判掉线）分流：设备还在 → `LinkState.audio.source='retrying'` + 保持 `setLevelPolling(false)`，按 300 ms 起指数退避（封顶 5 s）重开；只有权限被拒（不再空转）或设备确实不在才退回 `'device'` + 轮询。重试前先用 `AudioLevelMeter.find(hints)` 只读枚举确认端点回来（避免打开默认输入），再用 `AudioLevelMeter.start(hints,{strict:true})`；`DeviceLink.dispose()` 退订设备表 / `onLost` 监听。诊断卡「电平来源」行新增 `正在重新打开音频输入（设备还在，自动重试）`（`device.audio.retrying`）；控制台日志 `[audio-level]`（`DeviceLinkOptions.onEvent`）。单测：`tests/unit/audio-meter.test.ts` 的「采集被系统断开时通知 onLost…」「track 没发 ended…健康检查也能发现」「strict 模式…不退回默认输入」「find()/watchDevices」、`tests/unit/link.test.ts` 的「reopens the audio input when the capture dies…」「reopens strictly when the capture dies without an ended event」「keeps retrying … instead of falling back …」「switches from the system default input …」「checks immediately on an audio devicechange event」「does not spin … permission was denied」「stops the audio watchdog after detaching」、`tests/unit/device-view-diag.test.ts` 的 5f。
 
 **首轮真机联调（2026-10-26，M001 `0x0A67/0x0010`）**：路径全部打通到「第 1 条回读成功、第 2 条被固件假 ACK 抢答」，参数链路卡在固件侧（补位零 + 解析器闭锁），详见 `Document/Update/Alpha/v1.1.0/真机联调报告.md`，取证在 `artifacts/real/`。实测三条与旧笔记冲突、已作废的假设：
 
@@ -211,6 +232,8 @@ Remove-Item Env:ELECTRON_RUN_AS_NODE -ErrorAction SilentlyContinue
 **第五轮 DFU 升级测试（2026-11-04，V0.0.4）**：**升级成功，正常路径已复测通过**。主机侧修复：空/全 0 设备型号按"未知"放行（不再报"型号不对"）、`kit.ts` 用 `WeakMap<HIDDevice, 适配句柄>` 缓存真机句柄（修掉重枚举误判）、`decodeAsciiWords()` 把 `0xFF` 擦除值当终止符、DFU 重枚举后等 1 s（`dfuEnterSettleMs`）、265 B 块帧的报告间留 2 ms（`dfuReportGapMs`，设备 OUT 只有 4 槽）、SigmaBus 0x00 补位静默、settling 后不再解析 App 报文。首轮从 App 进 DFU 在 44/654 块超时，复现于 11/654；修复后从 App 用官方 `JYM001` 包**一次写完 654/654（约 21 s，timeout/retry 0）**，设备重启到 V0.0.4；从 Bootloader 直连官方包恢复也成功。升级后新固件初始化了 `0x39000` 信息区与配置/预设区：型号 `JYM001`、名称 `M001`、固件 `0.0.4.0`、自检 3/3；官方 `JYM001` 包预检通过。遗留：SN 区仍 `0xFFFF`（界面显示"—"）。详见 `Document/Update/Alpha/v1.1.0/真机DFU升级测试-第五轮.md`，取证 `artifacts/real5/`。
 
 **第六轮全量真机联调（2026-11-04，V0.0.4，不含 DFU）**：上位机侧全绿——42 项界面值 ⇄ 寄存器真值 **42/42**（`real6-compare.mjs` 用 `registers.ts` 反算）、42 项逐项写入 → 裸 HID 回读 **40/40**（另 2 项只读无控件）、EQ 7 段 28 值全中、四场景与业务控件映射全中（降噪 80→raw 73、平稳 40→360、明亮增益 300…370）、20 连写 `timeouts/retries=0`、空闲 60 s 3028 帧无掉线、关闭重开 + 自检 3/3。协议矩阵 24 条：19 过 / 4 失败 / 1 跳过；拒绝路径从 17 条 ACK 降到 **UnitID 3 条、CRC/长度各 1 条**（未知功能码仍静默）。固件仍缺：只读与范围校验（`0x2023`/`0x2025` 任意值都收）、`0x3000/0x4000` 读回未初始化内存、`0x2057` 恒 0 且无上报。**新发现 P1**：预设初始化整体右移 2 字——`0x205D..0x2073` 恰好等于参数表 `0x205B..0x2071` 的默认值序列（23/23），疑似固件结构体比协议地址表少 4 B，需固件确认 DSP 侧取值是否也偏移；另预设名按小端存（`Factory1 Preset 1`）、EQ 前 7 段默认频点 3 处与表不一致（20/1000/2000 vs 50/2000/5000）。收尾用 `scripts/probes/real6-restore.py` 把 76 项 rw 参数还原为参数表默认值（0 失配）。详见 `Document/Update/Alpha/v1.1.0/真机联调报告-第六轮.md`，取证 `artifacts/real6/`，探针 `scripts/probes/real6-*`。另注：用户自己的 MIC STUDIO 实例持有 `.userdata` 单实例锁时，探针要换独立 userData（本轮用 `D:\Temp\ud6`）。
+
+**界面 DFU 复测（2026-11-07，包 V0.0.5）**：用 CDP 驱动真实界面（`scripts/probes/dfu-ui-v005.mjs`，`--remote-debugging-port` + `Page.captureScreenshot`）把 `Document/Protocol/dfu_M001 MCU V0.0.5_2026-11-07_Rev0.bin` 从 M001 `0.0.4.0` 升到 `0.0.5.0`：预检 `JYM001 / M001 / 0.0.5 / 168888 B / 660 块 / 0xF653D0BB` 与独立解析逐项一致；**22.3 s** 写完 660/660 块并完成重枚举与回读（`crc/timeout/retry` 全 0，`dropped=1`），收尾后「已连接 / 已同步」。报告 `Document/Update/Alpha/v1.1.0/真机DFU升级测试-V0.0.5-20261107.md`，取证 `artifacts/dfu-v005/`。遗留两处 UX：`phase='done'` 后「开始升级」仍可点（会重刷同一镜像）；DFU 段诊断日志没单独取证。
 
 **DFU 包格式（协议《DFU固件升级通讯协议说明_20261026》）**：包首「进入 DFU」帧有两种形态——旧 SigmaBus `C4 0B 00 00 03 08 10 01 00 15 FF`，或 2026-10-26 起的新 Modbus 帧 `00 10 00 0A 10 08 00 01 8D 09`；`device/dfu/image.ts` 的 `detectPackageHeader()` 两种都收，`ParsedImage.headerKind` 记录形态，`frames[0]` 仍是包首帧。信息帧体固件只读前 81 B（出厂包 = 81 / 整帧 90），协议文档写的 85 / 94 是笔误，解析器两种长度都接受。**主机侧已补上「进 DFU 后等设备重枚举 + 重开句柄」与「设备停在 Bootloader 时保留原始通道继续升级」**（2026-10-27，见已知坑 28/30 与 `Document/Update/Alpha/v1.1.0/修复记录-真机问题-20261027.md`）；第五轮（2026-11-04）已完成 V0.0.4 完整升级（App 正常路径 + Bootloader 直连），见 `Document/Update/Alpha/v1.1.0/真机DFU升级测试-第五轮.md`；评审见 `Document/Protocol/DFU协议符合性评审_20261026.md`。
 
@@ -324,6 +347,8 @@ Fix：
 - **单文件 portable exe 通过 ShellExecute 拉起（Explorer 双击、`cmd /c start "" <exe>`）时，应用是 NSIS 解包器的孙进程，不吃这层限制**，不带任何参数即可起窗口。2026-10-19 实测：`start` 无参启动 → 进程 `MainWindowTitle = MIC STUDIO`、`renderer ready`、`CloseMainWindow()` 后干净退出；`--screenshot` 也能出图。  
 - 早期“portable 双击立即退出、%TEMP% 无解压目录”的结论作废：当时是直接用 shell `&` 拉起 portable（解包器的子进程被沙箱掐死），不是 portable 形态本身的问题。
 
+**2026-11-07 复测（SAC 开启后）：「portable 双击不吃沙箱限制」这条已经不成立。** 用计划任务（`schtasks /IT`，进程不在 DSH 工具进程树里，等价用户双击）拉起 `release/MicStudio-1.1.0-portable.exe`：不带参数 → **退出码 `0x80000003`**、无窗口、不写 `MicStudioData\startup.log`；带 `--no-sandbox` → 7 s 出窗口、截图与日志齐全。同一份刚打出来的 exe 有时还会被 ShellExecute 直接拒掉：`This command cannot be run due to the error: An Application Control policy has blocked this file.`（SAC 云端裁定，过几分钟再跑又能起）。所以：**本机验证打包产物一律带 `--no-sandbox`**（`scripts/dist.ps1` 的冒烟即如此），`release/使用说明.txt` 也写了这条；目标机双击是否同样需要该参数取决于那台机器的 Chromium 沙箱 / App Control 策略。
+
 ### 15. CSP 把桥接 WebSocket 拦掉
 症状：设备页点「连接」后状态停在 Error，渲染进程控制台报
 `Refused to connect to 'ws://127.0.0.1:8765/ws' because it violates the following Content Security Policy directive: "default-src 'self'"`。
@@ -424,10 +449,12 @@ Fix（固件侧）：`Len === 0` → 整段丢弃；帧尾不足 4 B 且全 `0x0
 
 **2026-10-26 第二轮更新（固件 V0.0.2）**：正常请求路径已修好——补位 0–62 B 10 档全部「一请求一应答」，间隔 0 ms 可用。但**拒绝路径没修**：`UnitID = 0x01` 的一次读仍会回 18 条 ACK（4 ms 一条，`0x0001`/`0x0002` 交替），随后一条合法请求被这串 ACK 吞掉；`0x11`/`0x12` 超容量、未知功能码也会静默。所以：再看到「一次请求多条 ACK」先确认是不是拒绝路径（UnitID/长度错/CRC 错），别直接怀疑补位逻辑没改。复测用 `scripts/probes/real2-defects.js` 的 D1/D1b。
 
-### 25. `pnpm run test:device` 的 T07 在本机稳定失败（定时器粒度）
+### 25. `pnpm run test:device` 的 T07 在本机稳定失败（定时器粒度）—— 2026-11-21 已修
 症状：20 例里 `T07 写合并（R3-6）` 报 `120 次写产生 23 帧，超过 20`，用例耗时 3.2–3.3 s（预期 ≈1.9 s）。
 根因：T07 的循环是 `client.write()` + `await delay(16)` 共 120 次；本机没有 Chromium 进程把系统定时器精度抬到 1 ms 时，Windows 的 15.6 ms 粒度让每次 `delay(16)` 实际 ≈27 ms，墙钟拉到 3.2 s，而写合并窗口 `writeThrottleMs = 120`，帧数 ≈ `ceil(T/120)+1` 就是 23。
 已验证与代码无关：`git stash push -- src tests` 后重跑仍失败（3273 ms）。要它变绿：把 `writeThrottleMs` 调大或把用例的 `delay(16)` 改成按墙钟校准的写法，不要靠"跑着 Electron 顺带提高定时器精度"。
+
+**2026-11-21 修法**：`tools/vdevice/selftest.mjs` 的 TIMING 镜像是上一轮的遗留（仍是 120 ms、且是前沿触发），已同步成 `writeThrottleMs = 300` + **尾沿触发**（与 `device/proto/session.ts` 一致）：一次拖拽只在停手后出 1 帧，墙钟被拉到 3.9 s 也只会出 ~13 帧，稳定落在 ≤20 内。实测 `SUMMARY passed=20 failed=0`。
 
 ### 26. `sync()` 抢发 `0x13`，被在途电平轮询的 `0x12` 应答认领 →「预设回读应答不是连续读响应」
 症状（M001 真机，2026-10-26 第二轮）：连上设备后第一次 `sync()` 成功，点「一键自检」再 `sync()` 就失败，顶栏「同步失败」、提示「设备没有应答，参数未写入」；诊断日志里 `0x13` 刚发出 2 ms 就收到一条 `00 12 00 0A 20 57 …`（轮询应答）。
@@ -502,12 +529,13 @@ Fix（已落盘）：`FirmwareController.start()` 发第一帧前 `link.reacquir
 
 ### 模块与参数字段（中文标签与单位参考 `效果器参数范围.xlsx`；数值真值见 `device/registers.ts`）
 
-> v1.1.0 起，**地址 / 原始值域 / 标定 / 读写权限 / 默认值**一律以 `M001参数表V0.1.xlsx` 为准，实现落点是 `device/registers.ts`（原始值）与 `domain/params.ts`（42 项工程量）。本表沿用 v1.0.0 的口径，只当"中文标签 + 单位 + 语义"的索引；下表里的最小/最大/默认/步进凡是与 `PARAMS` 不一致的，以下表的注释与 `PARAMS` 为准。
+> v1.1.0 起，**地址 / 原始值域 / 标定 / 读写权限 / 默认值**一律以 `M001参数表V0.3.xlsx`（`Document/Update/hardware/v0.0.6/`）为准，实现落点是 `device/registers.ts`（原始值）与 `domain/params.ts`（46 项工程量）。本表沿用 v1.0.0 的口径，只当"中文标签 + 单位 + 语义"的索引；下表里的最小/最大/默认/步进凡是与 `PARAMS` 不一致的，以 `PARAMS` 为准。
 
 | 模块 | 字段 | 含义 | 最小 | 最大 | 默认 | 步进 | 上位机权限 |
 |---|---|---|---|---|---|---|---|
 | Gain | Mic | 麦克风增益（`0x2023`，单位待定） | 0 | 100 | 100 | 1 | **只读** |
 | Gain | Hp | 耳机增益（`0x205A`，单位待定） | 0 | 100 | 100 | 1 | **只读** |
+| NoiseGate | Enable | 噪声门使能位（`0x2074`，V0.3 新增；0 = 旁通） | 0 | 1 | 1 | 1 | 可调 |
 | NoiseGate | threshold_db | 阈值 (dB) | -91 | 0 | -70 | 1 | 可调 |
 | NoiseGate | ratio | 扩展比（2.0 表示 2:1） | 0.05 | 0.999 | 0.333 | 0.001 | 可调 |
 | NoiseGate | attack_ms | 启动时间 (ms) | 5 | 500 | 10 | 1 | 可调 |
@@ -529,6 +557,7 @@ Fix（已落盘）：`FirmwareController.start()` 发第一帧前 `link.reacquir
 | EQ（14 段） | Q | 无量纲 | 0.1 | 12 | 0.7 | 0.1 | 可调 |
 | ENC | OnOff | 环境降噪开关 | 0 | 1 | 0 | 1 | 可调 |
 | ENC | Level | 档位 | 0 | 3 | 1 | 1 | 可调 |
+| 3BandDrc | Enable | 三分频动态使能位（`0x2075`，V0.3 新增；0 = 旁通） | 0 | 1 | 1 | 1 | 可调 |
 | 3BandDrc | fc1 | 分频点 1 (Hz) | 50 | 10000 | 1000 | 1 | 可调 |
 | 3BandDrc | fc2 | 分频点 2 (Hz) | 50 | 10000 | 3000 | 1 | 可调 |
 | 3BandDrc | preGain ×3 | 低/中/高区 | 0 | 4 | 1.28 | 0.01 | 可调 |
@@ -536,8 +565,10 @@ Fix（已落盘）：`FirmwareController.start()` 发第一帧前 `link.reacquir
 | 3BandDrc | attackTime ×3 | 低/中/高区 (ms) | 1 | 400 | 10 | 1 | 可调 |
 | 3BandDrc | releaseTime ×3 | 低/中/高区 (ms) | 5 | 680 | 20 | 1 | 可调 |
 | 3BandDrc | ratio ×3 | 低/中/高区 | 1 | 20 | 10 | 0.1 | 可调 |
+| RGB | OnOff | 灯效开关（`0x2072`，V0.3 新增） | 0 | 1 | 1 | 1 | 可调 |
+| RGB | Mode | 灯效模式（`0x2073`，V0.3 新增；灯效含义由固件定义） | 0 | 7 | 0 | 1 | 可调 |
 
-合计 **42 项标量**（v1.1.0 起，见 `PARAMS`）= v1.0.0 的 36 项 + 新增 6 项（`mic.mute` `0x2022`、`mic.sigMute` `0x2058`、`hp.OnOff` `0x2059`、`eq.mode` `0x2026`、`comp.Enable` `0x204A`、`limit.Enable` `0x2051`）+ 改判 2 项（`comp.Threshold`、`limit.Threshold` 的默认值由 `−60` 改为寄存器表 raw 580 → `−2`，范围仍 `−60…0`）。EQ 段参数走 `EqModel` 不计入。
+合计 **46 项标量**（见 `PARAMS`）= v1.1.0 的 42 项 + 参数表 V0.3 新增 4 项（`noisegate.Enable` `0x2074`、`drc3.Enable` `0x2075`、`rgb.OnOff` `0x2072`、`rgb.Mode` `0x2073`）。v1.1.0 那 42 项 = v1.0.0 的 36 项 + 新增 6 项（`mic.mute` `0x2022`、`mic.sigMute` `0x2058`、`hp.OnOff` `0x2059`、`eq.mode` `0x2026`、`comp.Enable` `0x204A`、`limit.Enable` `0x2051`）+ 改判 2 项（`comp.Threshold`、`limit.Threshold` 的默认值由 `−60` 改为寄存器表 raw 580 → `−2`，范围仍 `−60…0`）。EQ 段参数走 `EqModel` 不计入。
 
 3BandDrc 三区：`freq < fc1`（low）、`fc1 < freq < fc2`（mid）、`freq > fc2`（high）。**寄存器段序不是频率顺序**：low(`0x2063`) → high(`0x2068`) → mid(`0x206D`)，每段 5 项按 `preGain/threshold/attackTime/releaseTime/ratio` 排；`drc3.*.ratio` 的寄存器默认 raw `1` 换算后 `0.1` 低于下限 `1`，`default` 取夹紧值 `1`。
 
@@ -560,3 +591,25 @@ EQ 轴：频率 20 Hz–20 kHz 对数，增益 −24…+12 dB；曲线色 `#F3A4
 电平表：LED 分段（3 px 段 + 1.5 px 缝），-18 dBFS 以下绿 / -18…-6 黄 / -6 以上红，峰值保持线随分区着色，峰值读数过 -1 dBFS 标红。画布位图尺寸必须等于 CSS 尺寸（不要再按最小值放大位图，会被压扁）。
 
 窗口：1280×820 默认，最小 1100×700；顶栏 56px；工作台三栏 296 / 380 / 1fr（场景条横跨顶部），宽度 ≤1180 时收紧为 272 / 340 / 1fr、两个快捷开关改上下排；高度 ≤780 时隐藏说明文字。抽屉从右侧滑出：wide 1040（高级参数）/ medium 920（设备、设置）/ narrow 600（固件升级）。
+
+### 32. 频繁调音效参数把设备压死 / USB 状态与描述符被高频查询（2026-11-13 修）
+
+症状（用户反馈，录音 + 放音同时）：① 耳机/麦克风增益显示一直跳，像设备 ADC 检测不稳；② 上位机在后台频繁查询 USB 连接状态与设备描述符；③ 快速连续拖音效参数会把设备压死——请求无回应、灯不再变化、按键与旋钮都无效。
+
+根因：① `0x2023`/`0x205A` 是 ADC 实时值，同一档位每次回读差 1–3，`DeviceLink` 每帧原样回填；② `AutoConnector` 每 1.5 s `probeNative()` → `getNativeDevices()` 对系统里**所有** HID（键盘/鼠标）构造 `NativeHidHandle` 并 `computeLayout(描述符)`；③ `ParamSession` 的写合并是**固定 120 ms 窗口**，拖拽期间仍每 120 ms 出一帧写，每帧都可能触发固件落 Flash。
+
+Fix：
+- `device/gain-filter.ts`：`ReadonlyGainFilter` 取最近 5 次中位数 + 1 死区；`DeviceLink._displayValue()` 只对 `gain.Mic`/`gain.Hp` 生效，重连 `reset()`。
+- `webhid/kit.ts` 新增 `probeNative(vid,pid)`（只 `getDevices()` 后按 VID/PID 过滤，**不**构造句柄/解析描述符）与 `watchNative()`（`navigator.hid` connect/disconnect）；`WebHidSession` 转出 `probeNative(target?)`/`watchNative()`；`AutoConnector` 默认 5 s 兜底 + 插拔事件即时检查（300 ms 合并）。
+- `TIMING.writeThrottleMs` 120→300 且改为**尾沿触发**（每次 `write()` 重置计时器）：一次连续拖拽只在停手后出 1 帧；新增 `writeGapMs=200`（相邻写帧最小间隔）与 `writePauseAfterTimeoutMs=1000`（写超时后冷却），`flushWrites()` 在冷却期内延后。
+- 单测：`gain-filter.test.ts`、`link.test.ts`（噪声回显不跳字 / 真实换档跟上）、`auto-connect.test.ts`（只按 VID/PID 探测、订阅插拔）、`proto/session.test.ts`（尾沿只出一帧、写帧间隔）、`webhid-kit.test.ts`（探测不读描述符）。
+
+排查口径：设备又"卡死"时先看诊断卡 `outFrames` 是否在拖拽期间持续增长——现在的预期是**停手后才有 1 帧**；再看 `timeouts` 是否上涨（写超时后有 1 s 冷却）。本机没有 M001 硬件，真机复测仍待做。
+
+### 2026-11-13 界面改版（软件测试问题清单第 4 条）
+
+- 主界面：场景顺序 安静房间 → 会议 → 播客 → 唱歌 → 自定义；`降噪强度/声音平稳` 改为直接写协议的 `噪声门阈值/压缩器阈值`（dB，步进同参数表）；音色 5 个（原声 / 人声增强 / 温暖 / 明亮 / 自定义），去掉「音乐」；「增益」卡从高级参数移除，麦克风静音 / 监听 / 电平信号静音三个开关放进「快速调音」；中栏说明文字在 `.console` 内隐藏、输入开关三列排布（1280×820 不溢出）。
+- 自定义 EQ：`AppState.tone` 显式记录选中音色（不能只按曲线反推——自定义默认全平会和「原声」撞车）；只有 `tone==='custom'` 时主界面曲线可拖，拖拽同步写 `customEq`；高级参数逐段表始终可编辑，编辑后 `tone` 置 `custom`。场景「自定义」= 中性阈值 + 自定义曲线。
+- 旁通：`comp.Enable`/`limit.Enable`/`enc.OnOff` 用真实使能位。**2026-11-21 参数表 V0.3 给噪声门与三分频动态补了使能位（`0x2074`/`0x2075`）**，这两项也改成真实开关（高级参数卡里 `data-enable="noisegate"` / `data-enable="drc3"`，关掉即直通，参数值照常保存），原先「钉阈值 / preGain=0+ratio=1」的中性参数近似已删除；`AppStore.setBypass()` 现在只剩均衡器一项（写 7 段 `enable=0`，真旁通）。旁通中对应字段禁用并显示说明的做法，仅 EQ 段表保留。
+- 高级参数：移除「增益」卡与「均衡器模式」卡（`eq.mode` 参数仍保留，只是没有 UI）；三分频动态加「旁通」与「恢复推荐分频点（1000/3000）」，`fc1 >= fc2`（含默认 50/50 的相等）会标黄提示"分频点无效"。
+- 三分频"听不出变化"的固件根因：第六轮联调发现固件预设结构体从 `0x205B` 起整体右移 2 字；协议读写无偏移，但 DSP 若按结构体取值，NoiseGate/DRC 参数会落到错误字段（见 `真机联调报告-第六轮.md` §7.1）。上位机侧已把默认 50/50 的退化分频提示出来并提供一键修正，真机是否生效仍需固件确认。

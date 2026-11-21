@@ -1,8 +1,12 @@
 /**
  * M001 参数寄存器真值表。
  *
- * 唯一真值源：`Document/Protocol/M001参数表V0.1.xlsx`
+ * 唯一真值源：`Document/Update/hardware/v0.0.6/M001参数表V0.3.xlsx`
  * （工作表「设备信息」/「设备配置」/「设备当前预设」，与需求文档附录 B 逐行对应）。
+ * V0.3 相对 `Document/Protocol/M001参数表V0.1.xlsx` 的变化（表内黄色标记）：
+ * ① `0x2026` 均衡器模式上限 4 → 5；② 三分频 `fc1/fc2` 默认 50/50 → 1000/3000；
+ * ③ 三区 `preGain` 默认 0 → 128（= 1.28）；④ 新增 `0x2072`–`0x2075`
+ * （RGB 开关 / RGB 模式 / 噪声门使能 / 三分频动态使能）。
  *
  * 本文件刻意不 import 任何模块：`device/**` 与 `domain/**` 共用这张表，
  * 零依赖才能保证没有循环引用（任务书 SubStage 1.2 §5-D1、验收项 B7）。
@@ -10,7 +14,7 @@
  *
  * 地址列在 xlsx 里是公式（`=A3+1` 递增、`=CONCATENATE("0x",DEC2HEX(C3,4))` 显示），
  * openpyxl 的 data_only 读不到缓存值，故按行序推算：
- * 设备信息 0x0000 起 62 行、设备配置 0x1000 起 14 行、设备当前预设 0x2000 起 114 行。
+ * 设备信息 0x0000 起 62 行、设备配置 0x1000 起 14 行、设备当前预设 0x2000 起 118 行。
  */
 
 export type RegisterAccess = 'r' | 'rw' | 'none';
@@ -44,10 +48,17 @@ export interface RegisterSpec {
 }
 
 export const PRESET_START = 0x2000;
-export const PRESET_COUNT = 114;
+/** V0.3 起预设区 118 项（止于 0x2075），与协议 §五 的地址区间一致 */
+export const PRESET_COUNT = 118;
+export const PRESET_END = PRESET_START + PRESET_COUNT - 1;
 export const LEVEL_ADDR = 0x2057;
 export const VALID_FLAG_ADDR = 0x2001;
 export const CHECKSUM_ADDR = 0x2000;
+/** 模块级使能位（V0.3 新增）：写 0 就是旁通该模块 */
+export const NOISEGATE_ENABLE_ADDR = 0x2074;
+export const DRC3_ENABLE_ADDR = 0x2075;
+export const RGB_ONOFF_ADDR = 0x2072;
+export const RGB_MODE_ADDR = 0x2073;
 
 const WORD_MAX = 0xFFFF;
 
@@ -199,7 +210,7 @@ const CONFIG_ROWS: readonly RegisterSpec[] = Object.freeze([
   config(0x100D, 'sysErr2', '系统错误状态记录 2', { defaultRaw: 0, access: 'r' }),
 ]);
 
-/** 当前预设 0x2000–0x2071（114 项；EQ 7 段、3BandDrc 三区按寄存器表行序） */
+/** 当前预设 0x2000–0x2075（118 项；EQ 7 段、3BandDrc 三区按寄存器表行序） */
 const PRESET_ROWS: readonly RegisterSpec[] = Object.freeze([
   preset(CHECKSUM_ADDR, 'checksum', '预设数据校验和', { kind: 'checksum', access: 'r' }),
   preset(VALID_FLAG_ADDR, 'validFlag', '预设有效标志', { min: 0, max: 1, defaultRaw: 1, access: 'rw' }),
@@ -239,7 +250,7 @@ const PRESET_ROWS: readonly RegisterSpec[] = Object.freeze([
   preset(0x2023, 'micGain', 'MIC 音量', { min: 0, max: 100, defaultRaw: 100, access: 'r' }),
   preset(0x2024, 'encOnOff', '降噪开关', { min: 0, max: 1, access: 'rw' }),
   preset(0x2025, 'encLevel', '降噪强度', { min: 0, max: 3, access: 'rw' }),
-  preset(0x2026, 'eqMode', 'MIC 均衡器模式', { min: 0, max: 4, defaultRaw: 1, access: 'rw' }),
+  preset(0x2026, 'eqMode', 'MIC 均衡器模式', { min: 0, max: 5, defaultRaw: 1, access: 'rw' }),
 
   preset(0x2027, 'band1.enable', 'Band-1 Enable', { min: 0, max: 1, defaultRaw: 1, access: 'rw' }),
   preset(0x2028, 'band1.type', 'Band-1 Type', { min: 0, max: 4, defaultRaw: 4, access: 'rw' }),
@@ -311,29 +322,35 @@ const PRESET_ROWS: readonly RegisterSpec[] = Object.freeze([
   preset(0x205F, 'noisegateKneeWidthDb', 'NoiseGate knee_width_db', { min: 6, max: 12, unit: 'dB', defaultRaw: 6, access: 'rw' }),
   preset(0x2060, 'noisegateHpFreq', 'NoiseGate hp_freq', { min: 60, max: 200, unit: 'Hz', defaultRaw: 60, access: 'rw' }),
 
-  preset(0x2061, 'drc3Fc1', '3BandDrc 分频点 1', { min: 50, max: 10000, unit: 'Hz', defaultRaw: 50, access: 'rw' }),
-  preset(0x2062, 'drc3Fc2', '3BandDrc 分频点 2', { min: 50, max: 10000, unit: 'Hz', defaultRaw: 50, access: 'rw' }),
+  preset(0x2061, 'drc3Fc1', '3BandDrc 分频点 1', { min: 50, max: 10000, unit: 'Hz', defaultRaw: 1000, access: 'rw' }),
+  preset(0x2062, 'drc3Fc2', '3BandDrc 分频点 2', { min: 50, max: 10000, unit: 'Hz', defaultRaw: 3000, access: 'rw' }),
 
   // 低区（freq < fc1）
-  preset(0x2063, 'drc3LowPreGain', '3BandDrc 低区 preGain', { min: 0, max: 4, step: 0.01, access: 'rw', scale: DIV_100 }),
+  preset(0x2063, 'drc3LowPreGain', '3BandDrc 低区 preGain', { min: 0, max: 4, step: 0.01, defaultRaw: 128, access: 'rw', scale: DIV_100 }),
   preset(0x2064, 'drc3LowThreshold', '3BandDrc 低区 threshold', { min: -80, max: 0, step: 0.1, unit: 'dB', access: 'rw', scale: SUB_800_DIV_10 }),
   preset(0x2065, 'drc3LowAttackTime', '3BandDrc 低区 attackTime', { min: 1, max: 400, unit: 'ms', defaultRaw: 1, access: 'rw' }),
   preset(0x2066, 'drc3LowReleaseTime', '3BandDrc 低区 releaseTime', { min: 5, max: 680, unit: 'ms', defaultRaw: 5, access: 'rw' }),
   preset(0x2067, 'drc3LowRatio', '3BandDrc 低区 ratio', { min: 1, max: 20, step: 0.1, defaultRaw: 1, access: 'rw', scale: DIV_10 }),
 
   // 高区（freq > fc2）
-  preset(0x2068, 'drc3HighPreGain', '3BandDrc 高区 preGain', { min: 0, max: 4, step: 0.01, access: 'rw', scale: DIV_100 }),
+  preset(0x2068, 'drc3HighPreGain', '3BandDrc 高区 preGain', { min: 0, max: 4, step: 0.01, defaultRaw: 128, access: 'rw', scale: DIV_100 }),
   preset(0x2069, 'drc3HighThreshold', '3BandDrc 高区 threshold', { min: -80, max: 0, step: 0.1, unit: 'dB', access: 'rw', scale: SUB_800_DIV_10 }),
   preset(0x206A, 'drc3HighAttackTime', '3BandDrc 高区 attackTime', { min: 1, max: 400, unit: 'ms', defaultRaw: 1, access: 'rw' }),
   preset(0x206B, 'drc3HighReleaseTime', '3BandDrc 高区 releaseTime', { min: 5, max: 680, unit: 'ms', defaultRaw: 5, access: 'rw' }),
   preset(0x206C, 'drc3HighRatio', '3BandDrc 高区 ratio', { min: 1, max: 20, step: 0.1, defaultRaw: 1, access: 'rw', scale: DIV_10 }),
 
   // 中区（fc1 < freq < fc2）
-  preset(0x206D, 'drc3MidPreGain', '3BandDrc 中区 preGain', { min: 0, max: 4, step: 0.01, access: 'rw', scale: DIV_100 }),
+  preset(0x206D, 'drc3MidPreGain', '3BandDrc 中区 preGain', { min: 0, max: 4, step: 0.01, defaultRaw: 128, access: 'rw', scale: DIV_100 }),
   preset(0x206E, 'drc3MidThreshold', '3BandDrc 中区 threshold', { min: -80, max: 0, step: 0.1, unit: 'dB', access: 'rw', scale: SUB_800_DIV_10 }),
   preset(0x206F, 'drc3MidAttackTime', '3BandDrc 中区 attackTime', { min: 1, max: 400, unit: 'ms', defaultRaw: 1, access: 'rw' }),
   preset(0x2070, 'drc3MidReleaseTime', '3BandDrc 中区 releaseTime', { min: 5, max: 680, unit: 'ms', defaultRaw: 5, access: 'rw' }),
   preset(0x2071, 'drc3MidRatio', '3BandDrc 中区 ratio', { min: 1, max: 20, step: 0.1, defaultRaw: 1, access: 'rw', scale: DIV_10 }),
+
+  // V0.3 新增（2026-11-16）：RGB 灯效与两个模块级使能位
+  preset(RGB_ONOFF_ADDR, 'rgbOnOff', 'RGB 灯效开关', { min: 0, max: 1, defaultRaw: 1, access: 'rw' }),
+  preset(RGB_MODE_ADDR, 'rgbMode', 'RGB 灯效模式', { min: 0, max: 7, access: 'rw' }),
+  preset(NOISEGATE_ENABLE_ADDR, 'noisegateEnable', 'NoiseGate 使能', { min: 0, max: 1, defaultRaw: 1, access: 'rw' }),
+  preset(DRC3_ENABLE_ADDR, 'drc3Enable', '3BandDrc 使能', { min: 0, max: 1, defaultRaw: 1, access: 'rw' }),
 ]);
 
 export const REGISTERS: readonly RegisterSpec[] = Object.freeze([

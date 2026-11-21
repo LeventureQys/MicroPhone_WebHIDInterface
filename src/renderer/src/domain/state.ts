@@ -6,6 +6,7 @@ import type { Lang } from '../i18n';
 import { currentLang, setLang as setI18nLang } from '../i18n';
 import { DEFAULT_BANDS, DEFAULT_PARAMS } from './defaults';
 import { findParam } from './params';
+import { DEFAULT_CUSTOM_GAINS, type EqPresetId } from './quick-controls';
 import { quantize } from './values';
 
 /** 事件名：'change' 携带完整快照，'param-changed' 携带 {id, value} */
@@ -21,6 +22,20 @@ export interface LocalErrorDetail {
   readonly id: string;
 }
 
+/**
+ * 需要「旁通」但协议没有全局使能位的模块只剩均衡器：
+ * 打开时把 7 段 `enable` 全写 0，关闭时写回 1（0x2027 起的段使能位就是真正的旁通）。
+ *
+ * 噪声门与三分频动态在参数表 V0.3 补了使能位（`0x2074` / `0x2075`），
+ * 它们和压缩器 / 限制器 / 环境降噪一样，直接用参数开关，不再用「中性参数」近似。
+ */
+export type BypassModule = 'eq';
+export type BypassState = Readonly<Record<BypassModule, boolean>>;
+
+export const BYPASS_MODULES: readonly BypassModule[] = Object.freeze(['eq']);
+
+const DEFAULT_BYPASS: BypassState = Object.freeze({ eq: false });
+
 export interface AppState {
   lang: Lang;
   params: Readonly<Record<string, number>>;
@@ -29,6 +44,15 @@ export interface AppState {
   scene: MockScene;
   /** 参数链路相位；只有 'ready' 时才允许往设备写出站帧（C4） */
   sync: SyncPhase;
+  /** 「自定义」音色的 7 段增益（dB），由主界面曲线拖拽保存 */
+  customEq: readonly number[];
+  /**
+   * 用户显式选中的音色（`null` = 还没选过，界面按曲线反推高亮）。
+   * 不能只靠曲线反推：自定义曲线默认全平，会和固定「原声」撞成同一条。
+   */
+  tone: EqPresetId | null;
+  /** 均衡器旁通状态（噪声门 / 三分频动态改用各自的使能位参数） */
+  bypass: BypassState;
 }
 
 export interface ParamChangedDetail {
@@ -100,9 +124,12 @@ function diffBands(previous: readonly EqBand[], next: readonly EqBand[]): EqBand
 
 /** 对外暴露的快照：外层与 params/bands 一并冻结，调用方不得就地改 */
 function snapshot(state: AppState): AppState {
-  return Object.freeze({    ...state,
+  return Object.freeze({
+    ...state,
     params: Object.freeze({ ...state.params }),
     bands: Object.freeze(state.bands.map((band) => Object.freeze({ ...band }))),
+    customEq: Object.freeze([...state.customEq]),
+    bypass: Object.freeze({ ...state.bypass }),
   });
 }
 
@@ -125,6 +152,9 @@ export class AppStore extends EventTarget {
       transport: initial?.transport ?? transport.state(),
       scene: initial?.scene ?? 'speech',
       sync: initial?.sync ?? 'idle',
+      customEq: initial?.customEq ? [...initial.customEq] : DEFAULT_CUSTOM_GAINS,
+      tone: initial?.tone ?? null,
+      bypass: initial?.bypass ?? DEFAULT_BYPASS,
     };
     this._snapshot = snapshot(this._state);
 
@@ -224,6 +254,53 @@ export class AppStore extends EventTarget {
     this._transport.writeBands?.(updates);
   }
 
+  /** 记录用户显式选择的音色（不下发；曲线本身由 `setBands` 写） */
+  setTone(tone: EqPresetId | null): void {
+    if (this._state.tone === tone) return;
+    this._state = { ...this._state, tone };
+    this._commit();
+  }
+
+  /**
+   * 保存「自定义」音色的 7 段增益。
+   *
+   * 只是记住用户拖出来的曲线（下一次点「自定义」时还原），不单独下发：
+   * 曲线本身已经经 `setBands` 写进设备了。
+   */
+  setCustomEq(gains: readonly number[]): void {
+    const next: number[] = [];
+    for (let index = 0; index < 7; index += 1) {
+      const value = gains[index];
+      next.push(
+        Number.isFinite(value)
+          ? Number(Math.min(12, Math.max(-32, Math.round(value * 10) / 10)).toFixed(1))
+          : 0,
+      );
+    }
+    if (next.every((value, index) => value === this._state.customEq[index])) return;
+    this._state = { ...this._state, customEq: next };
+    this._commit();
+  }
+
+  /**
+   * 均衡器旁通：协议没有全局 enable，用 7 段自带的段使能位实现真正的直通。
+   *
+   * 噪声门与三分频动态自参数表 V0.3 起有了模块使能位（`0x2074` / `0x2075`），
+   * 与压缩器 / 限制器 / 环境降噪一样直接走 `setParam`，不在这里。
+   */
+  setBypass(module: BypassModule, enabled: boolean): void {
+    if (this._state.bypass[module] === enabled) return;
+    this._state = { ...this._state, bypass: { ...this._state.bypass, [module]: enabled } };
+    this._commit();
+
+    const updates: EqBandWrite[] = Array.from({ length: EQ_BAND_COUNT }, (_, index) => ({
+      band: index + 1,
+      field: 'enable',
+      value: enabled ? 0 : 1,
+    }));
+    this._writeOrKeepLocal(updates);
+  }
+
   setLang(lang: Lang): void {
     setI18nLang(lang);
     if (lang === this._state.lang) return;
@@ -258,6 +335,13 @@ export class AppStore extends EventTarget {
   private _commit(): void {
     this._snapshot = snapshot(this._state);
     this._dispatchChange();
+  }
+
+  /** EQ 段 enable 写入：与 `setBands` 一样，回读未完成时只改本地 */
+  private _writeOrKeepLocal(updates: readonly EqBandWrite[]): void {
+    if (this._state.sync === 'ready' || this._transport.kind !== 'webhid') {
+      this._transport.writeBands?.(updates);
+    }
   }
 
   private _dispatchChange(): void {

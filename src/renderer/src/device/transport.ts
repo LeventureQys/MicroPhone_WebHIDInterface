@@ -35,13 +35,16 @@ export interface ParamWrite {
   readonly value: number;
 }
 
-/** EQ 可调段能写的四个字段（段的 Enable 不写，B7） */
-export type EqBandField = 'type' | 'freq' | 'gain' | 'q';
+/**
+ * EQ 可调段能写的字段。`enable` 只给"均衡器旁通"用：设备不回填段使能（B7），
+ * 因此正常编辑路径仍然只写 type/freq/gain/q，不把 enable 当成回读字段。
+ */
+export type EqBandField = 'enable' | 'type' | 'freq' | 'gain' | 'q';
 
 /**
  * EQ 可调段的一次字段写入。段 1–7 对应寄存器 `0x2027`–`0x2049`（每段 5 个地址）。
  *
- * 单独一条通道而不是塞进 `ParamWrite`：EQ 段不是 `PARAMS` 里的 42 项标量，
+ * 单独一条通道而不是塞进 `ParamWrite`：EQ 段不是 `PARAMS` 里的 46 项标量，
  * 没有 paramId，换算与编号规则都在 `device/registers.ts` 的 `eqBandAddr` 里。
  */
 export interface EqBandWrite {
@@ -56,7 +59,7 @@ export interface EqBandWrite {
  * 设备主动上报（协议 0x10 的「设备→主机」方向）回填给界面的一次变化。
  *
  * 一个联合而不是两个回调：协议上它就是同一条 0x10 帧里的 `(Addr, Val)` 序列，
- * 地址落在两套模型上——42 项标量进 `params`，EQ 可调段进 `bands`。
+ * 地址落在两套模型上——46 项标量进 `params`，EQ 可调段进 `bands`。
  * 上位机收到后只更新本地镜像，**不回 ACK、不发帧**（协议 1026 §4/§5）。
  */
 export type ParamEcho =
@@ -71,12 +74,12 @@ export type ParamEcho =
     };
 
 export interface ParamReadResult {
-  /** paramId → 工程量，只含 42 项标量（EQ 段另见 `bands`） */
+  /** paramId → 工程量，只含 46 项标量（EQ 段另见 `bands`） */
   readonly preset: Readonly<Record<string, number>>;
   readonly device: DeviceSnapshot | null;
   /**
    * EQ 可调段 1–7 的回读值，键为寄存器字段名（`band1.type` / `band1.freq` / `band1.gain` /
-   * `band1.q`），值为工程量。EQ 段不是 `PARAMS` 里的 42 项标量，塞不进 `preset`，
+   * `band1.q`），值为工程量。EQ 段不是 `PARAMS` 里的 46 项标量，塞不进 `preset`，
    * 但 `DeviceLink` 需要它们回填 `store.bands`（任务书 §4.5 第 1 条）；
    * 缺省表示该通道不提供 EQ 回读（Mock、单测假实现），调用方保持本地段值。
    */
@@ -138,6 +141,13 @@ export interface DeviceBoundTransport extends Transport {
    * 而 `Transport` 本体刻意不带这层（Mock 没有会话）。
    */
   stats(): SessionStats;
+  /**
+   * 是否在向设备要电平（`0x12` 读 `0x2057`）。
+   *
+   * 真机固件不实现电平上报，电平改由音频输入算之后这条轮询会被关掉：连上之后
+   * 一帧周期请求都不发，避免长期空转把下位机拖死。诊断卡用它显示"设备轮询"。
+   */
+  levelPolling?(): boolean;
   /** 一键自检（R8-2）；可选，通道未实现时诊断面板会禁用按钮 */
   selfCheck?(): Promise<SelfCheckResult>;
 }

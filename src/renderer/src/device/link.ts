@@ -3,7 +3,9 @@ import { loadChannelConfig } from '../domain/channel-config';
 import type { AppStore } from '../domain/state';
 import type { EqBand, EqFilterType } from '../eq/types';
 import { audioErrorKind } from './audio-meter';
+import type { AudioInputDevice, AudioMeterErrorKind, AudioMeterInfo } from './audio-meter';
 import type { ChannelTransport } from './channel-transport';
+import { ReadonlyGainFilter } from './gain-filter';
 import type { MockTransport } from './mock-transport';
 import type { ReportIds } from './protocol';
 import { TIMING, defaultClock, defaultTimers, type Clock, type Timers } from './proto/timing';
@@ -53,25 +55,40 @@ export interface LinkState {
 /**
  * 电平来源状态。
  *
- * `source: 'audio'` 表示正在用音频输入算电平；`'device'` 表示退回设备上报的 `0x2057`
- * （拿不到麦克风权限 / 没有音频输入时）。`error` 只在 `'device'` 时有值。
+ * `source: 'audio'` 表示正在用设备音频输入算电平；`'device'` 表示退回设备上报的 `0x2057`
+ * （权限被拒 / 设备确实不在系统里）；`'retrying'` 表示**设备还在**、只是音频端点或采集
+ * 正被重新打开（拔插 / 驱动重载后的自愈状态）。只有 `'device'` 会打开设备轮询。
  */
 export interface LinkAudioState {
   readonly label: string | null;
-  readonly source: 'audio' | 'device';
+  readonly source: 'audio' | 'device' | 'retrying';
   /** 是否按提示词命中同一台声卡；false 表示退回系统默认输入 */
   readonly matched?: boolean;
-  readonly error?: 'denied' | 'unavailable' | 'unknown';
+  readonly error?: AudioMeterErrorKind;
 }
 
 /**
  * 外部电平源（`AudioLevelMeter` 满足它）：`start()` 打开音频输入并开始出帧，
  * `stop()` 关掉，`onLevels()` 与 `Transport` 同形。
+ *
+ * 后四个方法是可选的"自愈"能力：拔插后音频端点会先消失再回来，`DeviceLink` 靠它们判断
+ * "系统里还有没有这台设备的音频输入"，以及"现在这一路采集是不是已经死了"。
  */
 export interface AudioLevelSource {
-  start(hints: readonly string[]): Promise<{ readonly label: string; readonly matched: boolean }>;
+  start(
+    hints: readonly string[],
+    options?: { readonly strict?: boolean },
+  ): Promise<AudioMeterInfo>;
   stop(): void;
   onLevels(cb: (frame: LevelFrame) => void): () => void;
+  /** 采集被系统断开时通知（拔线 / 驱动重载） */
+  onLost?(cb: () => void): () => void;
+  /** 当前采集是否还活着；缺省按"活着"处理（只依赖 `onLost`） */
+  healthy?(): boolean;
+  /** 系统里现在有没有这台设备的音频端点（只读枚举） */
+  find?(hints: readonly string[]): Promise<AudioInputDevice | null>;
+  /** 系统音频设备表变化（插拔 / 驱动重载） */
+  watchDevices?(cb: () => void): () => void;
 }
 
 export interface DeviceLinkOptions {
@@ -89,6 +106,15 @@ export interface DeviceLinkOptions {
    * 缺省不启用（单测与无麦克风环境退化成设备上报）。
    */
   readonly audioLevels?: AudioLevelSource;
+  /**
+   * 音频输入自检周期（默认 2 s）：设备还在系统里就重新打开采集，别停在"没电平"上。
+   * 只在连接就绪时运行；插拔事件（`devicechange`）会额外立刻触发一次。
+   */
+  readonly audioWatchMs?: number;
+  /** 音频输入打开失败后的首次重试间隔（默认 300 ms，之后指数退避、封顶 5 s） */
+  readonly audioRetryMs?: number;
+  /** 诊断日志出口（音频输入断开 / 重开的过程）；缺省静默 */
+  readonly onEvent?: (message: string) => void;
 }
 
 export const LINK_CHANGE_EVENT = 'change';
@@ -98,6 +124,20 @@ export const EXPECTED_MODEL_CODE = 'JYM001';
 /** M001 的 USB 身份：后台自动连接只认这一对 */
 export const EXPECTED_VENDOR_ID = 0x0a67;
 export const EXPECTED_PRODUCT_ID = 0x0010;
+
+/**
+ * 只读增益（设备 ADC 检出）回填前先去抖：不受控的采样噪声只影响显示，
+ * 不该让工作台的数字持续跳动（2026-11-13 反馈）。
+ */
+const READONLY_GAIN_IDS = new Set(['gain.Mic', 'gain.Hp']);
+
+/** 音频输入自检周期：设备还在时发现采集断了就重开 */
+const AUDIO_WATCH_MS = 2000;
+/** 音频输入打开失败后的首次重试间隔；之后翻倍，封顶 `AUDIO_RETRY_MAX_MS` */
+const AUDIO_RETRY_MS = 300;
+const AUDIO_RETRY_MAX_MS = 5000;
+/** 一次拔插会连发多条 `devicechange`：合并成一拍再查，避免连着开两路采集 */
+const AUDIO_DEVICE_SETTLE_MS = 300;
 
 function sameFirmware(
   left: DeviceSnapshot['firmware'],
@@ -156,6 +196,11 @@ export class DeviceLink extends EventTarget {
   private readonly _store: AppStore;
   private readonly _createTransport?: (device: WebHidDeviceHandle) => Transport;
   private readonly _audioLevels?: AudioLevelSource;
+  private readonly _audioWatchMs: number;
+  private readonly _audioRetryMs: number;
+  private readonly _onEvent?: (message: string) => void;
+  /** 只读增益（ADC 检出）显示去抖；重连时清空，不带上一台设备的采样 */
+  private readonly _gainFilter = new ReadonlyGainFilter();
 
   private _state: LinkState;
   private _transport: Transport | null = null;
@@ -170,6 +215,25 @@ export class DeviceLink extends EventTarget {
    */
   private _attaching = false;
 
+  // ---- 音频电平自愈：设备还在系统里就重开音频输入，不退回恒 0 的 0x2057 ----------
+  /** 音频输入自检 / 重试定时器（只排一个，到点前有更早的请求会重排） */
+  private _audioTimer: unknown = null;
+  private _audioDueAt: number | null = null;
+  /** 正在异步打开音频输入：并发调用合并，完成后按 `_audioAgain` 再补一拍 */
+  private _audioBusy = false;
+  private _audioAgain = false;
+  /** 连续打开失败次数（退避用）；成功或重新 attach 归零 */
+  private _audioAttempts = 0;
+  /** 权限被拒是硬失败：不再空转重试，等设备重新连接 / 音频设备表变化 */
+  private _audioParked = false;
+  /** 断开 / 换设备时递增：晚到的打开结果不能再接到新链路上 */
+  private _audioGeneration = 0;
+  /** 当前采集命中的端点 id：设备端点被系统重建（id 变了）时据此换采集 */
+  private _audioInputId: string | null = null;
+  private _audioWatchBound = false;
+  private _audioLostOff: (() => void) | null = null;
+  private _audioDevicesOff: (() => void) | null = null;
+
   constructor(options: DeviceLinkOptions) {
     super();
     this._session = options.session;
@@ -178,6 +242,9 @@ export class DeviceLink extends EventTarget {
     this._store = options.store;
     this._createTransport = options.createTransport;
     this._audioLevels = options.audioLevels;
+    this._audioWatchMs = Math.max(50, options.audioWatchMs ?? AUDIO_WATCH_MS);
+    this._audioRetryMs = Math.max(20, options.audioRetryMs ?? AUDIO_RETRY_MS);
+    this._onEvent = options.onEvent;
     this._timers = options.timers ?? defaultTimers();
     this._clock = options.clock ?? defaultClock();
     this._state = Object.freeze({
@@ -190,6 +257,9 @@ export class DeviceLink extends EventTarget {
       device: null,
       warning: null,
     });
+    // 音频采集自己断了（track ended）与音频设备表变化都要立刻查一次；
+    // 不依赖 2 s 的自检周期，拔插后能马上重开
+    this._bindAudioWatch();
     // 会话被整体拆掉（用户点断开 / 桥接失败）时也要降级：句柄已失效，链路不能继续装作 ready
     options.session.onChange((sessionState) => {
       if (sessionState.status !== 'idle' && sessionState.status !== 'error') return;
@@ -221,6 +291,8 @@ export class DeviceLink extends EventTarget {
     this._attaching = true;
     // 重连期间先把旧的电平采集停掉：不然拔插后会同时开着两路麦克风
     this._stopAudioLevels();
+    // 上一轮设备/上一次连接的 ADC 采样不能带进新一轮，否则首帧会被旧中位数拖住
+    this._gainFilter.reset();
     try {
       this._patch({
         status: 'connecting',
@@ -332,6 +404,16 @@ export class DeviceLink extends EventTarget {
       errorCode: null,
       warning: null,
     });
+  }
+
+  /** 拆掉后台音频监听并停采集：应用退出 / 单测收尾用（不改变链路状态） */
+  dispose(): void {
+    this._stopAudioLevels();
+    this._audioLostOff?.();
+    this._audioLostOff = null;
+    this._audioDevicesOff?.();
+    this._audioDevicesOff = null;
+    this._audioWatchBound = false;
   }
 
   /**
@@ -533,44 +615,254 @@ export class DeviceLink extends EventTarget {
    *
    * 提示词取 HID 的 productName（真机是 "USB Audio Device"）+ 型号码：Windows 的音频端点
    * 名字里带得上这些词就能匹配到同一台设备；匹配不到就退回系统默认输入（`matched=false`）。
-   * 采集失败（没权限 / 没有输入）不阻断连接，只把电平退化成设备上报的 `0x2057`。
+   *
+   * 音频电平一旦接管，就把设备侧的 `0x2057` 轮询关掉：真机固件本来就不上报电平（恒 0），
+   * 这条 50 Hz 的读全是空转流量，长期压着下位机（2026-11 用户反馈：怕把设备卡死）。
+   *
+   * 失败时**不能**一拔插就退回设备上报：Windows 重新枚举音频端点比 HID 慢，上位机这边刚
+   * ready 时 `getUserMedia` 常报 `NotFound/NotReadable`，而 `0x2057` 恒 0——退回去电平条就
+   * 一直躺底，用户看到的是"重插后监听失效"（2026-11-14 反馈）。所以只要设备还在系统里
+   * （HID 句柄活着），就进入 `retrying` 并按退避重开；只有权限被拒或设备真的不在了才退回。
    */
-  private async _startAudioLevels(): Promise<void> {
+  private async _startAudioLevels(options: { readonly strict?: boolean } = {}): Promise<void> {
     const meter = this._audioLevels;
     if (meter === undefined) return;
     const transport = this._transport;
-    const handle = transport instanceof WebHidTransport ? transport.device : null;
-    if (handle === null) return;
-    const hints = [handle.productName ?? '', EXPECTED_MODEL_CODE, 'M001'];
+    if (!(transport instanceof WebHidTransport) || this._state.status !== 'ready') return;
+    if (this._audioBusy) {
+      // 正在打开：记一笔，完成后补一拍（插拔事件常连发）
+      this._audioAgain = true;
+      return;
+    }
+    const generation = this._audioGeneration;
+    this._audioBusy = true;
     try {
-      const info = await meter.start(hints);
+      const info = await meter.start(this._audioHints(), { strict: options.strict === true });
       // 采集期间可能已经断开 / 换了设备：晚到的那一路立刻收回
-      if (this._transport !== transport || this._state.status !== 'ready') {
+      if (generation !== this._audioGeneration || this._transport !== transport) {
         meter.stop();
         return;
       }
+      if (this._state.status !== 'ready') {
+        meter.stop();
+        return;
+      }
+      this._audioInputId = info.id;
+      this._audioAttempts = 0;
+      this._audioParked = false;
       this._channel.useLevelSource(meter);
+      transport.setLevelPolling(false);
       this._patch({ audio: { label: info.label, source: 'audio', matched: info.matched } });
+      this._log(`电平来源：音频输入 ${info.label || '（系统默认输入）'}`);
+      this._scheduleAudio();
     } catch (error) {
-      if (this._transport !== transport) return;
-      this._channel.useLevelSource(null);
-      this._patch({ audio: { label: null, source: 'device', error: audioErrorKind(error) } });
+      if (generation !== this._audioGeneration) return;
+      if (this._transport !== transport || this._state.status !== 'ready') return;
+      this._onAudioFailure(transport, audioErrorKind(error));
+    } finally {
+      this._audioBusy = false;
+      if (this._audioAgain) {
+        this._audioAgain = false;
+        this._scheduleAudio(0);
+      }
     }
+  }
+
+  /**
+   * 音频输入打开失败：设备还在就继续重开，设备/权限真的不可用才退回设备上报。
+   *
+   * 重试期间保持 `setLevelPolling(false)`——这时退回 `0x2057` 只会多出 50 Hz 空转，
+   * 电平条却不会因此活过来（固件恒 0）。
+   */
+  private _onAudioFailure(transport: WebHidTransport, kind: AudioMeterErrorKind): void {
+    const present = this._devicePresent();
+    if (present && kind !== 'denied') {
+      this._audioAttempts += 1;
+      this._audioInputId = null;
+      this._channel.useLevelSource(null);
+      transport.setLevelPolling(false);
+      this._patch({ audio: { label: null, source: 'retrying', matched: false, error: kind } });
+      const delay = this._audioBackoff();
+      this._log(`音频输入打开失败（${kind}），设备还在系统里，${delay} ms 后重开`);
+      this._scheduleAudio(delay);
+      return;
+    }
+    // 权限被拒 / 设备确实不在了：这时只有设备上报能兜底（诊断里仍能看到原因）
+    this._audioParked = kind === 'denied';
+    this._audioInputId = null;
+    this._channel.useLevelSource(null);
+    transport.setLevelPolling(true);
+    this._patch({ audio: { label: null, source: 'device', error: kind } });
+    this._log(kind === 'denied' ? '麦克风权限被拒：电平退回设备上报' : '设备不在系统里：停止音频采集');
+    if (!this._audioParked) this._scheduleAudio();
   }
 
   /** 停采集并摘掉外部电平源：设备断开 / 切回 Mock / 停在 Bootloader 时都要调 */
   private _stopAudioLevels(): void {
     if (this._audioLevels === undefined) return;
+    // 晚到的异步打开结果不能接到新链路上；定时器与退避状态一并归零
+    this._audioGeneration += 1;
+    this._cancelAudioTimer();
+    this._audioAttempts = 0;
+    this._audioParked = false;
+    this._audioAgain = false;
+    this._audioInputId = null;
     this._audioLevels.stop();
     this._channel.useLevelSource(null);
     if (this._state.audio != null) this._patch({ audio: null });
   }
 
+  /** 音频采集断了（track ended / AudioContext 关闭）：设备还在就重开 */
+  private _onAudioLost(): void {
+    if (this._audioLevels === undefined || this._state.status !== 'ready') return;
+    if (this._audioBusy) return; // 正在开了：打开结果会落定状态，别再排一次
+    this._audioInputId = null;
+    this._audioAttempts = 0;
+    if (this._state.audio?.source === 'audio') {
+      this._patch({ audio: { label: null, source: 'retrying', matched: false } });
+    }
+    this._log('音频输入被系统断开，检查设备是否还在并重开');
+    // 留一点时间给系统收拾端点：拔插瞬间立刻重开常是"开起来又立刻结束"
+    this._scheduleAudio(this._audioRetryMs);
+  }
+
+  /** 音频设备表变化（拔插 / 驱动重载）：合并连发事件后立刻查一次 */
+  private _onAudioDevicesChanged(): void {
+    if (this._audioLevels === undefined || this._state.status !== 'ready' || this._audioParked) return;
+    this._audioAttempts = 0;
+    this._scheduleAudio(AUDIO_DEVICE_SETTLE_MS);
+  }
+
+  /**
+   * 自检一拍：保证"设备还在系统里时，电平一定来自它的音频输入"。
+   *
+   * 三种情况要动手：①采集已经死了；②采集活着但采的是系统默认输入，而设备端点已经回来；
+   * ③处于 `retrying` / 设备上报，设备端点又出现了。设备端点没回来时只等不打开——重试时
+   * `strict=true`，一旦退回默认输入就会把别的麦克风当成这台设备的电平。
+   */
+  private async _ensureAudio(): Promise<void> {
+    const meter = this._audioLevels;
+    if (meter === undefined || this._audioBusy) return;
+    const audio = this._state.audio;
+    const healthy = meter.healthy === undefined ? audio?.source === 'audio' : meter.healthy();
+    if (healthy && audio?.source === 'audio') {
+      if (audio.matched === true) return;
+      // 采的是系统默认输入：设备的端点回来就换过去（以设备驱动监听为准）
+      const target = await this._probeAudioEndpoint();
+      if (target === null || target === undefined) return;
+      if (target.id === this._audioInputId) return;
+      if (this._state.status !== 'ready') return;
+      this._log(`发现设备音频输入 ${target.label}，改从它取电平`);
+      await this._startAudioLevels({ strict: true });
+      return;
+    }
+    if (this._state.status !== 'ready' || !this._devicePresent()) return;
+    // 采集已经死了（track 结束 / 上下文关闭）也算重开：这时绝不能退回默认输入
+    const retrying =
+      (audio?.source === 'audio' && !healthy) ||
+      audio?.source === 'retrying' ||
+      this._audioAttempts > 0;
+    if (retrying) {
+      const target = await this._probeAudioEndpoint();
+      if (target === null) return; // 端点还没枚举回来：等下一拍，别打开默认输入
+    }
+    await this._startAudioLevels({ strict: retrying });
+  }
+
+  /** 音频设备表里现找这台设备的端点；`undefined` = 当前音频源不支持只读探测 */
+  private async _probeAudioEndpoint(): Promise<AudioInputDevice | null | undefined> {
+    const meter = this._audioLevels;
+    if (meter?.find === undefined) return undefined;
+    try {
+      return await meter.find(this._audioHints());
+    } catch {
+      return undefined;
+    }
+  }
+
+  private _audioHints(): string[] {
+    const transport = this._transport;
+    const productName = transport instanceof WebHidTransport ? transport.device.productName ?? '' : '';
+    return [productName, EXPECTED_MODEL_CODE, 'M001'];
+  }
+
+  /** 设备还在系统里：HID 句柄打开着、没被判掉线（物理拔线由 HID `disconnect` 立即上报） */
+  private _devicePresent(): boolean {
+    const transport = this._transport;
+    if (transport === null) return false;
+    if (transport.state() !== 'ready') return false;
+    if (transport instanceof WebHidTransport) return !transport.handleLost() && transport.device.opened;
+    return true;
+  }
+
+  /** 打开失败后的退避：`audioRetryMs` 起步，翻倍到 5 s 封顶 */
+  private _audioBackoff(): number {
+    const base = Math.max(20, this._audioRetryMs);
+    const grown = base * 2 ** Math.max(0, this._audioAttempts - 1);
+    return Math.min(grown, Math.max(base, AUDIO_RETRY_MAX_MS));
+  }
+
+  /** 排下一次自检；已有更早的排程时保留它（重试不能被 2 s 的周期拖住） */
+  private _scheduleAudio(delayMs: number = this._audioWatchMs): void {
+    if (this._audioLevels === undefined || this._audioParked) return;
+    if (this._state.status !== 'ready' || this._transport === null) return;
+    const delay = Math.max(0, delayMs);
+    const due = this._clock.now() + delay;
+    if (this._audioTimer !== null) {
+      if (this._audioDueAt !== null && this._audioDueAt <= due) return;
+      this._timers.clearTimeout(this._audioTimer);
+      this._audioTimer = null;
+      this._audioDueAt = null;
+    }
+    this._audioDueAt = due;
+    this._audioTimer = this._timers.setTimeout(() => {
+      this._audioTimer = null;
+      this._audioDueAt = null;
+      void this._audioStep();
+    }, delay);
+  }
+
+  private _cancelAudioTimer(): void {
+    if (this._audioTimer === null) return;
+    this._timers.clearTimeout(this._audioTimer);
+    this._audioTimer = null;
+    this._audioDueAt = null;
+  }
+
+  private async _audioStep(): Promise<void> {
+    if (this._audioLevels === undefined || this._state.status !== 'ready' || this._audioParked) return;
+    try {
+      await this._ensureAudio();
+    } catch (error) {
+      // 自愈循环不允许把链路带走：记一笔，下一拍再来
+      this._log(`音频输入检查失败：${error instanceof Error ? error.message : String(error)}`);
+    } finally {
+      if (this._state.status === 'ready' && !this._audioParked) this._scheduleAudio();
+    }
+  }
+
+  private _bindAudioWatch(): void {
+    const meter = this._audioLevels;
+    if (meter === undefined || this._audioWatchBound) return;
+    this._audioWatchBound = true;
+    this._audioLostOff = meter.onLost?.(() => this._onAudioLost()) ?? null;
+    this._audioDevicesOff = meter.watchDevices?.(() => this._onAudioDevicesChanged()) ?? null;
+  }
+
+  private _log(message: string): void {
+    this._onEvent?.(message);
+  }
+
   // ---- 回读回填 ----------------------------------------------------------
 
   private _applyReadback(result: ParamReadResult): void {
-    for (const [id, value] of Object.entries(result.preset)) this._store.applyEcho(id, value);
+    for (const [id, value] of Object.entries(result.preset)) this._store.applyEcho(id, this._displayValue(id, value));
     if (result.bands) this._applyBands(result.bands);
+  }
+
+  /** 只读增益过一道去抖；其它参数原样回填 */
+  private _displayValue(id: string, value: number): number {
+    return READONLY_GAIN_IDS.has(id) ? this._gainFilter.accept(id, value) : value;
   }
 
   /**
@@ -581,7 +873,7 @@ export class DeviceLink extends EventTarget {
    */
   private _applyEcho(echo: ParamEcho): void {
     if (echo.kind === 'param') {
-      this._store.applyEcho(echo.id, echo.value);
+      this._store.applyEcho(echo.id, this._displayValue(echo.id, echo.value));
       return;
     }
     // `_applyBands` 认的是寄存器字段名（`band1.gain`），与回读同一条路径

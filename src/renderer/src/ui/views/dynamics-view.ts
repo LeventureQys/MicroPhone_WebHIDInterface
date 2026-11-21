@@ -1,8 +1,15 @@
 import { paramsOf } from '../../domain/params';
-import type { AppStore } from '../../domain/state';
+import type { AppState, AppStore } from '../../domain/state';
 import { t } from '../../i18n';
 import { card } from '../controls';
 import { createParamFields } from './param-list';
+
+function hint(text: string): HTMLElement {
+  const node = document.createElement('p');
+  node.className = 'macro-hint';
+  node.textContent = text;
+  return node;
+}
 
 export function createDynamicsView(store: AppStore): HTMLElement {
   const root = document.createElement('div');
@@ -14,19 +21,22 @@ export function createDynamicsView(store: AppStore): HTMLElement {
     desc: t('module.comp.desc'),
   });
   const compFields = createParamFields(store, paramsOf('comp'));
-  compCard.body.append(...compFields.nodes);
+  compCard.body.append(...compFields.nodes, hint(t('module.comp.bypassHint')));
 
   const limitCard = card({
     title: t('module.limit'),
     desc: t('module.limit.desc'),
   });
   const limitFields = createParamFields(store, paramsOf('limit'));
-  limitCard.body.append(...limitFields.nodes);
+  limitCard.body.append(...limitFields.nodes, hint(t('module.limit.bypassHint')));
 
   grid.append(compCard.root, limitCard.root);
   root.append(grid);
 
-  const unsubscribe = store.onChange((next) => {
+  compFields.sync(store.get());
+  limitFields.sync(store.get());
+
+  const unsubscribe = store.onChange((next: AppState) => {
     compFields.sync(next);
     limitFields.sync(next);
   });

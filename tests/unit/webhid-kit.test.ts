@@ -72,6 +72,62 @@ describe('@webhid-kit wiring', () => {
     expect(kit.nativeAvailable()).toBe(false);
   });
 
+  it('probes by VID/PID without parsing descriptors, and forwards hot-plug events', async () => {
+    const listeners = new Map<string, () => void>();
+    const raw = {
+      vendorId: 0x0a67,
+      productId: 0x0010,
+      productName: 'M001',
+      opened: false,
+      // 解析描述符会读这个 getter：存在性探测不该碰它
+      get collections(): never {
+        throw new Error('probeNative must not read the report descriptor');
+      },
+      addEventListener: (): void => undefined,
+      removeEventListener: (): void => undefined,
+      open: async (): Promise<void> => undefined,
+      close: async (): Promise<void> => undefined,
+      sendReport: async (): Promise<void> => undefined,
+    };
+    const previous = Object.getOwnPropertyDescriptor(navigator, 'hid');
+    Object.defineProperty(navigator, 'hid', {
+      configurable: true,
+      value: {
+        getDevices: async () => [
+          raw,
+          { vendorId: 0x046d, productId: 0xc52b, productName: 'Keyboard', opened: false },
+        ],
+        requestDevice: async () => [],
+        addEventListener: (type: string, handler: () => void) => {
+          listeners.set(type, handler);
+        },
+        removeEventListener: (type: string) => {
+          listeners.delete(type);
+        },
+      },
+    });
+    try {
+      const kit = createWebHidKit();
+      const found = await kit.probeNative(0x0a67, 0x0010);
+      expect(found).toEqual([
+        { vendorId: 0x0a67, productId: 0x0010, productName: 'M001', opened: false },
+      ]);
+
+      let changes = 0;
+      const off = kit.watchNative(() => {
+        changes += 1;
+      });
+      listeners.get('connect')?.();
+      listeners.get('disconnect')?.();
+      expect(changes).toBe(2);
+      off();
+      expect(listeners.size).toBe(0);
+    } finally {
+      if (previous) Object.defineProperty(navigator, 'hid', previous);
+      else Reflect.deleteProperty(navigator as object, 'hid');
+    }
+  });
+
   it('returns the same adapted handle for the same native HIDDevice across refreshes', async () => {
     // Chromium 每次 getDevices() 都 new 一个 NativeHidHandle，但底层 HIDDevice 是同一个；
     // DFU 的 awaitReenumeration() 依赖对象身份区分"刷新"与"真的重枚举"，适配层必须缓存。

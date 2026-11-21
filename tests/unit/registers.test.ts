@@ -5,6 +5,7 @@ import {
   decodeAsciiWords,
   DEV_INFO,
   DRC3_FIELD_ORDER,
+  DRC3_ENABLE_ADDR,
   DRC3_SECTIONS,
   drc3Addr,
   encodeAsciiWords,
@@ -17,16 +18,20 @@ import {
   findRegister,
   fromRaw,
   LEVEL_ADDR,
+  NOISEGATE_ENABLE_ADDR,
   PRESET_COUNT,
+  PRESET_END,
   PRESET_START,
   REGISTERS,
+  RGB_MODE_ADDR,
+  RGB_ONOFF_ADDR,
   toRaw,
   VALID_FLAG_ADDR,
 } from '../../src/renderer/src/device/registers';
 
 const INFO_COUNT = 62;
 const CONFIG_COUNT = 14;
-const PRESET = 114;
+const PRESET = 118;
 
 function must(addr: number) {
   const spec = findRegister(addr);
@@ -35,8 +40,8 @@ function must(addr: number) {
 }
 
 describe('register table', () => {
-  it('holds exactly 190 registers split as info 62 / config 14 / preset 114', () => {
-    expect(REGISTERS).toHaveLength(190);
+  it('holds exactly 194 registers split as info 62 / config 14 / preset 118', () => {
+    expect(REGISTERS).toHaveLength(194);
     expect(REGISTERS.filter((spec) => spec.region === 'info')).toHaveLength(INFO_COUNT);
     expect(REGISTERS.filter((spec) => spec.region === 'config')).toHaveLength(CONFIG_COUNT);
     expect(REGISTERS.filter((spec) => spec.region === 'preset')).toHaveLength(PRESET);
@@ -51,13 +56,14 @@ describe('register table', () => {
     }
   });
 
-  it('lays the preset region out contiguously from 0x2000 to 0x2071', () => {
+  it('lays the preset region out contiguously from 0x2000 to 0x2075', () => {
     const preset = REGISTERS.filter((spec) => spec.region === 'preset');
     expect(preset[0].addr).toBe(PRESET_START);
     expect(preset[preset.length - 1].addr).toBe(PRESET_START + PRESET - 1);
     expect(preset.every((spec, index) => spec.addr === 0x2000 + index)).toBe(true);
     expect(PRESET_START).toBe(0x2000);
-    expect(0x2000 + PRESET - 1).toBe(0x2071);
+    expect(0x2000 + PRESET - 1).toBe(0x2075);
+    expect(PRESET_END).toBe(0x2075);
   });
 
   it('keeps the field name unique inside each region', () => {
@@ -71,11 +77,27 @@ describe('register table', () => {
     expect(CHECKSUM_ADDR).toBe(0x2000);
     expect(VALID_FLAG_ADDR).toBe(0x2001);
     expect(LEVEL_ADDR).toBe(0x2057);
+    expect(RGB_ONOFF_ADDR).toBe(0x2072);
+    expect(RGB_MODE_ADDR).toBe(0x2073);
+    expect(NOISEGATE_ENABLE_ADDR).toBe(0x2074);
+    expect(DRC3_ENABLE_ADDR).toBe(0x2075);
     expect(must(0x2000).kind).toBe('checksum');
     expect(must(0x2057).kind).toBe('live');
     expect(must(0x2052).kind).toBe('reserved');
     expect(must(0x2056).kind).toBe('reserved');
     expect(findRegister(0x9999)).toBeUndefined();
+  });
+
+  it('keeps the V0.3 enable bits writable and default-on', () => {
+    for (const addr of [NOISEGATE_ENABLE_ADDR, DRC3_ENABLE_ADDR]) {
+      const spec = must(addr);
+      expect(spec.access).toBe('rw');
+      expect(spec.min).toBe(0);
+      expect(spec.max).toBe(1);
+      expect(spec.defaultRaw).toBe(1);
+    }
+    expect(must(RGB_ONOFF_ADDR).defaultRaw).toBe(1);
+    expect(must(RGB_MODE_ADDR).max).toBe(7);
   });
 
   it('exposes the device info and config layout', () => {
@@ -286,7 +308,7 @@ const APPENDIX_B_PRESET: readonly AppendixRow[] = [
   { addr: 0x2023, label: 'MIC 音量 Gain', min: 0, max: 100, step: 1, unit: '', defaultRaw: 100, access: 'r', scale: 'raw' },
   { addr: 0x2024, label: '降噪开关 OnOff', min: 0, max: 1, step: 1, unit: '', defaultRaw: 0, access: 'rw', scale: 'raw' },
   { addr: 0x2025, label: '降噪强度 Threshold', min: 0, max: 3, step: 1, unit: '', defaultRaw: 0, access: 'rw', scale: 'raw' },
-  { addr: 0x2026, label: 'MIC 均衡器模式 MIC', min: 0, max: 4, step: 1, unit: '', defaultRaw: 1, access: 'rw', scale: 'raw' },
+  { addr: 0x2026, label: 'MIC 均衡器模式 MIC', min: 0, max: 5, step: 1, unit: '', defaultRaw: 1, access: 'rw', scale: 'raw' },
   { addr: 0x204a, label: 'Comp 使能 Enable', min: 0, max: 1, step: 1, unit: '', defaultRaw: 0, access: 'rw', scale: 'raw' },
   { addr: 0x204b, label: 'Comp MakeUpGain', min: 0, max: 60, step: 0.1, unit: 'dB', defaultRaw: 0, access: 'rw', scale: 'linear', mul: 0.1, add: 0 },
   { addr: 0x204c, label: 'Comp Threshold', min: -60, max: 0, step: 0.1, unit: 'dB', defaultRaw: 580, access: 'rw', scale: 'linear', mul: 0.1, add: -60 },
@@ -310,8 +332,13 @@ const APPENDIX_B_PRESET: readonly AppendixRow[] = [
   { addr: 0x205e, label: 'NoiseGate release_ms', min: 5, max: 500, step: 1, unit: 'ms', defaultRaw: 5, access: 'rw', scale: 'raw' },
   { addr: 0x205f, label: 'NoiseGate knee_width_db', min: 6, max: 12, step: 1, unit: 'dB', defaultRaw: 6, access: 'rw', scale: 'raw' },
   { addr: 0x2060, label: 'NoiseGate hp_freq', min: 60, max: 200, step: 1, unit: 'Hz', defaultRaw: 60, access: 'rw', scale: 'raw' },
-  { addr: 0x2061, label: '3BandDrc 分频点 1 fc1', min: 50, max: 10000, step: 1, unit: 'Hz', defaultRaw: 50, access: 'rw', scale: 'raw' },
-  { addr: 0x2062, label: '3BandDrc 分频点 2 fc2', min: 50, max: 10000, step: 1, unit: 'Hz', defaultRaw: 50, access: 'rw', scale: 'raw' },
+  { addr: 0x2061, label: '3BandDrc 分频点 1 fc1', min: 50, max: 10000, step: 1, unit: 'Hz', defaultRaw: 1000, access: 'rw', scale: 'raw' },
+  { addr: 0x2062, label: '3BandDrc 分频点 2 fc2', min: 50, max: 10000, step: 1, unit: 'Hz', defaultRaw: 3000, access: 'rw', scale: 'raw' },
+  // 参数表 V0.3 新增（黄色标记）
+  { addr: 0x2072, label: 'RGB OnOff', min: 0, max: 1, step: 1, unit: '', defaultRaw: 1, access: 'rw', scale: 'raw' },
+  { addr: 0x2073, label: 'RGB Mode', min: 0, max: 7, step: 1, unit: '', defaultRaw: 0, access: 'rw', scale: 'raw' },
+  { addr: 0x2074, label: 'NoiseGate Enable', min: 0, max: 1, step: 1, unit: '', defaultRaw: 1, access: 'rw', scale: 'raw' },
+  { addr: 0x2075, label: '3BandDrc Enable', min: 0, max: 1, step: 1, unit: '', defaultRaw: 1, access: 'rw', scale: 'raw' },
 ];
 
 function assertAppendixRow(row: AppendixRow): void {
@@ -427,7 +454,7 @@ describe('appendix B cross-check (R2-1)', () => {
 
   it('matches appendix B.3 3-band drc table', () => {
     const expected = {
-      preGain: { min: 0, max: 4, step: 0.01, unit: '', defaultRaw: 0, mul: 0.01, add: 0 },
+      preGain: { min: 0, max: 4, step: 0.01, unit: '', defaultRaw: 128, mul: 0.01, add: 0 },
       threshold: { min: -80, max: 0, step: 0.1, unit: 'dB', defaultRaw: 0, mul: 0.1, add: -80 },
       attackTime: { min: 1, max: 400, step: 1, unit: 'ms', defaultRaw: 1, mul: null, add: null },
       releaseTime: { min: 5, max: 680, step: 1, unit: 'ms', defaultRaw: 5, mul: null, add: null },

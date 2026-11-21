@@ -39,6 +39,10 @@ class FakeSession implements AutoConnectSession {
   readonly connectCalls: WebHidMode[] = [];
   refreshCalls = 0;
   probeCalls = 0;
+  probeFilters: Array<{ vendorId: number; productId: number } | undefined> = [];
+  readonly watchers = new Set<() => void>();
+  watchOff: (() => void) | null = null;
+  watchCalls = 0;
 
   getState(): WebHidSessionState {
     return {
@@ -56,9 +60,25 @@ class FakeSession implements AutoConnectSession {
     return this.available;
   }
 
-  async probeNative(): Promise<readonly WebHidDeviceSummary[]> {
+  async probeNative(target?: { vendorId: number; productId: number }): Promise<readonly WebHidDeviceSummary[]> {
     this.probeCalls += 1;
+    this.probeFilters.push(target);
     return this.probes;
+  }
+
+  watchNative(cb: () => void): () => void {
+    this.watchCalls += 1;
+    this.watchers.add(cb);
+    const off = (): void => {
+      this.watchers.delete(cb);
+    };
+    this.watchOff = off;
+    return off;
+  }
+
+  /** 测试里手动模拟一次 USB 插拔事件 */
+  emitUsbChange(): void {
+    for (const cb of [...this.watchers]) cb();
   }
 
   async connect(mode?: WebHidMode): Promise<void> {
@@ -242,6 +262,112 @@ describe('AutoConnector', () => {
     await connector.tickOnce();
     await connector.tickOnce();
     expect(link.attachments).toHaveLength(1);
+  });
+
+  // ---- 掉线后自动重连（用户要求：丢失了连接就要尝试重新连接）--------------------
+
+  it('re-attaches automatically after the link drops', async () => {
+    const { session, link, connector } = build();
+    session.probes = [summary()];
+    await connector.tickOnce();
+    expect(link.attachments).toHaveLength(1);
+
+    // 已经连上：下一拍只做幂等的"已连接"判定，不再探测、不重复 attach
+    await connector.tickOnce();
+    expect(session.probeCalls).toBe(1);
+    expect(link.attachments).toHaveLength(1);
+
+    // 掉线（拔线 / 通道 error）：掉线本身不算"手动断开"，下一拍就要重新连
+    link.status = 'error';
+    link.errorCode = 'device';
+    await connector.tickOnce();
+
+    expect(link.attachments).toHaveLength(2);
+    expect(connector.state().paused).toBe(false);
+    expect(connector.state().parked).toBe(false);
+  });
+
+  it('waits for the device to come back and reconnects on replug', async () => {
+    const { session, link, connector } = build();
+    session.probes = [summary()];
+    await connector.tickOnce();
+
+    // 拔线：设备从系统里消失，链路转 error
+    link.status = 'error';
+    link.errorCode = 'device';
+    session.probes = [];
+    await connector.tickOnce();
+    expect(link.attachments).toHaveLength(1);
+    expect(connector.state().paused).toBe(false);
+
+    // 插回：不需要用户点任何按钮，自己连回来
+    session.probes = [summary()];
+    link.afterAttach = { status: 'ready', errorCode: null };
+    await connector.tickOnce();
+    expect(link.attachments).toHaveLength(2);
+    expect(link.getState().status).toBe('ready');
+  });
+
+  it('retries a failed reconnect instead of parking after one sync failure', async () => {
+    const { session, link, connector } = build();
+    session.probes = [summary()];
+    await connector.tickOnce();
+
+    // 掉线后第一次重连：设备还没缓过来，参数同步失败
+    link.status = 'error';
+    link.errorCode = 'device';
+    link.afterAttach = { status: 'error', errorCode: 'sync' };
+    await connector.tickOnce();
+
+    expect(link.attachments).toHaveLength(2);
+    // 连上过再掉下去不算"开机就在升级模式"：不能一次就停手
+    expect(connector.state().parked).toBe(false);
+    expect(connector.state().attempts).toBe(1);
+
+    // 设备缓过来：下一拍自己连回去
+    link.afterAttach = { status: 'ready', errorCode: null };
+    await connector.tickOnce();
+    expect(link.attachments).toHaveLength(3);
+    expect(link.getState().status).toBe('ready');
+    expect(connector.state().attempts).toBe(0);
+  });
+
+  it('still parks after the reconnect retries are used up', async () => {
+    const { session, link, connector } = build({ maxAttempts: 3 });
+    session.probes = [summary()];
+    await connector.tickOnce();
+
+    link.status = 'error';
+    link.afterAttach = { status: 'error', errorCode: 'sync' };
+    await connector.tickOnce();
+    await connector.tickOnce();
+    await connector.tickOnce();
+    expect(connector.state().parked).toBe(true);
+
+    // 停手后不再对着设备空转；拔插一次或手动连接才会重新武装
+    const before = link.attachments.length;
+    await connector.tickOnce();
+    expect(link.attachments).toHaveLength(before);
+  });
+
+  it('probes only the target VID/PID instead of enumerating every HID device', async () => {
+    const { session, connector } = build();
+    session.probes = [summary()];
+
+    await connector.tickOnce();
+
+    expect(session.probeFilters).toEqual([{ vendorId: VID, productId: PID }]);
+  });
+
+  it('subscribes to USB hot-plug events and unbinds on stop', () => {
+    const { session, connector } = build();
+
+    connector.start();
+    expect(session.watchCalls).toBe(1);
+    expect(session.watchers.size).toBe(1);
+
+    connector.stop();
+    expect(session.watchers.size).toBe(0);
   });
 
   it('gives up when the environment has no native WebHID', async () => {

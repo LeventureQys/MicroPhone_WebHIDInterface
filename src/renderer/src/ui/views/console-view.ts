@@ -3,13 +3,11 @@ import { findParam, type ParamSpec } from '../../domain/params';
 import { matchScene, scenePatch, SCENES, type SceneId, type ScenePreset } from '../../domain/scenes';
 import {
   EQ_PRESETS,
-  denoiseStrengthFromThreshold,
+  gainsOf,
   limitEnableOn,
   limitEnableValue,
   matchEqPreset,
-  smoothnessFromThreshold,
-  thresholdFromDenoiseStrength,
-  thresholdFromSmoothness,
+  matchesGains,
   type EqPresetId,
 } from '../../domain/quick-controls';
 import type { AppState, AppStore, LocalErrorDetail } from '../../domain/state';
@@ -45,7 +43,7 @@ export interface ConsoleDeviceInfo {
   onChange: (cb: () => void) => () => void;
 }
 
-const TONES: EqPresetId[] = ['flat', 'vocal', 'warm', 'bright', 'music'];
+const TONES: EqPresetId[] = ['flat', 'vocal', 'warm', 'bright', 'custom'];
 /** 映射器与 drawEq 必须用同一套边距，否则网格和曲线会错开 */
 const EQ_MARGIN = { top: 26, right: 32, bottom: 28, left: 40 };
 const SCENE_ICON: Record<SceneId, IconName> = {
@@ -53,6 +51,7 @@ const SCENE_ICON: Record<SceneId, IconName> = {
   podcast: 'podcast',
   sing: 'sing',
   quiet: 'quiet',
+  custom: 'sliders',
 };
 
 function compactCard(opts: { title: string; tag?: string; desc?: string }): {
@@ -211,12 +210,18 @@ export function createConsoleView(
   let denoise: MacroSliderHandle | null = null;
   let evenness: MacroSliderHandle | null = null;
 
+  // 2026-11-13 改版：不再用 0..100 的抽象强度，直接显示/写入协议阈值，
+  // 与高级参数里的「噪声门 阈值 / 压缩器 阈值」是同一个值（同 id 同步）。
   if (gateThreshold) {
     denoise = macroSlider({
       label: t('console.denoise'),
-      value: denoiseStrengthFromThreshold(state.params[gateThreshold.id] ?? gateThreshold.default),
+      value: state.params[gateThreshold.id] ?? gateThreshold.default,
+      min: gateThreshold.min,
+      max: gateThreshold.max,
+      step: gateThreshold.step,
+      format: (value) => `${formatValue(gateThreshold, value)} ${t('common.unit.dB')}`,
       hint: t('console.hint.denoise'),
-      onChange: (value) => store.setParam(gateThreshold.id, thresholdFromDenoiseStrength(value)),
+      onChange: (value) => store.setParam(gateThreshold.id, value),
     });
     denoise.root.dataset.macro = 'denoise';
     tuneGrid.append(denoise.root);
@@ -225,9 +230,13 @@ export function createConsoleView(
   if (compThreshold) {
     evenness = macroSlider({
       label: t('console.evenness'),
-      value: smoothnessFromThreshold(state.params[compThreshold.id] ?? compThreshold.default),
+      value: state.params[compThreshold.id] ?? compThreshold.default,
+      min: compThreshold.min,
+      max: compThreshold.max,
+      step: compThreshold.step,
+      format: (value) => `${formatValue(compThreshold, value)} ${t('common.unit.dB')}`,
       hint: t('console.hint.evenness'),
-      onChange: (value) => store.setParam(compThreshold.id, thresholdFromSmoothness(value)),
+      onChange: (value) => store.setParam(compThreshold.id, value),
     });
     evenness.root.dataset.macro = 'evenness';
     tuneGrid.append(evenness.root);
@@ -254,6 +263,36 @@ export function createConsoleView(
   }
   toneBlock.append(toneHead, toneChips);
   tuneGrid.append(toneBlock);
+
+  // 增益选项卡从高级参数移除后，三个输入开关放到主界面「快速调音」里（2026-11-13）
+  const inputSwitches = document.createElement('div');
+  inputSwitches.className = 'tune-switches';
+  const inputHead = document.createElement('div');
+  inputHead.className = 'pfield-head';
+  inputHead.append(element('span', 'pfield-label', t('console.tune.input')));
+  const tuneSwitchGrid = document.createElement('div');
+  tuneSwitchGrid.className = 'tune-switch-grid';
+  const inputSwitchById = new Map<string, HTMLElement>();
+  const inputSwitchLabel: Record<string, string> = {
+    'mic.mute': t('param.mic.mute.label'),
+    'hp.OnOff': t('param.hp.OnOff.label'),
+    // 三列布局里"电平信号静音"会省略号；控制台只显示"电平信号"，完整名在高级参数里
+    'mic.sigMute': t('console.input.sigMute'),
+  };
+  for (const id of ['mic.mute', 'hp.OnOff', 'mic.sigMute']) {
+    const spec = findParam(id);
+    if (!spec) continue;
+    const node = switchControl({
+      checked: (state.params[id] ?? 0) === 1,
+      label: inputSwitchLabel[id] ?? t(`param.${id}.label`),
+      onChange: (checked) => store.setParam(id, checked ? 1 : 0),
+    });
+    node.dataset.param = id;
+    inputSwitchById.set(id, node);
+    tuneSwitchGrid.append(node);
+  }
+  inputSwitches.append(inputHead, tuneSwitchGrid);
+  tuneGrid.append(inputSwitches);
   tuneCard.body.append(tuneGrid);
 
   // ---- 音色曲线 ------------------------------------------------------------
@@ -262,6 +301,7 @@ export function createConsoleView(
     desc: t('console.eq.desc'),
   });
   eqCard.root.classList.add('console-eq');
+  const eqDesc = eqCard.root.querySelector<HTMLElement>('.card-desc');
   const canvasWrap = document.createElement('div');
   canvasWrap.className = 'eq-canvas-wrap console-eq-wrap';
   const eqCanvas = document.createElement('canvas');
@@ -410,8 +450,12 @@ export function createConsoleView(
   root.append(sceneCard.root, meterCard.root, middle, eqCard.root, noticeBar);
 
   // ---- 场景 / 音色 应用与高亮 ---------------------------------------------
+  /** 当前高亮的音色；只有「自定义」允许直接拖曲线（2026-11-13 需求） */
+  let activeTone: EqPresetId | null = null;
+
   function applyScene(scene: ScenePreset): void {
-    const patch = scenePatch(scene);
+    const patch = scenePatch(scene, store.get().customEq);
+    store.setTone(scene.tone);
     for (const [id, value] of Object.entries(patch.params)) store.setParam(id, value);
     const bands = store.get().bands;
     store.setBands(
@@ -421,8 +465,13 @@ export function createConsoleView(
     );
   }
 
+  function toneGains(id: EqPresetId): readonly number[] {
+    return id === 'custom' ? store.get().customEq : EQ_PRESETS[id];
+  }
+
   function applyTone(id: EqPresetId): void {
-    const gains = EQ_PRESETS[id];
+    store.setTone(id);
+    const gains = toneGains(id);
     const bands = store.get().bands;
     store.setBands(
       bands.map((band, index) =>
@@ -432,7 +481,7 @@ export function createConsoleView(
   }
 
   function syncScene(stateNow: ReturnType<AppStore['get']>): void {
-    const active = matchScene(stateNow.params, stateNow.bands);
+    const active = matchScene(stateNow.params, stateNow.bands, stateNow.customEq, stateNow.tone);
     for (const [id, button] of sceneButtons) {
       const on = id === active;
       button.classList.toggle('is-active', on);
@@ -441,12 +490,21 @@ export function createConsoleView(
   }
 
   function syncTone(stateNow: ReturnType<AppStore['get']>): void {
-    const active = matchEqPreset(stateNow.bands, 7);
+    // 显式选择优先；没选过才按曲线反推（自定义全平曲线不会抢走「原声」的高亮）
+    const active: EqPresetId | null =
+      stateNow.tone ??
+      matchEqPreset(stateNow.bands, 7) ??
+      (matchesGains(stateNow.bands, stateNow.customEq, 7) ? 'custom' : null);
+    activeTone = active;
     for (const [id, button] of toneButtons) {
       const on = id === active;
       button.classList.toggle('is-active', on);
       button.setAttribute('aria-pressed', String(on));
     }
+    if (eqDesc) {
+      eqDesc.textContent = active === 'custom' ? t('console.eq.desc') : t('console.eq.locked');
+    }
+    if (active !== 'custom') eqCanvas.dataset.cursor = 'default';
   }
 
   function syncBands(stateNow: ReturnType<AppStore['get']>): void {
@@ -527,9 +585,13 @@ export function createConsoleView(
     canvas: eqCanvas,
     model,
     mapper: mapperProxy,
+    // 只有「自定义」音色允许直接改曲线；其它音色只展示，细调走高级参数（2026-11-13）
+    enabled: () => activeTone === 'custom',
     onChange: () => {
       renderCanvas();
-      store.setBands(model.allBands());
+      const bands = model.allBands();
+      store.setBands(bands);
+      if (activeTone === 'custom') store.setCustomEq(gainsOf(bands));
     },
   });
   const observer = new ResizeObserver(() => renderCanvas());
@@ -640,10 +702,13 @@ export function createConsoleView(
       entry.node.textContent = formatValue(entry.spec, next.params[id] ?? entry.spec.default);
     }
     if (denoise && gateThreshold) {
-      denoise.setValue(denoiseStrengthFromThreshold(next.params[gateThreshold.id] ?? gateThreshold.default));
+      denoise.setValue(next.params[gateThreshold.id] ?? gateThreshold.default);
     }
     if (evenness && compThreshold) {
-      evenness.setValue(smoothnessFromThreshold(next.params[compThreshold.id] ?? compThreshold.default));
+      evenness.setValue(next.params[compThreshold.id] ?? compThreshold.default);
+    }
+    for (const [id, node] of inputSwitchById) {
+      setSwitchChecked(node, (next.params[id] ?? 0) === 1);
     }
     setSwitchChecked(encSwitch, (next.params['enc.OnOff'] ?? 0) === 1);
     setSegmentedValue(encLevel, next.params['enc.Level'] ?? 1);

@@ -213,9 +213,9 @@ describe('设备侧参数协议栈（SubStage 2.1）', () => {
     expect(sink.stack.readRegister(0x1008)).toBe(1);
   });
 
-  it('12. 默认寄存器 190 项且关键默认值固定', () => {
+  it('12. 默认寄存器 194 项且关键默认值固定', () => {
     const registers = defaultRegisters();
-    expect(registers.size).toBe(190);
+    expect(registers.size).toBe(194);
     expect(registers.get(0x2024)).toBe(0);
     expect(registers.get(0x2025)).toBe(0);
     expect(registers.get(0x205b)).toBe(0);
@@ -223,6 +223,14 @@ describe('设备侧参数协议栈（SubStage 2.1）', () => {
     expect(registers.get(0x2001)).toBe(1);
     expect(registers.get(0x2023)).toBe(100);
     expect(registers.get(0x205a)).toBe(100);
+    // 参数表 V0.3 的新默认值
+    expect(registers.get(0x2061)).toBe(1000);
+    expect(registers.get(0x2062)).toBe(3000);
+    expect(registers.get(0x2063)).toBe(128);
+    expect(registers.get(0x2072)).toBe(1);
+    expect(registers.get(0x2073)).toBe(0);
+    expect(registers.get(0x2074)).toBe(1);
+    expect(registers.get(0x2075)).toBe(1);
     expect(REPORT_ID_IN).toBe(17);
   });
 
@@ -297,7 +305,7 @@ describe('设备侧参数协议栈（SubStage 2.1）', () => {
       rejectedRange: 0,
     });
     const snapshot = sink.stack.snapshot();
-    expect(Object.keys(snapshot)).toHaveLength(190);
+    expect(Object.keys(snapshot)).toHaveLength(194);
     expect(snapshot['0x2024']).toBe(0);
     expect(sink.stack.info()).toMatchObject({
       modelCode: 'JYM001',
@@ -323,9 +331,9 @@ describe('设备侧参数协议栈（SubStage 2.1）', () => {
     randRead.stack.feed(oneReport(buildFrame(0x12, [0x90, 0x00])));
     expect(frameList(randRead)).toEqual([ACK_LITERAL[ACK_DATA_ERR]]);
 
-    // 0x2071 是参数表最后一项，再往后一个就出界
+    // 0x2075 是参数表最后一项，再往后一个就出界
     const seqRead = createSink();
-    seqRead.stack.feed(oneReport(buildFrame(0x13, [0x20, 0x71, 0x00, 0x02])));
+    seqRead.stack.feed(oneReport(buildFrame(0x13, [0x20, 0x75, 0x00, 0x02])));
     expect(frameList(seqRead)).toEqual([ACK_LITERAL[ACK_DATA_ERR]]);
   });
 

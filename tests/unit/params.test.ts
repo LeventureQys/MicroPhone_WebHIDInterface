@@ -16,7 +16,7 @@ const EXPECTED: readonly Expected[] = [
   ['enc.OnOff', 0x2024, 0, 1, 1, '', false, 0],
   ['enc.Level', 0x2025, 0, 3, 1, '', false, 0],
 
-  ['eq.mode', 0x2026, 0, 4, 1, '', false, 1],
+  ['eq.mode', 0x2026, 0, 5, 1, '', false, 1],
 
   ['comp.Enable', 0x204a, 0, 1, 1, '', false, 0],
   ['comp.MakeUpGain', 0x204b, 0, 60, 0.1, 'dB', false, 0],
@@ -31,6 +31,7 @@ const EXPECTED: readonly Expected[] = [
   ['limit.Attack', 0x2054, 0.0001, 0.2, 0.0001, 's', false, 0.0005],
   ['limit.Release', 0x2055, 0.005, 2, 0.0001, 's', false, 0.05],
 
+  ['noisegate.Enable', 0x2074, 0, 1, 1, '', false, 1],
   ['noisegate.threshold_db', 0x205b, -91, 0, 1, 'dB', false, -91],
   ['noisegate.ratio', 0x205c, 0.05, 0.999, 0.001, '', false, 0.05],
   ['noisegate.attack_ms', 0x205d, 5, 500, 1, 'ms', false, 5],
@@ -38,29 +39,33 @@ const EXPECTED: readonly Expected[] = [
   ['noisegate.knee_width_db', 0x205f, 6, 12, 1, 'dB', false, 6],
   ['noisegate.hp_freq', 0x2060, 60, 200, 1, 'Hz', false, 60],
 
-  ['drc3.fc1', 0x2061, 50, 10000, 1, 'Hz', false, 50],
-  ['drc3.fc2', 0x2062, 50, 10000, 1, 'Hz', false, 50],
-  ['drc3.low.preGain', 0x2063, 0, 4, 0.01, '', false, 0],
+  ['drc3.Enable', 0x2075, 0, 1, 1, '', false, 1],
+  ['drc3.fc1', 0x2061, 50, 10000, 1, 'Hz', false, 1000],
+  ['drc3.fc2', 0x2062, 50, 10000, 1, 'Hz', false, 3000],
+  ['drc3.low.preGain', 0x2063, 0, 4, 0.01, '', false, 1.28],
   ['drc3.low.threshold', 0x2064, -80, 0, 0.1, 'dB', false, -80],
   ['drc3.low.attackTime', 0x2065, 1, 400, 1, 'ms', false, 1],
   ['drc3.low.releaseTime', 0x2066, 5, 680, 1, 'ms', false, 5],
   ['drc3.low.ratio', 0x2067, 1, 20, 0.1, '', false, 1],
-  ['drc3.high.preGain', 0x2068, 0, 4, 0.01, '', false, 0],
+  ['drc3.high.preGain', 0x2068, 0, 4, 0.01, '', false, 1.28],
   ['drc3.high.threshold', 0x2069, -80, 0, 0.1, 'dB', false, -80],
   ['drc3.high.attackTime', 0x206a, 1, 400, 1, 'ms', false, 1],
   ['drc3.high.releaseTime', 0x206b, 5, 680, 1, 'ms', false, 5],
   ['drc3.high.ratio', 0x206c, 1, 20, 0.1, '', false, 1],
-  ['drc3.mid.preGain', 0x206d, 0, 4, 0.01, '', false, 0],
+  ['drc3.mid.preGain', 0x206d, 0, 4, 0.01, '', false, 1.28],
   ['drc3.mid.threshold', 0x206e, -80, 0, 0.1, 'dB', false, -80],
   ['drc3.mid.attackTime', 0x206f, 1, 400, 1, 'ms', false, 1],
   ['drc3.mid.releaseTime', 0x2070, 5, 680, 1, 'ms', false, 5],
   ['drc3.mid.ratio', 0x2071, 1, 20, 0.1, '', false, 1],
+
+  ['rgb.OnOff', 0x2072, 0, 1, 1, '', false, 1],
+  ['rgb.Mode', 0x2073, 0, 7, 1, '', false, 0],
 ];
 
 describe('params table', () => {
-  it('has 42 scalar parameters', () => {
-    expect(PARAMS.length).toBe(42);
-    expect(EXPECTED).toHaveLength(42);
+  it('has 46 scalar parameters', () => {
+    expect(PARAMS.length).toBe(46);
+    expect(EXPECTED).toHaveLength(46);
   });
 
   it('uses unique ids and unique addresses', () => {
@@ -76,8 +81,9 @@ describe('params table', () => {
     expect(paramsOf('eq')).toHaveLength(1);
     expect(paramsOf('comp')).toHaveLength(7);
     expect(paramsOf('limit')).toHaveLength(4);
-    expect(paramsOf('noisegate')).toHaveLength(6);
-    expect(paramsOf('drc3')).toHaveLength(17);
+    expect(paramsOf('noisegate')).toHaveLength(7);
+    expect(paramsOf('drc3')).toHaveLength(18);
+    expect(paramsOf('rgb')).toHaveLength(2);
     expect(paramsOf('gain').map((item) => item.id)).toEqual([
       'gain.Mic',
       'gain.Hp',
@@ -85,6 +91,9 @@ describe('params table', () => {
       'mic.sigMute',
       'hp.OnOff',
     ]);
+    // 使能位排在本模块最前：界面开关就在参数滑杆上方
+    expect(paramsOf('noisegate')[0].id).toBe('noisegate.Enable');
+    expect(paramsOf('drc3')[0].id).toBe('drc3.Enable');
   });
 
   it('matches the design table row by row', () => {
@@ -153,6 +162,12 @@ describe('params table', () => {
     expect(findParam('gain.Hp')?.addr).toBe(0x205a);
     expect(findParam('limit.Enable')?.addr).toBe(0x2051);
     expect(findParam('comp.Enable')?.addr).toBe(0x204a);
+    // 参数表 V0.3 的模块使能位与灯效
+    expect(findParam('noisegate.Enable')?.addr).toBe(0x2074);
+    expect(findParam('drc3.Enable')?.addr).toBe(0x2075);
+    expect(findParam('rgb.OnOff')?.addr).toBe(0x2072);
+    expect(findParam('rgb.Mode')?.addr).toBe(0x2073);
+    expect(findParam('eq.mode')?.max).toBe(5);
   });
 
   it('carries the calibration of the underlying register', () => {
@@ -161,5 +176,7 @@ describe('params table', () => {
     expect(findParam('drc3.low.preGain')?.scale).toEqual({ kind: 'linear', mul: 0.01, add: 0 });
     expect(findParam('drc3.mid.ratio')?.scale).toEqual({ kind: 'linear', mul: 0.1, add: 0 });
     expect(findParam('gain.Mic')?.scale).toEqual({ kind: 'raw' });
+    // V0.3 把三分频 preGain 默认从 0 改成 raw 128 → 1.28（= ×1.28 线性补偿）
+    expect(findParam('drc3.low.preGain')?.default).toBeCloseTo(1.28, 6);
   });
 });
