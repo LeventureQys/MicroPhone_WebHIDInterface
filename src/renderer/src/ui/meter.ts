@@ -9,6 +9,12 @@ export interface MeterChannel {
    * 不画柱、读数显示 `—`、峰值保持清零；'muted' = 有效静音：空柱 + `−∞`。
    */
   readonly state?: MeterChannelState;
+  /**
+   * 是否显示峰值（读数 + 保持线），缺省 true。
+   * 输出通道传 false：2026-11-21 问题单第 10 条要求去掉输出峰值，
+   * 只保留 RMS，演示时不用解释两个读数。
+   */
+  readonly showPeak?: boolean;
 }
 
 interface MeterOptions {
@@ -142,6 +148,7 @@ export class MeterCanvas {
       const centerX = SCALE_WIDTH + slotWidth * index + slotWidth / 2;
       const x = snap(centerX - barWidth / 2);
       const unavailable = channel.state === 'unavailable';
+      const showPeak = channel.showPeak !== false;
       const memory = this.memorize(channel, now, dt);
 
       // LED 段：不可用时整列只画中性暗段，有数据时未点亮的段保留各自分区的底色
@@ -155,7 +162,7 @@ export class MeterCanvas {
       }
       ctx.globalAlpha = 1;
 
-      if (!unavailable && memory.holdDb > minDb) {
+      if (showPeak && !unavailable && memory.holdDb > minDb) {
         // 峰值保持线：比柱宽两边各多 2 px，颜色跟分区走
         const holdY = snap(yOf(memory.holdDb));
         ctx.fillStyle = zoneColor(memory.holdDb);
@@ -173,6 +180,7 @@ export class MeterCanvas {
       ctx.font = '10.5px ui-monospace, "Cascadia Mono", Consolas, monospace';
       ctx.fillStyle = COLOR.readout;
       ctx.fillText(`${this.rmsLabel} ${meterText(memory.rms, channel.state, minDb)}`, centerX, bottom + 19);
+      if (!showPeak) return;
       const hot = !unavailable && channel.state !== 'muted' && memory.holdDb > CLIP_WARN_DB;
       ctx.fillStyle = hot ? COLOR.hot : COLOR.readoutStrong;
       ctx.fillText(`${this.peakLabel} ${meterText(memory.holdDb, channel.state, minDb)}`, centerX, bottom + 35);

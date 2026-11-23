@@ -31,7 +31,11 @@ export interface FirmwareLink {
   transport(): FirmwareChannel | null;
   getState(): LinkState;
   suspendForDfu(): Promise<void>;
-  resumeAfterDfu(): Promise<void>;
+  /**
+   * 收尾：换新句柄并全量回读。返回 false = 一句都没读到（设备还在升级模式 / 新固件没起来），
+   * 此时**不能**拿 `getState().device` 里升级前的旧快照去比版本。
+   */
+  resumeAfterDfu(): Promise<boolean>;
   /**
    * 设备复位重枚举后换新句柄并重开（进 DFU 之后、收尾之后各一次）。
    * 可选：单测的假链路不实现时按"虚拟通道无需重枚举"处理。
@@ -58,6 +62,9 @@ export interface FirmwareState {
   readonly confirmed: boolean;
   readonly fileName: string | null;
 }
+
+/** 规格 §3：`app` = 正常升级；`bootloader` = 设备停在升级模式、点了直接续刷；`none` = 没连设备 */
+export type FirmwareDeviceMode = 'app' | 'bootloader' | 'none';
 
 export interface FirmwareControllerOptions {
   readonly link: FirmwareLink;
@@ -203,6 +210,20 @@ export class FirmwareController extends EventTarget {
   }
 
   /**
+   * 设备当前模式（规格 §3）：决定这次点「开始升级」走正常升级还是续刷。
+   *
+   * 只作提示，不参与判定：真正的分支在 `DfuSession` 里（EnterDfu 有没有 ACK）。
+   * `app` 要求"有摘要且已同步"；只要还留着通道（哪怕 Modbus 没人答）就算 `bootloader`，
+   * 因为 `_failSync()` 在参数同步失败时刻意保留了裸通道供续刷。
+   */
+  deviceMode(): FirmwareDeviceMode {
+    const state = this.options.link.getState();
+    if (state.device !== null && state.sync === 'ready') return 'app';
+    if (this.options.link.transport() !== null) return 'bootloader';
+    return 'none';
+  }
+
+  /**
    * 开始升级。未确认 → 抛 `Error('confirmation required')` 且**零出帧**。
    * 失败不抛：错误进 `state.error`（界面据此渲染"重试 / 重插"），设备状态不回滚。
    *
@@ -244,12 +265,22 @@ export class FirmwareController extends EventTarget {
       await this.setDfuActive(true);
       await session.run(bytes);
       // run() 在 settling 处返回：设备正在重启，重连并全量回读
-      await this.options.link.resumeAfterDfu();
+      const resumeOk = await this.options.link.resumeAfterDfu();
       // resumeAfterDfu() 自己处理失败（不抛），走到这里链路已由它收场，不能再按"挂起中"处置
       suspended = false;
-      const verdict = this.verifyVersion(this.options.link.getState().device);
-      if (verdict.ok) session.complete();
-      else session.complete({ ok: false, detail: verdict.detail });
+      if (!resumeOk) {
+        // 没读到设备就没有"版本"可比：说成"版本未变、设备已回到正常模式"是假话，
+        // 而且会把用户引向"再刷一次"（2026-11-21 真机刷砖现场就是这么发生的）。
+        session.complete({
+          ok: false,
+          kind: 'noReadback',
+          detail: 'device did not answer after reboot (still in update mode or the new firmware did not start)',
+        });
+      } else {
+        const verdict = this.verifyVersion(this.options.link.getState().device);
+        if (verdict.ok) session.complete();
+        else session.complete({ ok: false, detail: verdict.detail });
+      }
     } catch (error) {
       const message = describe(error);
       // abort 是用户动作，不是错误；其余失败由会话的 onError 落进 state.error

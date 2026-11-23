@@ -1,11 +1,10 @@
 import type { DeviceSnapshot, LevelFrame, Transport } from '../../device/transport';
+import { withEqReset } from '../../domain/eq-reset';
 import { findParam, type ParamSpec } from '../../domain/params';
 import { matchScene, scenePatch, SCENES, type SceneId, type ScenePreset } from '../../domain/scenes';
 import {
   EQ_PRESETS,
   gainsOf,
-  limitEnableOn,
-  limitEnableValue,
   matchEqPreset,
   matchesGains,
   type EqPresetId,
@@ -31,10 +30,12 @@ import {
 } from '../controls';
 import { icon, type IconName } from '../icons';
 import { MeterCanvas, type MeterChannelState } from '../meter';
+import type { AdvancedSectionId } from './advanced-view';
 
 export interface ConsoleApi {
   openDevice: () => void;
-  openAdvanced: () => void;
+  /** `section` 给定时直接滚到高级参数里的那一节（「逐段精调」→ 均衡） */
+  openAdvanced: (section?: AdvancedSectionId) => void;
 }
 
 /** 设备摘要的数据源（`DeviceLink`）：工作台只读名字和固件版本，不碰链路 */
@@ -205,42 +206,71 @@ export function createConsoleView(
   const tuneGrid = document.createElement('div');
   tuneGrid.className = 'tune-grid';
 
-  const gateThreshold = findParam('noisegate.threshold_db');
-  const compThreshold = findParam('comp.Threshold');
-  let denoise: MacroSliderHandle | null = null;
-  let evenness: MacroSliderHandle | null = null;
-
-  // 2026-11-13 改版：不再用 0..100 的抽象强度，直接显示/写入协议阈值，
-  // 与高级参数里的「噪声门 阈值 / 压缩器 阈值」是同一个值（同 id 同步）。
-  if (gateThreshold) {
-    denoise = macroSlider({
-      label: t('console.denoise'),
-      value: state.params[gateThreshold.id] ?? gateThreshold.default,
-      min: gateThreshold.min,
-      max: gateThreshold.max,
-      step: gateThreshold.step,
-      format: (value) => `${formatValue(gateThreshold, value)} ${t('common.unit.dB')}`,
-      hint: t('console.hint.denoise'),
-      onChange: (value) => store.setParam(gateThreshold.id, value),
-    });
-    denoise.root.dataset.macro = 'denoise';
-    tuneGrid.append(denoise.root);
+  /**
+   * 三个阈值（噪声门 / 压缩器 / 限幅器）各带一个模块开关（2026-11-21 问题单 3、4）。
+   *
+   * 开关与阈值写的都是**高级参数里同一个参数 id**（`noisegate.Enable` / `comp.Enable` /
+   * `limit.Enable`），所以两处天然联动：改哪边都会经 `store` 广播给另一边，
+   * 这里不需要额外的同步逻辑，只要在回填时把开关状态一起写回去。
+   *
+   * 2026-11-13 起不再用 0..100 的抽象强度，显示的数值就是协议阈值本身。
+   */
+  interface ThresholdRow {
+    readonly slider: MacroSliderHandle;
+    readonly threshold: ParamSpec;
+    readonly enableId: string | null;
   }
+  const thresholdRows: ThresholdRow[] = [];
 
-  if (compThreshold) {
-    evenness = macroSlider({
-      label: t('console.evenness'),
-      value: state.params[compThreshold.id] ?? compThreshold.default,
-      min: compThreshold.min,
-      max: compThreshold.max,
-      step: compThreshold.step,
-      format: (value) => `${formatValue(compThreshold, value)} ${t('common.unit.dB')}`,
-      hint: t('console.hint.evenness'),
-      onChange: (value) => store.setParam(compThreshold.id, value),
+  const thresholdRow = (
+    key: string,
+    label: string,
+    thresholdId: string,
+    enableId: string | null,
+    hint: string,
+  ): void => {
+    const threshold = findParam(thresholdId);
+    if (!threshold) return;
+    const enable = enableId ? findParam(enableId) : undefined;
+    const slider = macroSlider({
+      label,
+      value: state.params[threshold.id] ?? threshold.default,
+      min: threshold.min,
+      max: threshold.max,
+      step: threshold.step,
+      format: (value) => `${formatValue(threshold, value)} ${t('common.unit.dB')}`,
+      hint,
+      onChange: (value) => store.setParam(threshold.id, value),
+      toggle: enable
+        ? {
+            checked: (state.params[enable.id] ?? 0) === 1,
+            label: t(`param.${enable.id}.label`),
+            onChange: (checked) => store.setParam(enable.id, checked ? 1 : 0),
+          }
+        : undefined,
     });
-    evenness.root.dataset.macro = 'evenness';
-    tuneGrid.append(evenness.root);
-  }
+    slider.root.dataset.macro = key;
+    const toggleNode = slider.root.querySelector<HTMLElement>('.macro-toggle');
+    if (enable && toggleNode) {
+      // 开关也带 data-param / data-enable：探针与验收脚本按参数 id 定位，不靠文案
+      toggleNode.dataset.param = enable.id;
+      toggleNode.dataset.enable = key;
+    }
+    thresholdRows.push({ slider, threshold, enableId: enable?.id ?? null });
+    tuneGrid.append(slider.root);
+  };
+
+  thresholdRow(
+    'denoise',
+    t('console.denoise'),
+    'noisegate.threshold_db',
+    'noisegate.Enable',
+    t('console.hint.denoise'),
+  );
+  thresholdRow('evenness', t('console.evenness'), 'comp.Threshold', 'comp.Enable', t('console.hint.evenness'));
+  // 主界面沿用产品叫法「防爆音」（高级参数里仍是「限幅器」）：2026-11-21 夜里把它改名成
+  // 「限幅器阈值」后用户反馈"界面上的防爆音没了"，这里恢复文案；开关与阈值仍在同一行。
+  thresholdRow('limiter', t('console.limiter'), 'limit.Threshold', 'limit.Enable', t('console.limiter.hint'));
 
   const toneBlock = document.createElement('div');
   toneBlock.className = 'tone-block';
@@ -307,16 +337,30 @@ export function createConsoleView(
   const eqCanvas = document.createElement('canvas');
   eqCanvas.className = 'eq-canvas console-eq-canvas';
   canvasWrap.append(eqCanvas);
-  // 去高级参数的入口放在卡头右侧：和标题同一视线，不用滚到曲线底下找
+
+  // 卡头右侧两个动作：「复位」只在自定义音色下可用（问题单 13）、
+  // 「逐段精调」直接跳到高级参数的均衡一节，不再落到抽屉最上面（问题单 5）
+  const eqActions = document.createElement('div');
+  eqActions.className = 'console-eq-actions';
+  const eqReset = document.createElement('button');
+  eqReset.type = 'button';
+  eqReset.className = 'console-link console-link--plain console-eq-reset';
+  eqReset.textContent = t('console.eq.reset');
+  eqReset.title = t('console.eq.resetHint');
+  eqReset.disabled = true;
+  eqReset.addEventListener('click', () => resetEq());
   const advancedLink = document.createElement('button');
   advancedLink.type = 'button';
   advancedLink.className = 'console-link';
   advancedLink.append(element('span', '', t('console.eq.advanced')), icon('chevronRight', 14));
-  advancedLink.addEventListener('click', () => api.openAdvanced());
-  eqCard.root.querySelector('.card-head')?.append(advancedLink);
+  advancedLink.addEventListener('click', () => api.openAdvanced('eq'));
+  eqActions.append(eqReset, advancedLink);
+  eqCard.root.querySelector('.card-head')?.append(eqActions);
   eqCard.body.append(canvasWrap);
 
   // ---- 快捷开关 ------------------------------------------------------------
+  // 限幅器（防爆音）的开关跟着阈值一起挪到「快速调音」了（问题单 4）：
+  // 一个模块只留一个开关，同屏两处开关只会互相打架
   const switchCard = compactCard({ title: t('console.switch.title') });
   const switchGrid = document.createElement('div');
   switchGrid.className = 'switch-grid';
@@ -339,18 +383,7 @@ export function createConsoleView(
   encLevelRow.append(element('span', 'switch-sub-label', t('console.enc.level')), encLevel);
   encGroup.append(encSwitch, encLevelRow);
 
-  const limitGroup = document.createElement('div');
-  limitGroup.className = 'switch-item';
-  // 防爆音走真实使能位 `limit.Enable`（C-15）：阈值不再被当成开关用，高级参数里可单独调
-  const limitSwitch = switchControl({
-    checked: limitEnableOn(state.params['limit.Enable'] ?? 0),
-    label: t('console.limiter'),
-    onChange: (checked) => store.setParam('limit.Enable', limitEnableValue(checked)),
-  });
-  const limitHint = element('p', 'macro-hint', t('console.limiter.hint'));
-  limitGroup.append(limitSwitch, limitHint);
-
-  switchGrid.append(encGroup, limitGroup);
+  switchGrid.append(encGroup);
   switchCard.body.append(switchGrid);
 
   const middle = document.createElement('div');
@@ -480,6 +513,19 @@ export function createConsoleView(
     );
   }
 
+  /**
+   * 「均衡器复位」：只允许在「自定义」音色下用（问题单 13），
+   * 复位后的频段值按问题单手写的那张表——7 段增益全 0、Q 全 0.7（问题单 12）。
+   * 曲线/段值的刷新走 `store` → `syncBands`，这里不直接动 model。
+   */
+  function resetEq(): void {
+    if (activeTone !== 'custom') return;
+    const bands = withEqReset(store.get().bands);
+    store.setTone('custom');
+    store.setBands(bands);
+    store.setCustomEq(gainsOf(bands));
+  }
+
   function syncScene(stateNow: ReturnType<AppStore['get']>): void {
     const active = matchScene(stateNow.params, stateNow.bands, stateNow.customEq, stateNow.tone);
     for (const [id, button] of sceneButtons) {
@@ -504,6 +550,10 @@ export function createConsoleView(
     if (eqDesc) {
       eqDesc.textContent = active === 'custom' ? t('console.eq.desc') : t('console.eq.locked');
     }
+    // 复位按钮只在自定义音色下可用（问题单 13）：其它音色的曲线由音色表决定，复位没有意义
+    const customOn = active === 'custom';
+    if (eqReset.disabled === customOn) eqReset.disabled = !customOn;
+    eqReset.setAttribute('aria-disabled', String(!customOn));
     if (active !== 'custom') eqCanvas.dataset.cursor = 'default';
   }
 
@@ -632,6 +682,8 @@ export function createConsoleView(
         rms: frame?.outputRms ?? -96,
         peak: frame?.outputPeak ?? -96,
         state: channelState(stateNow, frame?.outputValid),
+        // 输出峰值不再显示（2026-11-21 问题单第 10 条：演示时说不清它是什么）
+        showPeak: false,
       },
     ]);
   };
@@ -701,20 +753,15 @@ export function createConsoleView(
     for (const [id, entry] of gainValues) {
       entry.node.textContent = formatValue(entry.spec, next.params[id] ?? entry.spec.default);
     }
-    if (denoise && gateThreshold) {
-      denoise.setValue(next.params[gateThreshold.id] ?? gateThreshold.default);
-    }
-    if (evenness && compThreshold) {
-      evenness.setValue(next.params[compThreshold.id] ?? compThreshold.default);
+    for (const row of thresholdRows) {
+      row.slider.setValue(next.params[row.threshold.id] ?? row.threshold.default);
+      if (row.enableId) row.slider.setToggle?.((next.params[row.enableId] ?? 0) === 1);
     }
     for (const [id, node] of inputSwitchById) {
       setSwitchChecked(node, (next.params[id] ?? 0) === 1);
     }
     setSwitchChecked(encSwitch, (next.params['enc.OnOff'] ?? 0) === 1);
     setSegmentedValue(encLevel, next.params['enc.Level'] ?? 1);
-    const guard = limitEnableOn(next.params['limit.Enable'] ?? 0);
-    setSwitchChecked(limitSwitch, guard);
-    limitHint.textContent = guard ? t('console.hint.limitOn') : t('console.hint.limitOff');
     syncScene(next);
     syncTone(next);
     syncBands(next);

@@ -206,8 +206,10 @@ function createChannelCard(configStore: ChannelConfigStore): ChannelCardHandle {
 
   // -- VID / PID -------------------------------------------------------------
 
+  // 占位符只作格式提示：Bootloader 的 VID 已经统一到 0x0A67（2026-11-21 问题单 8/9），
+  // 不再出现旧的 0x352F，免得用户以为要按它填
   const vidRow = fieldRow('vidpid', t('settings.channel.vidpid'));
-  const vidsInput = textInput('vids', formatIdList(config.vids), '0x352F');
+  const vidsInput = textInput('vids', formatIdList(config.vids), '0x0A67');
   const pidsInput = textInput('pids', formatIdList(config.pids), '0x0010');
 
   const applyIdLists = (): void => {

@@ -106,6 +106,17 @@ describe('settings view — 通道卡', () => {
     expect(store.calls).toHaveLength(0);
   });
 
+  it('VID 占位符不再提旧的 bootloader VID（buglist 2026-11-21 #8/#9）', () => {
+    const store = fakeStore(configWith({ vids: [], pids: [] }));
+    const view = mount(store);
+    const vids = field<HTMLInputElement>(view, 'vids');
+    const pids = field<HTMLInputElement>(view, 'pids');
+    expect(vids.value).toBe('');
+    expect(vids.placeholder).toBe('0x0A67');
+    expect(vids.placeholder.toUpperCase()).not.toContain('352F');
+    expect(pids.placeholder).toBe('0x0010');
+  });
+
   it('切换自动连接开关 → configStore.set 收到 autoConnect', () => {
     const store = fakeStore();
     const view = mount(store);

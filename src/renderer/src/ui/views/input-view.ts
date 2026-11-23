@@ -36,7 +36,9 @@ export function createInputView(store: AppStore): HTMLElement {
     store,
     paramsOf('noisegate').filter((spec) => spec.id !== 'noisegate.Enable'),
   );
-  gateCard.body.append(gateEnable, hint(t('module.noisegate.bypassHint')), ...gateFields.nodes);
+  // 问题单 2026-11-21 第 11 条：用户以为"少了一个压缩比"，其实 0x205C 的 ratio 一直在，
+  // 只是名字叫「扩展比」、值域 0.05–0.999 不像常见的 4:1，所以卡片上要写清它怎么用
+  gateCard.body.append(gateEnable, hint(t('module.noisegate.bypassHint')), ...gateFields.nodes, hint(t('module.noisegate.ratioHint')));
 
   // 环境降噪：`enc.OnOff` 就是真正的使能位，关闭时档位不可操作
   const encCard = card({

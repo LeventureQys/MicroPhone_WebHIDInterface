@@ -664,10 +664,23 @@
   cursor: pointer;
 }
 
+/* 只画开关本体（放进滑杆标题行时用）：不要最小高度、也不左右撑开 */
+.switch-row--bare {
+  justify-content: flex-end;
+  gap: 0;
+  min-height: 0;
+}
+
 .pfield + .switch-row,
 .switch-row + .switch-row,
 .pfield--readonly + .switch-row {
   margin-top: 10px;
+}
+
+/* 三列网格里的相邻开关是**并排**的，不是竖排列表：上面那条 10 px 间距会让
+   第 2、3 个开关整体下沉，三个开关就不在同一水平线了（2026-11-21 问题单 6） */
+.tune-switch-grid .switch-row {
+  margin-top: 0;
 }
 
 .switch-label {
@@ -805,6 +818,16 @@
   font-size: 20px;
   font-weight: 600;
   line-height: 1.1;
+}
+
+/* 阈值行右侧的模块开关（2026-11-21）：开关顶到右边，读数紧随其后，
+   `.pfield-value` 自带的 margin-left:auto 在这里要让位给开关 */
+.pfield--toggle .macro-toggle {
+  margin-left: auto;
+}
+
+.pfield--toggle .pfield-value--macro {
+  margin-left: 10px;
 }
 
 .macro-range {
@@ -1348,6 +1371,11 @@
   border-left: 1px solid var(--line);
 }
 
+/* 只剩一组开关时（限幅器挪去「快速调音」后）不要留半列空白 */
+.switch-item:only-child {
+  padding-right: 0;
+}
+
 .switch-item .switch-label {
   font-weight: 500;
 }
@@ -1411,6 +1439,47 @@
   border-color: var(--line-3);
   background: rgba(255, 255, 255, 0.04);
   color: var(--text);
+}
+
+/* 卡头右侧的动作组：复位 + 逐段精调，两个按钮等高一排 */
+.console-eq-actions {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  gap: 6px;
+  margin-left: auto;
+}
+
+/* 卡头只有一行高度：说明文字单行省略，别把「复位 / 逐段精调」挤到第二行下面 */
+.console-eq > .card-head .card-heading {
+  min-width: 0;
+  overflow: hidden;
+}
+
+.console-eq > .card-head .card-desc {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* 纯文字按钮（没有右侧箭头）：左右留白对称 */
+.console-link--plain {
+  padding: 0 11px;
+}
+
+.console-link:disabled,
+.console-link[aria-disabled='true'] {
+  border-color: var(--line);
+  color: var(--muted);
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+.console-link:disabled:hover,
+.console-link[aria-disabled='true']:hover {
+  border-color: var(--line);
+  background: transparent;
+  color: var(--muted);
 }
 
 /* ---- 提示条（fixed，不进三栏网格） ---- */

@@ -130,4 +130,19 @@ describe('meter', () => {
     meter.render([]);
     expect(clearRect).toHaveBeenCalled();
   });
+
+  it('hides the peak readout for channels that opt out (buglist 2026-11-21 #10)', () => {
+    const mock = createMockContext();
+    const meter = new MeterCanvas(createCanvas(mock.ctx), { minDb: -60, rmsLabel: 'RMS', peakLabel: '峰值' });
+
+    meter.render([
+      channel('输入', -20, -12),
+      { label: '输出', rms: -24, peak: -16, showPeak: false },
+    ]);
+    // 输入通道照旧两个读数；输出通道只剩 RMS，峰值文字与保持线都不画
+    expect(mock.texts.filter((text) => text.startsWith('RMS'))).toHaveLength(2);
+    expect(mock.texts).toContain('峰值 -12.0');
+    expect(mock.texts.filter((text) => text.startsWith('峰值'))).toHaveLength(1);
+    expect(mock.texts).not.toContain('峰值 -16.0');
+  });
 });

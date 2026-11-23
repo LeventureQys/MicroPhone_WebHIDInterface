@@ -4,7 +4,7 @@
  * 只画 `FirmwareState`，不发帧、不判断能不能升级；所有判定在 `FirmwareController`。
  * 文案全部走 `t()`，阶段名用会话发来的 `fw.phase.*` 键。
  */
-import type { FirmwareState } from '../../device/dfu/controller';
+import type { FirmwareState, FirmwareDeviceMode } from '../../device/dfu/controller';
 import { CLOSE_BLOCKED_DETAIL } from '../../device/dfu/controller';
 import type { DfuError } from '../../device/dfu/session';
 import { t } from '../../i18n';
@@ -21,6 +21,11 @@ export interface FirmwareSource {
   replugAndRetry(): Promise<void>;
   /** 中止（只在收尾之前有效）；不提供时界面不画中止按钮 */
   abort?(): void;
+  /**
+   * 设备当前处于什么模式（规格 §3）：决定这次点「开始升级」走正常升级还是续刷。
+   * 可选：不实现（或返回 undefined）时界面不显示这一行。
+   */
+  deviceMode?(): FirmwareDeviceMode | undefined;
 }
 
 export interface FirmwareViewDeps {
@@ -92,6 +97,10 @@ export function createFirmwareView(deps: FirmwareViewDeps): HTMLElement {
   const warn = document.createElement('div');
   warn.className = 'callout callout--warn';
   warn.append(icon('alert', 16), text('p', 'card-desc fw-warn', t('fw.warn.stuck')));
+
+  // 规格 §3：点「开始升级」之前必须让用户知道这次走的是正常升级还是续刷
+  const deviceRow = text('p', 'device-hint fw-device-mode', '');
+  deviceRow.hidden = true;
 
   // -- 文件 ---------------------------------------------------------------
   // 原生 file input 铺满整块拖放区、透明：点击与拖放都走浏览器自己的文件选择，不另写 drop 处理
@@ -200,7 +209,7 @@ export function createFirmwareView(deps: FirmwareViewDeps): HTMLElement {
   check.body.append(infoBox, confirm);
   const flash = step(3, t('fw.step.flash'));
   flash.body.append(startRow, progressBox, resultBox, errorBox, exitRow);
-  root.append(warn, pick.root, check.root, flash.root);
+  root.append(warn, deviceRow, pick.root, check.root, flash.root);
 
   // -- 本地状态 -----------------------------------------------------------
 
@@ -248,7 +257,9 @@ export function createFirmwareView(deps: FirmwareViewDeps): HTMLElement {
 
   function renderControls(state: FirmwareState): void {
     const running = RUNNING_PHASES.has(state.phase);
-    startBtn.disabled = !(state.info !== null && state.confirmed && !running);
+    // 规格 §7.5：done 之后不允许再点「开始升级」——要重刷必须重新选包（否则等于多刷一遍 Flash）
+    const finished = state.phase === 'done';
+    startBtn.disabled = !(state.info !== null && state.confirmed && !running && !finished);
     const input = confirm.querySelector<HTMLInputElement>('input[type="checkbox"]');
     if (input !== null) {
       input.disabled = running;
@@ -296,8 +307,18 @@ export function createFirmwareView(deps: FirmwareViewDeps): HTMLElement {
     errorDetail.textContent = detail;
   }
 
+  function renderDeviceMode(state: FirmwareState): void {
+    const mode = controller.deviceMode?.();
+    // 升级进行中不显示：那时候的模式已经没有选择意义，只会让人以为"还在升级模式"
+    deviceRow.hidden = mode === undefined || RUNNING_PHASES.has(state.phase);
+    if (deviceRow.hidden) return;
+    deviceRow.textContent = t(`fw.device.${mode}`);
+    deviceRow.dataset.mode = mode;
+  }
+
   function render(): void {
     const state = controller.state();
+    renderDeviceMode(state);
     renderFile(state);
     renderInfo(state);
     renderControls(state);

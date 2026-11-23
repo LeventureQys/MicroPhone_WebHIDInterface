@@ -473,12 +473,18 @@ export class DeviceLink extends EventTarget {
     throw new Error(`设备 ${deviceId} 在 ${TIMING.dfuReenumTimeoutMs} ms 内没有重新枚举`);
   }
 
-  /** 收尾后：换新句柄并全量回读；版本号没变时给软告警（R4-7） */
-  async resumeAfterDfu(): Promise<void> {
+  /**
+   * 收尾后：换新句柄并全量回读；版本号没变时给软告警（R4-7）。
+   *
+   * 返回值 = **这一轮有没有真的从设备读到摘要**。调用方必须据此决定要不要做版本比对：
+   * 设备停在 Bootloader / 新固件没起来时回读会失败，此时 `state().device` 里只有升级前的旧快照，
+   * 拿它比版本就会得出"升级已完成、版本未变、设备已回到正常模式"这种与事实相反（2026-11-21 真机刷砖现场）。
+   */
+  async resumeAfterDfu(): Promise<boolean> {
     const transport = this._transport;
     if (transport === null) {
       this._fail('device');
-      return;
+      return false;
     }
     const before = this._firmwareBeforeDfu;
     try {
@@ -490,7 +496,7 @@ export class DeviceLink extends EventTarget {
       }
       if (transport.state() !== 'ready') {
         this._fail('device');
-        return;
+        return false;
       }
       const result = await transport.readAll();
       this._applyReadback(result);
@@ -505,8 +511,10 @@ export class DeviceLink extends EventTarget {
       });
       // 升级完设备重新枚举成 App 模式，音频输入也跟着回来：重新采一路
       void this._startAudioLevels();
+      return true;
     } catch {
       this._fail('device');
+      return false;
     } finally {
       this._firmwareBeforeDfu = null;
     }
@@ -998,6 +1006,9 @@ export class DeviceLink extends EventTarget {
     this._patch({
       status: 'error',
       sync: 'error',
+      // 通道都没了，这台设备的摘要就是过期数据：留着会让升级后的版本比对读到升级前那一份
+      // （2026-11-21 真机刷砖现场：回读失败却报出"设备 0.0.5 与镜像 0.0.6 不一致"）
+      device: null,
       error: { key: errorKeyOf(code) },
       errorCode: code,
     });

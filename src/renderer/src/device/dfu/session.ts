@@ -83,6 +83,12 @@ export interface DfuError {
     | 'restartExhausted'
     | 'settle'
     | 'verify'
+    /**
+     * 收尾后设备一句都没回：可能还停在升级模式，也可能是新固件起来了但没跑通。
+     * 与 `verify` 分开是因为两者的处置完全不同 —— `verify` 说明设备活着、只是版本没变，
+     * 这里则连"设备在哪个模式"都不知道，不能对用户说"设备已回到正常模式"。
+     */
+    | 'noReadback'
     | 'channel'
     /**
      * 还没发第一帧就判定设备不可用（拔线后句柄失效、重新打开也失败）。
@@ -124,6 +130,11 @@ export type DfuPreflightResult =
 export interface DfuCompletion {
   readonly ok: boolean;
   readonly detail?: string;
+  /**
+   * 失败类别：`verify` = 回读过、版本没变；`noReadback` = 根本没读到设备。
+   * 缺省 `verify`，与历史调用方兼容。
+   */
+  readonly kind?: 'verify' | 'noReadback';
 }
 
 /** 进 DFU 是参数写 `0x1008=1`：这是唯一在 App 模式下发的一帧 */
@@ -448,7 +459,7 @@ export class DfuSession {
     if (this.phaseValue !== 'settling' && this.phaseValue !== 'verifying') return;
     this.clearSettleTimer();
     if (verification !== undefined && !verification.ok) {
-      this.reportFailure({ kind: 'verify', round: this.round, detail: verification.detail });
+      this.reportFailure({ kind: verification.kind ?? 'verify', round: this.round, detail: verification.detail });
       return;
     }
     this.transition('verifying');
@@ -671,11 +682,37 @@ export class DfuSession {
     }
     this.pushDiag('out', hexBytes(frame), summary, 'info');
     try {
-      await this.send(splitFrame(frame, PAYLOAD_BYTES));
+      await this.sendWithinTimeout(this.send(splitFrame(frame, PAYLOAD_BYTES)));
     } catch (error) {
       return { kind: 'failed', error: { kind: 'channel', detail: describe(error) } };
     }
     return { kind: 'ok' };
+  }
+
+  /**
+   * `send` 本身必须有上限。设备主循环挂死后 Windows 的 `WriteFile` 不返回，
+   * 而会话正 `await` 它 —— `awaitSlot` 的定时器救不了这个 await，界面就永久停在
+   * "探测设备 / 正在写入"（2026-11-21 真机 R3 实测 60 s 无变化）。
+   */
+  private sendWithinTimeout(send: void | Promise<void>): Promise<void> {
+    const limit = this.timing.dfuSendTimeoutMs;
+    const pending = Promise.resolve(send);
+    if (limit <= 0) return pending;
+    return new Promise<void>((resolve, reject) => {
+      const timer = this.timers.setTimeout(() => {
+        reject(new Error(`sendReport did not return in ${limit} ms`));
+      }, limit);
+      pending.then(
+        () => {
+          this.timers.clearTimeout(timer);
+          resolve();
+        },
+        (error: unknown) => {
+          this.timers.clearTimeout(timer);
+          reject(error);
+        },
+      );
+    });
   }
 
   private wait(ms: number): Promise<void> {

@@ -2,14 +2,21 @@ import type { AppStore } from '../domain/state';
 import { t } from '../i18n';
 import { openModal, type ModalHandle } from '../ui/modal';
 import { createTopbar } from '../ui/topbar';
+import type { AdvancedSectionId } from '../ui/views/advanced-view';
 
 export type PanelId = 'advanced' | 'device' | 'firmware' | 'settings';
 
 export interface ShellApi {
-  openAdvanced: () => void;
+  /** `section` 给定时打开后直接滚到该分区（高级参数专用） */
+  openAdvanced: (section?: AdvancedSectionId) => void;
   openDevice: () => void;
   openFirmware: () => void;
   openSettings: () => void;
+}
+
+export interface OpenPanelOptions {
+  /** 高级参数：打开后滚到哪一节（`data-section`） */
+  readonly section?: AdvancedSectionId;
 }
 
 export interface ShellOptions {
@@ -25,7 +32,7 @@ export interface ShellOptions {
 
 export interface Shell {
   root: HTMLElement;
-  openPanel: (id: PanelId) => void;
+  openPanel: (id: PanelId, options?: OpenPanelOptions) => void;
   closePanel: () => void;
 }
 
@@ -63,19 +70,34 @@ export function createShell(opts: ShellOptions): Shell {
     settings: opts.settings,
   };
 
-  const openPanel = (id: PanelId): void => {
+  const openPanel = (id: PanelId, options?: OpenPanelOptions): void => {
     closePanel();
     const meta = PANEL_META[id];
-    panel = openModal({
+    const opened = openModal({
       title: t(meta.title),
       subtitle: t(meta.subtitle),
       size: meta.size,
       content: panelContent[id](),
     });
+    panel = opened;
+    if (options?.section) scrollPanelTo(opened.root, options.section);
+  };
+
+  /**
+   * 打开后滚到指定分区：抽屉刚插进 DOM 时还没有尺寸，等一帧再滚。
+   * 滚动容器是 `.modal-body`，`scrollIntoView` 会自己找到它；
+   * 分区的 `scroll-margin-top` 负责避开吸顶的跳转条（见 components.css）。
+   * 跳转条的高亮由 advanced-view 的 scroll 捕获监听负责，这里不用另外通知它。
+   */
+  const scrollPanelTo = (panelRoot: HTMLElement, section: AdvancedSectionId): void => {
+    window.requestAnimationFrame(() => {
+      const target = panelRoot.querySelector<HTMLElement>(`.advanced-section[data-section="${section}"]`);
+      target?.scrollIntoView({ block: 'start' });
+    });
   };
 
   const api: ShellApi = {
-    openAdvanced: () => openPanel('advanced'),
+    openAdvanced: (section) => openPanel('advanced', section ? { section } : undefined),
     openDevice: () => openPanel('device'),
     openFirmware: () => openPanel('firmware'),
     openSettings: () => openPanel('settings'),

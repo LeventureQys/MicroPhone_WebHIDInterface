@@ -227,6 +227,8 @@ class FakeLink implements FirmwareLink {
   deviceId: string | null = 'mic-m001';
   /** resume 之后设备回读到的版本（默认就是镜像版本 → verify 通过） */
   versionAfterResume = { x: 1, y: 2, z: 3, build: 0 };
+  /** 收尾回读是否成功：false 模拟设备停在升级模式 / 新固件没起来（device 保持升级前的旧快照） */
+  resumeOk = true;
   /** 进 DFU 后等重枚举的时间线动作；null 表示不记录（保持既有用例的 timeline 不变） */
   reconnect: (() => Promise<void>) | null = null;
   /** 重试前重新取通道：默认复用当前通道，用例可在这里换成一根新句柄 */
@@ -264,10 +266,16 @@ class FakeLink implements FirmwareLink {
     this.status = 'dfu';
   }
 
-  async resumeAfterDfu(): Promise<void> {
+  async resumeAfterDfu(): Promise<boolean> {
     this.timeline.push('resume');
+    if (!this.resumeOk) {
+      // 真机现场：链路进 error，但 device 摘要还留着升级前那份（0.0.5）
+      this.status = 'error';
+      return false;
+    }
     this.status = 'ready';
     this.device = snapshot(this.versionAfterResume);
+    return true;
   }
 
   async attach(deviceId: string): Promise<void> {
@@ -489,6 +497,28 @@ describe('FirmwareController', () => {
     expect(h.timeline.at(-1)).toBe('dfuActive:false');
   });
 
+  it('5a. 收尾回读失败 → noReadback，不拿升级前的旧快照冒充"版本未变"', async () => {
+    // 2026-11-21 真机现场：658/658 块写完、0x05 也收到了，但设备重启后停在升级模式，
+    // 一句 Modbus 都不答。旧实现仍拿 suspend 之前的快照（0.0.5）去比，于是报出
+    // "升级已完成但版本未变，设备已回到正常模式"——与事实相反，还会诱导用户再刷一次。
+    const h = makeHarness();
+    h.link.resumeOk = false;
+    h.link.device = snapshot({ x: 1, y: 1, z: 0, build: 0 }); // 升级前的旧摘要
+    await h.controller.selectFile(fileOf(PKG));
+    h.controller.setConfirmed(true);
+    const run = h.controller.start();
+    await settle();
+    await run;
+
+    expect(h.controller.state().phase).toBe('failed');
+    expect(h.controller.state().error?.kind).toBe('noReadback');
+    // 关键：不能再出现"设备 1.1.0 does not match image 1.2.3"这种伪造的比对结论
+    expect(h.controller.state().error?.detail ?? '').not.toContain('does not match image');
+    expect(h.timeline.at(-1)).toBe('dfuActive:false');
+    // 链路不能卡在"升级中"（真机 `_fail()` 会丢通道并转 error）
+    expect(h.link.status).toBe('error');
+  });
+
   it('3b. DFU 帧诊断经 onDiag 上抛（与参数帧共用同一个诊断 hub）', async () => {
     const h = makeHarness();
     await h.controller.selectFile(fileOf(PKG));
@@ -655,5 +685,23 @@ describe('FirmwareController', () => {
     expect(h.controller.state().error).toBeNull();
     expect(h.link.recovers).toBe(1);
     expect(h.timeline.at(-1)).toBe('dfuActive:false');
+  });
+
+  it('9. deviceMode()（规格 §3）：已同步→app，只剩裸通道→bootloader，没通道→none', () => {
+    // 正常模式：有摘要且已同步
+    const app = makeHarness();
+    expect(app.controller.deviceMode()).toBe('app');
+
+    // 设备停在 Bootloader：Modbus 没人答、摘要为 null，但 `_failSync()` 保留了裸通道
+    const boot = makeHarness();
+    boot.link.status = 'error';
+    boot.link.device = null;
+    expect(boot.controller.deviceMode()).toBe('bootloader');
+
+    // 连句柄都没有
+    const none = makeHarness({ withChannel: false });
+    none.link.status = 'error';
+    none.link.device = null;
+    expect(none.controller.deviceMode()).toBe('none');
   });
 });

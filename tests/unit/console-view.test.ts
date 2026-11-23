@@ -12,10 +12,10 @@ class FakeResizeObserver {
 
 const NO_API = { openDevice: () => undefined, openAdvanced: () => undefined };
 
-function mount() {
+function mount(api: typeof NO_API = NO_API) {
   const transport = new FakeTransport('mock');
   const store = new AppStore(transport, { lang: 'zh' });
-  const view = createConsoleView(store, transport, NO_API);
+  const view = createConsoleView(store, transport, api);
   document.body.append(view);
   const destroy = (view as HTMLElement & { destroy?: () => void }).destroy;
   return { store, view, destroy };
@@ -86,6 +86,113 @@ describe('console view (2026-11-13 revision)', () => {
     expect(store.get().params['noisegate.threshold_db']).toBe(-91);
     expect(store.get().params['comp.Threshold']).toBe(-60);
     expect(view.querySelector('.scene-btn[data-scene="custom"]')?.getAttribute('aria-pressed')).toBe('true');
+    destroy?.();
+  });
+
+  it('gives every quick-tuning threshold its own module switch (buglist 2026-11-21 #3/#4)', () => {
+    const { view, destroy } = mount();
+    const rows = [
+      { key: 'denoise', label: '噪声门阈值', enable: 'noisegate.Enable' },
+      { key: 'evenness', label: '压缩器阈值', enable: 'comp.Enable' },
+      // 主界面沿用产品叫法「防爆音」（高级参数里才是「限幅器」），别改回「限幅器阈值」
+      { key: 'limiter', label: '防爆音', enable: 'limit.Enable' },
+    ];
+    for (const row of rows) {
+      const node = view.querySelector<HTMLElement>(`[data-macro="${row.key}"]`);
+      expect(node).not.toBeNull();
+      expect(text(node?.querySelector('.pfield-label') ?? null)).toBe(row.label);
+      expect(text(node?.querySelector('.pfield-value') ?? null)).toMatch(/dB$/);
+      const toggle = node?.querySelector<HTMLElement>(`.macro-toggle[data-param="${row.enable}"]`);
+      expect(toggle).not.toBeNull();
+      // 开关本体在标题行里，视觉上跟读数同一排
+      expect(toggle?.closest('.pfield-head')).not.toBeNull();
+      expect(node?.querySelector('.macro-toggle input[type="checkbox"]')).not.toBeNull();
+    }
+    // 一个模块只有一个开关：限幅器不再同时出现在「快捷开关」里
+    expect(view.querySelectorAll('[data-param="limit.Enable"]')).toHaveLength(1);
+    destroy?.();
+  });
+
+  it('writes the module enable bit from the quick-tuning switch', () => {
+    const { store, view, destroy } = mount();
+    const gate = view.querySelector<HTMLInputElement>('[data-param="noisegate.Enable"] input');
+    const before = store.get().params['noisegate.Enable'];
+    gate?.click();
+    expect(store.get().params['noisegate.Enable']).toBe(before === 1 ? 0 : 1);
+    const comp = view.querySelector<HTMLInputElement>('[data-param="comp.Enable"] input');
+    comp?.click();
+    expect(store.get().params['comp.Enable']).toBe(1);
+    destroy?.();
+  });
+
+  it('reflects enable-bit changes coming from the advanced drawer (same parameter)', () => {
+    const { store, view, destroy } = mount();
+    store.setParam('comp.Enable', 1);
+    const comp = view.querySelector<HTMLInputElement>('[data-param="comp.Enable"] input');
+    expect(comp?.checked).toBe(true);
+    store.setParam('comp.Enable', 0);
+    expect(comp?.checked).toBe(false);
+    destroy?.();
+  });
+
+  it('keeps the limiter threshold writable and leaves one switch per module', () => {
+    const { store, view, destroy } = mount();
+    // 限幅器开关搬进「快速调音」后，「快捷开关」只剩环境降噪一组
+    const quickSwitches = view.querySelectorAll('.console-middle > .card:last-child .switch-row');
+    expect(quickSwitches).toHaveLength(1);
+    expect(text(quickSwitches[0]?.querySelector('.switch-label') ?? null)).toBe('环境降噪');
+    const range = view.querySelector<HTMLInputElement>('[data-macro="limiter"] input[type="range"]');
+    expect(range).not.toBeNull();
+    range!.value = '-12';
+    range!.dispatchEvent(new Event('input', { bubbles: true }));
+    expect(store.get().params['limit.Threshold']).toBe(-12);
+    destroy?.();
+  });
+
+  it('jumps straight to the equalizer section from fine-tune (buglist 2026-11-21 #5)', () => {
+    const openAdvanced = vi.fn();
+    const { view, destroy } = mount({ openDevice: () => undefined, openAdvanced });
+    const link = view.querySelector<HTMLElement>('.console-eq-actions .console-link:not(.console-link--plain)');
+    expect(text(link)).toContain('逐段精调');
+    link?.click();
+    expect(openAdvanced).toHaveBeenCalledWith('eq');
+    destroy?.();
+  });
+
+  it('offers the equalizer reset only for the custom tone (buglist 2026-11-21 #12/#13)', () => {
+    const { store, view, destroy } = mount();
+    const reset = view.querySelector<HTMLButtonElement>('.console-eq-reset');
+    expect(reset).not.toBeNull();
+    expect(reset?.disabled).toBe(true);
+    expect(reset?.getAttribute('aria-disabled')).toBe('true');
+
+    view.querySelector<HTMLElement>('.tone-chip[data-tone="flat"]')?.click();
+    expect(reset?.disabled).toBe(true);
+
+    view.querySelector<HTMLElement>('.tone-chip[data-tone="custom"]')?.click();
+    expect(reset?.disabled).toBe(false);
+    expect(reset?.getAttribute('aria-disabled')).toBe('false');
+
+    // 先把曲线拖脏，再复位：频段按问题单那张表回来
+    store.setBands(store.get().bands.map((band, index) => ({ ...band, gain: index === 2 ? 6 : band.gain, q: 2 })));
+    expect(store.get().bands[2].gain).toBe(6);
+    reset?.click();
+    const bands = store.get().bands;
+    for (let index = 0; index < 7; index += 1) {
+      expect(bands[index].gain).toBe(0);
+      expect(bands[index].q).toBe(0.7);
+    }
+    expect(bands.map((band) => band.freq).slice(0, 7)).toEqual([50, 20000, 215, 1000, 2000, 5000, 10000]);
+    expect(store.get().tone).toBe('custom');
+    // 自定义曲线也一起被复位，下一次点「自定义」不会把脏曲线带回来
+    expect(store.get().customEq).toEqual([0, 0, 0, 0, 0, 0, 0]);
+    destroy?.();
+  });
+
+  it('labels the headphone readout as volume instead of gain (buglist 2026-11-21 #1)', () => {
+    const { view, destroy } = mount();
+    const labels = Array.from(view.querySelectorAll('.console-gain-label > span:first-child')).map((node) => text(node));
+    expect(labels).toEqual(['麦克风增益', '耳机音量']);
     destroy?.();
   });
 });

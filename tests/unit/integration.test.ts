@@ -97,4 +97,50 @@ describe('shell', () => {
     expect(transport.writtenBuffer().length).toBe(afterWrite);
     transport.close();
   });
+
+  it('scrolls the advanced drawer to the requested section (buglist 2026-11-21 #5)', async () => {
+    const transport = new MockTransport({ hz: 1000 });
+    const store = new AppStore(transport, { lang: 'zh' });
+    await transport.open();
+
+    // openPanel 把滚动放到下一帧（抽屉刚插入时还没有尺寸），单测里同步执行即可
+    vi.stubGlobal('requestAnimationFrame', (cb: FrameRequestCallback) => {
+      cb(0);
+      return 0;
+    });
+    const scrolled: string[] = [];
+    Element.prototype.scrollIntoView = function scrollIntoView(this: Element) {
+      scrolled.push((this as HTMLElement).dataset.section ?? (this as HTMLElement).className);
+    } as Element['scrollIntoView'];
+
+    const shell = createShell({
+      store,
+      console: () => fakeView('console'),
+      advanced: () => {
+        const view = document.createElement('div');
+        for (const section of ['input', 'dynamics', 'eq', 'drc', 'lighting']) {
+          const node = document.createElement('section');
+          node.className = 'advanced-section';
+          node.dataset.section = section;
+          view.append(node);
+        }
+        return view;
+      },
+      device: () => fakeView('device'),
+      firmware: () => fakeView('firmware'),
+      settings: () => fakeView('settings'),
+    });
+    (document.getElementById('app') as HTMLElement).append(shell.root);
+
+    shell.openPanel('advanced', { section: 'eq' });
+    expect(scrolled).toEqual(['eq']);
+
+    scrolled.length = 0;
+    shell.openPanel('advanced');
+    expect(scrolled).toEqual([]);
+    shell.closePanel();
+
+    vi.unstubAllGlobals();
+    transport.close();
+  });
 });

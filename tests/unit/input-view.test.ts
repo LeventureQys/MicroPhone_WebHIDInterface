@@ -2,9 +2,11 @@ import { describe, expect, it } from 'vitest';
 import { MockTransport } from '../../src/renderer/src/device/mock-transport';
 import { paramsOf } from '../../src/renderer/src/domain/params';
 import { AppStore } from '../../src/renderer/src/domain/state';
+import { setLang } from '../../src/renderer/src/i18n';
 import { createInputView } from '../../src/renderer/src/ui/views/input-view';
 
 function mount() {
+  setLang('zh');
   const transport = new MockTransport();
   const store = new AppStore(transport, { lang: 'zh' });
   const view = createInputView(store);
@@ -52,6 +54,23 @@ describe('input view', () => {
     expect(store.get().params['enc.OnOff']).toBe(0);
     const level = view.querySelector<HTMLElement>('[data-param="enc.Level"]');
     expect(level?.querySelector<HTMLButtonElement>('.seg-btn')?.disabled).toBe(true);
+    destroy?.();
+  });
+
+  it('exposes the noise-gate ratio as 压缩比 with a hint (buglist 2026-11-21 #11)', () => {
+    const { store, view, destroy } = mount();
+    const ratio = view.querySelector<HTMLElement>('[data-param="noisegate.ratio"]');
+    expect(ratio).not.toBeNull();
+    expect(ratio?.querySelector('.pfield-label')?.textContent).toBe('压缩比');
+    // 0x205C 一直在参数表里：默认 50 → 0.05
+    expect(ratio?.querySelector<HTMLInputElement>('input.pfield-number')?.value).toBe('0.05');
+
+    const hints = Array.from(view.querySelectorAll('.macro-hint')).map((node) => node.textContent ?? '');
+    expect(hints.some((text) => text.includes('压缩比') && text.includes('开关打开'))).toBe(true);
+
+    // 写进去的是同一个参数 id（与主界面/高级参数联动，不需要额外映射）
+    store.setParam('noisegate.ratio', 0.2);
+    expect(store.get().params['noisegate.ratio']).toBe(0.2);
     destroy?.();
   });
 });

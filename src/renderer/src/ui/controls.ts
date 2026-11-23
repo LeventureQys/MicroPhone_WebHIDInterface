@@ -150,31 +150,40 @@ export function readonlyField(spec: ParamSpec, value: number): HTMLElement {
 
 export function switchControl(opts: {
   checked: boolean;
-  label: string;
+  /** 可见文案；省略时只画开关本体（放进滑杆标题行那种位置用） */
+  label?: string;
+  /** 无障碍名：没有可见文案时必须给，否则屏幕阅读器只念"复选框" */
+  ariaLabel?: string;
   onChange: (value: boolean) => void;
 }): HTMLElement {
+  const accessibleName = opts.ariaLabel ?? opts.label;
   const root = document.createElement('label');
   root.className = 'switch-row';
   // 中栏三列布局里长标签会省略号，悬停能看到全称
-  root.title = opts.label;
-
-  const label = document.createElement('span');
-  label.className = 'switch-label';
-  label.textContent = opts.label;
-
-  const shell = document.createElement('span');
-  shell.className = 'switch';
+  if (accessibleName) root.title = accessibleName;
 
   const input = document.createElement('input');
   input.type = 'checkbox';
   input.checked = opts.checked;
   input.addEventListener('change', () => opts.onChange(input.checked));
+  if (accessibleName) input.setAttribute('aria-label', accessibleName);
 
   const track = document.createElement('span');
   track.className = 'switch-track';
 
+  const shell = document.createElement('span');
+  shell.className = 'switch';
   shell.append(input, track);
-  root.append(label, shell);
+
+  if (opts.label) {
+    const label = document.createElement('span');
+    label.className = 'switch-label';
+    label.textContent = opts.label;
+    root.append(label, shell);
+  } else {
+    root.classList.add('switch-row--bare');
+    root.append(shell);
+  }
   return root;
 }
 
@@ -214,11 +223,16 @@ export function segmented<T extends string | number>(opts: {
 export interface MacroSliderHandle {
   root: HTMLElement;
   setValue: (value: number) => void;
+  /** 同行开关的回填（外部状态变化时用，不触发 onChange） */
+  setToggle?: (checked: boolean) => void;
 }
 
 /**
  * 简易模式的业务旋钮：只有一个 0..100 的滑杆和一句人话说明，
  * 不暴露单位、协议字段名与数字输入框。
+ *
+ * `toggle` 把模块开关放到标题行右侧（2026-11-21 需求：快速调音的每个阈值都要带开关，
+ * 且与高级参数里同一参数联动）。
  */
 export function macroSlider(opts: {
   label: string;
@@ -230,6 +244,11 @@ export function macroSlider(opts: {
   scale?: [string, string];
   hint?: string;
   onChange: (value: number) => void;
+  toggle?: {
+    checked: boolean;
+    label: string;
+    onChange: (checked: boolean) => void;
+  };
 }): MacroSliderHandle {
   const min = opts.min ?? 0;
   const max = opts.max ?? 100;
@@ -254,6 +273,22 @@ export function macroSlider(opts: {
   readout.className = 'pfield-value pfield-value--macro';
   readout.textContent = format(snap(opts.value));
   head.append(label, readout);
+
+  let toggle: HTMLElement | null = null;
+  let setToggle: ((checked: boolean) => void) | undefined;
+  if (opts.toggle) {
+    const spec = opts.toggle;
+    toggle = switchControl({
+      checked: spec.checked,
+      ariaLabel: spec.label,
+      onChange: (checked) => spec.onChange(checked),
+    });
+    toggle.classList.add('macro-toggle');
+    // 标题行里开关紧贴读数：读数原本靠 margin-left:auto 顶到右边，有开关时让开关顶
+    head.insertBefore(toggle, readout);
+    root.classList.add('pfield--toggle');
+    setToggle = (checked: boolean) => setSwitchChecked(toggle as HTMLElement, checked);
+  }
 
   const range = document.createElement('input');
   range.type = 'range';
@@ -299,7 +334,7 @@ export function macroSlider(opts: {
     opts.onChange(value);
   });
 
-  return { root, setValue };
+  return { root, setValue, setToggle };
 }
 
 export function card(opts: {

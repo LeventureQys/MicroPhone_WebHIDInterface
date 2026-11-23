@@ -8,8 +8,14 @@ import { createLightingView } from './lighting-view';
 
 type ViewFactory = () => HTMLElement;
 
+/**
+ * 抽屉里的分区 id：`openAdvanced(section)` 用它直接滚到某一节
+ * （主界面「逐段精调」→ `'eq'`，2026-11-21 问题单第 5 条）。
+ */
+export type AdvancedSectionId = 'input' | 'dynamics' | 'eq' | 'drc' | 'lighting';
+
 interface Section {
-  id: string;
+  id: AdvancedSectionId;
   title: string;
   desc: string;
   build: ViewFactory;

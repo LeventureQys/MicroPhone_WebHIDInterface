@@ -43,6 +43,11 @@ export interface Timing {
   dfuEnterSettleMs: number;
   /** DFU 帧拆成 63 B 报告发送时，报告之间的排空间隔（设备 OUT 只有 4 个槽） */
   dfuReportGapMs: number;
+  /**
+   * 一次 `sendReport` 的上限：设备主循环挂死后 Windows 的 `WriteFile` 会一直阻塞，
+   * 而 DFU 会话在等它返回，界面就永久停在"探测设备 / 正在写入"（2026-11-21 真机 R3 复现）。
+   */
+  dfuSendTimeoutMs: number;
   dfuInfoFrameBytes: number;
   dfuBlockBytes: number;
 }
@@ -123,6 +128,11 @@ export const TIMING: Readonly<Timing> = Object.freeze({
    * 报告之间留 2 ms 让主循环取走上一包，否则第 5 个报告可能被丢掉，表现为块回执超时。
    */
   dfuReportGapMs: 2,
+  /**
+   * 单条报告 5 s 还没返回就按通道故障收场。正常情况是毫秒级；挂死的设备会阻塞到
+   * 系统 HID 写超时（实测 ≥2 s 且不返回），没有这个上限会话就永远卡在等 `send`。
+   */
+  dfuSendTimeoutMs: 5000,
   dfuInfoFrameBytes: 90,
   dfuBlockBytes: 265,
 });

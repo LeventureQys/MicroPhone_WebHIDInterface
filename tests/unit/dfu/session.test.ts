@@ -858,6 +858,22 @@ describe('DfuSession 型号与调用约束', () => {
     expect(h.session.phase()).toBe('aborted');
     expect(h.errors).toEqual([]);
   });
+  it('12g. sendReport 不返回 → dfuSendTimeoutMs 后按通道故障收场（不再永久卡在探测/写入）', async () => {
+    // 2026-11-21 真机 R3：设备主循环挂死后 Windows 的 WriteFile 一直阻塞，
+    // 会话在 await send() 上永远不返回，界面停在「探测设备 5%」60 s+。
+    const h = makeHarness({ send: () => new Promise<void>(() => undefined) });
+    const run = runCaught(h.session, PKG);
+    await settle();
+    expect(h.session.phase()).toBe('entering');
+    expect(h.errors).toEqual([]);
+
+    await advance(h, TIMING.dfuSendTimeoutMs);
+    expect((await run)?.message).toBe('dfu channel');
+    expect(h.session.phase()).toBe('failed');
+    expect(h.errors).toHaveLength(1);
+    expect(h.errors[0]?.kind).toBe('channel');
+    expect(h.errors[0]?.detail).toContain('did not return');
+  });
 });
 
 describe('DfuSession 进入时序（「立即重试」不再被 EnterDfu 卡死）', () => {

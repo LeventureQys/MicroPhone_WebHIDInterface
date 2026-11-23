@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it } from 'vitest';
-import type { FirmwareState } from '../../src/renderer/src/device/dfu/controller';
+import type { FirmwareDeviceMode, FirmwareState } from '../../src/renderer/src/device/dfu/controller';
 import type { DfuInfo } from '../../src/renderer/src/device/dfu/image';
 import { setLang, t } from '../../src/renderer/src/i18n';
 import { createFirmwareView, type FirmwareSource } from '../../src/renderer/src/ui/views/firmware-view';
@@ -27,9 +27,15 @@ class FakeController implements FirmwareSource {
   replugCalls = 0;
   abortCalls = 0;
   acceptSelect = true;
+  /** 规格 §3 的设备模式提示；undefined = 不实现（界面不显示该行） */
+  mode: FirmwareDeviceMode | undefined = undefined;
 
   private current: FirmwareState = { ...IDLE };
   private readonly listeners = new Set<(state: FirmwareState) => void>();
+
+  deviceMode(): FirmwareDeviceMode | undefined {
+    return this.mode;
+  }
 
   state(): FirmwareState {
     return this.current;
@@ -242,5 +248,54 @@ describe('firmware view', () => {
     // 0x05 之后设备已经在收尾，主机打断它只会更糟
     controller.push({ phase: 'settling' });
     expect(abort?.hidden).toBe(true);
+  });
+
+  it('8. 设备模式提示（规格 §3）：未实现时不显示，bootloader 时提示"续刷"，升级中隐藏', async () => {
+    const controller = new FakeController();
+    const { root } = mount(controller);
+    const row = (): HTMLElement | null => root.querySelector<HTMLElement>('.fw-device-mode');
+
+    // 老调用方（不实现 deviceMode）：整行不出现
+    expect(row()?.hidden).toBe(true);
+
+    controller.mode = 'bootloader';
+    pickFile(root);
+    await settle();
+    expect(row()?.hidden).toBe(false);
+    expect(row()?.textContent).toBe(t('fw.device.bootloader'));
+    expect(row()?.dataset.mode).toBe('bootloader');
+
+    // 升级跑起来之后这行没有意义（会让人以为"还在升级模式"）
+    controller.push({
+      phase: 'writing',
+      progress: { phase: 'writing', blockIndex: 0, blockTotal: 4, percent: 10, round: 1, message: 'fw.phase.writing' },
+    });
+    expect(row()?.hidden).toBe(true);
+  });
+
+  it('9. done 之后「开始升级」必须是 disabled（规格 §7.5：要重刷只能重新选包）', async () => {
+    const controller = new FakeController();
+    const { root } = mount(controller);
+    pickFile(root);
+    await settle();
+    const confirm = root.querySelector<HTMLInputElement>('.fw-confirm input[type="checkbox"]');
+    if (confirm === null) throw new Error('confirm checkbox missing');
+    confirm.checked = true;
+    confirm.dispatchEvent(new Event('change'));
+
+    const start = root.querySelector<HTMLButtonElement>('.fw-start');
+    expect(start?.disabled).toBe(false);
+
+    controller.push({
+      phase: 'done',
+      progress: { phase: 'done', blockIndex: 3, blockTotal: 4, percent: 100, round: 1, message: 'fw.phase.done' },
+    });
+    expect(start?.disabled).toBe(true);
+
+    // 重新选包 → 回到 idle/ready，确认要重新勾，按钮才可能再亮
+    pickFile(root, 'app-1.2.4.bin');
+    await settle();
+    expect(start?.disabled).toBe(true);
+    expect(controller.selectCalls).toHaveLength(2);
   });
 });

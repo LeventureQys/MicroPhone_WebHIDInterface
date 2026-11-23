@@ -190,9 +190,12 @@ const ADVANCED_SNAPSHOT = `(() => {
     levelSegHasDisabledClass: body?.querySelector('[data-param="enc.Level"]')?.classList.contains('is-disabled') ?? null,
     encOn: body?.querySelector('[data-param="enc.OnOff"] input[type="checkbox"]')?.checked ?? null,
     gateThresholdDisabled: body?.querySelector('[data-param="noisegate.threshold_db"] input.pfield-range')?.disabled ?? null,
-    gateBypass: body?.querySelector('[data-bypass="noisegate"] input[type="checkbox"]')?.checked ?? null,
+    // 2026-11-21 参数表 V0.3 起噪声门 / 三分频是真实使能位（data-enable），
+    // 不再是「钉阈值 + 禁用字段」的中性旁通；下面两个键读取新开关
+    gateEnable: body?.querySelector('[data-enable="noisegate"] input[type="checkbox"]')?.checked ?? null,
+    drcEnable: body?.querySelector('[data-enable="drc3"] input[type="checkbox"]')?.checked ?? null,
+    drcFieldDisabled: disabledCount('[data-section="drc"] [data-param] input, [data-section="drc"] [data-param] select'),
     eqBypass: body?.querySelector('[data-bypass="eq"] input[type="checkbox"]')?.checked ?? null,
-    drcBypass: body?.querySelector('[data-bypass="drc3"] input[type="checkbox"]')?.checked ?? null,
   });
 })()`;
 
@@ -368,21 +371,23 @@ async function main() {
     }
 
     // ---- 6. 各模块旁通 ------------------------------------------------------
-    await cdp.evaluate(`document.querySelector('.modal-body [data-bypass="noisegate"] input[type="checkbox"]')?.click(); true`);
+    // 2026-11-21 参数表 V0.3：噪声门改真实使能位（`0x2074`），关掉即直通，
+    // 阈值不被动、字段不禁用——旧实现「钉 -91 dB + 禁用」已删除
+    await cdp.evaluate(`document.querySelector('.modal-body [data-enable="noisegate"] input[type="checkbox"]')?.click(); true`);
     await wait(600);
-    const gateBypassed = await cdp.json(ADVANCED_SNAPSHOT);
+    const gateOff = await cdp.json(ADVANCED_SNAPSHOT);
     check(
-      '噪声门有旁通开关（阈值拉到 -91 dB 且字段禁用）',
-      gateBypassed.gateBypass === true && gateBypassed.noisegateThreshold === '-91' && gateBypassed.gateThresholdDisabled === true,
-      `threshold=${gateBypassed.noisegateThreshold} disabled=${gateBypassed.gateThresholdDisabled}`,
+      '噪声门开关是真实使能位（关掉后阈值不动、字段仍可编辑）',
+      gateOff.gateEnable === false && gateOff.noisegateThreshold === '-40' && gateOff.gateThresholdDisabled === false,
+      `enable=${gateOff.gateEnable} threshold=${gateOff.noisegateThreshold} disabled=${gateOff.gateThresholdDisabled}`,
     );
-    await cdp.evaluate(`document.querySelector('.modal-body [data-bypass="noisegate"] input[type="checkbox"]')?.click(); true`);
+    await cdp.evaluate(`document.querySelector('.modal-body [data-enable="noisegate"] input[type="checkbox"]')?.click(); true`);
     await wait(600);
     const gateRestored = await cdp.json(ADVANCED_SNAPSHOT);
     check(
-      '取消噪声门旁通后恢复原阈值',
-      gateRestored.gateBypass === false && gateRestored.noisegateThreshold === '-40',
-      `threshold=${gateRestored.noisegateThreshold}`,
+      '重新打开噪声门开关后阈值保持原值',
+      gateRestored.gateEnable === true && gateRestored.noisegateThreshold === '-40',
+      `enable=${gateRestored.gateEnable} threshold=${gateRestored.noisegateThreshold}`,
     );
 
     await cdp.evaluate(`document.querySelector('.modal-body [data-bypass="eq"] input[type="checkbox"]')?.click(); true`);
@@ -471,23 +476,16 @@ async function main() {
       `${drcBefore} → ${drcDragState.value}（读数 ${drcDragState.readout}）`,
     );
 
-    await cdp.evaluate(`document.querySelector('.modal-body [data-bypass="drc3"] input[type="checkbox"]')?.click(); true`);
+    // 2026-11-21 V0.3：三分频「旁通」换成三分频动态开关（`0x2075`），字段仍可编辑、值照常保存
+    await cdp.evaluate(`document.querySelector('.modal-body [data-enable="drc3"] input[type="checkbox"]')?.click(); true`);
     await wait(700);
-    const drcBypassed = await cdp.json(`(() => {
-      const body = document.querySelector('.modal-body');
-      const inputs = Array.from(body?.querySelectorAll('[data-section="drc"] [data-param] input') ?? []);
-      return JSON.stringify({
-        checked: body?.querySelector('[data-bypass="drc3"] input[type="checkbox"]')?.checked ?? null,
-        disabled: inputs.filter((node) => node.disabled).length,
-        total: inputs.length,
-      });
-    })()`);
+    const drcOff = await cdp.json(ADVANCED_SNAPSHOT);
     check(
-      '三分频动态有旁通开关（字段全部禁用）',
-      drcBypassed.checked === true && drcBypassed.disabled === drcBypassed.total && drcBypassed.total > 0,
-      `disabled=${drcBypassed.disabled}/${drcBypassed.total}`,
+      '三分频动态开关是真实使能位（关掉后字段仍可编辑）',
+      drcOff.drcEnable === false && drcOff.drcFieldDisabled === 0,
+      `enable=${drcOff.drcEnable} 禁用字段=${drcOff.drcFieldDisabled}`,
     );
-    await cdp.evaluate(`document.querySelector('.modal-body [data-bypass="drc3"] input[type="checkbox"]')?.click(); true`);
+    await cdp.evaluate(`document.querySelector('.modal-body [data-enable="drc3"] input[type="checkbox"]')?.click(); true`);
     await wait(500);
     await cdp.evaluate(`document.querySelector('.modal-close')?.click(); true`);
     await wait(600);

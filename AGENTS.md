@@ -106,6 +106,7 @@ Ground truth（地址 / 标定 / 权限 / 默认值，唯一权威）：`Documen
 | `Document/Update/Alpha/v1.0.0/需求文档.md` | 全部功能范围 | 需求边界 |
 | `Document/Update/Alpha/v1.0.0/设计文档.md` | 全部实现契约 | 接口签名与视觉规范 |
 | `Document/Update/Alpha/v1.1.0/设计文档.md` | v1.1.0 契约与 §12 变更记录 R-1…R-38 | 与 v1.0.0 冲突时以本文件为准 |
+| `Document/Update/hardware/v0.0.6/固件刷写逻辑说明-20261121.md` | `device/dfu/**`、`device/link.ts`、`ui/views/firmware-view.ts` | **刷写行为规格**：相位 / 判据 / 固定参数 / 失败处置；与代码冲突以本文为准 |
 | 参照实现 AudioEQ_Visualized_Web（MIT） | `src/renderer/src/eq/**` | 频响算法与 Canvas 分层渲染 |
 | `third_party/web_hid_utils/docs/*.md`、`packages/webhid-kit/README.md` | `src/renderer/src/device/webhid/**` | WebHID 强制约束、桥接协议、套件 API |
 
@@ -606,6 +607,25 @@ Fix：
 
 排查口径：设备又"卡死"时先看诊断卡 `outFrames` 是否在拖拽期间持续增长——现在的预期是**停手后才有 1 帧**；再看 `timeouts` 是否上涨（写超时后有 1 s 冷却）。本机没有 M001 硬件，真机复测仍待做。
 
+### 33. 「658/658 全 ACK + 收到 0x05」不等于刷成功；回读失败时别拿旧快照比版本（2026-11-21 修）
+
+症状（M001，V0.0.5→V0.0.6 界面 DFU）：预检全对，658 块全部回 ACK、末块回 `0x05`，进度到「等待设备重启」；随后设备只以 **HID**（无 `MI_00` 音频）形态重新枚举，界面报「升级已完成但版本未变，设备已回到正常模式 / device 0.0.5 does not match image 0.0.6」，实际设备停在 Bootloader。同一台设备用 python 直连续刷也在**随机偏移**挂死（`0x19000`、`0x2B880`）。
+
+根因两层：
+1. **设备侧**：`0x05` 只表示"已收字节数够了 + 对**收到的字节流**累加校验和一致"，并不回读 Flash 校验。Bootloader 的 QSPI 擦/写静默失败时，上位机侧看起来一切正常。V0.0.6 的 hex 与 V0.0.5 的 `0x0000–0x7FFF`（Bootloader）、`0x38000`（状态字 `A5 FF 00 00`）**字节完全相同**，说明首刷记录 §8 那条缺陷一直没修。旁证：同一份镜像用 J-Link 烧整片能正常启动并跑通 Modbus。
+2. **主机侧**：`DeviceLink._fail()` 只改 `status/sync/error`，**不清 `state.device`**；`resumeAfterDfu()` 又把回读异常 `catch` 掉后正常返回，`FirmwareController` 于是拿**升级前的旧快照**去比版本，报出与事实相反的结论，还把用户引向「再刷一次」。
+
+Fix（已落盘）：
+- `resumeAfterDfu(): Promise<boolean>`，返回"这一轮有没有真的从设备读到摘要"；`_fail()` 补 `device: null`。
+- 回读失败 → `DfuError.kind='noReadback'`（新增，i18n `fw.error.noReadback`），**不再比对版本**；`verify` 从此只用于"读到了、版本确实没变"。
+- 单测 `tests/unit/dfu/controller.test.ts` 5a：回读失败必须是 `noReadback`，detail 里不得出现 `does not match image`。
+- `TIMING.dfuSendTimeoutMs = 5000` + `DfuSession.sendWithinTimeout()`：设备挂死后 `sendReport` 的 `WriteFile` 不返回，会话 `await` 它就永久卡在「探测设备 5%」（R3 实测 73 s）；现在 5 s 内按 `channel` 收场。单测 `tests/unit/dfu/session.test.ts` 12g。
+- 新增 `tools/dfu/check-package.py`：把 DFU 包解密载荷与厂商 hex 的 App 区逐字节比（预检能验包自洽，验不了"这个包是不是这版 hex 导出的"）；新增 `scripts/probes/real8-health.py`：裸 HID 只读健康快照（118 项预设 + 14 项配置 + 62 字信息区，不依赖 Electron）。
+
+排查口径：真机升级后"没升级成功"先看三件事——① 重枚举形态是不是**复合设备**（只有 HID = 还在 Bootloader）；② `real8-health.py` 能不能读到版本；③ `startup.log` 里 `dfu-active=false` 之后有没有 `自动连接成功`。三样任一不对就是没刷成，不要信界面上的版本号（旧版本可能来自旧快照）。**没有 SWD 退路时不要反复用 DFU 复测**：每次整轮重来都会重发信息帧、再次预写 `END_FAIL`。详见 `Document/Update/hardware/v0.0.6/固件升级诊断与复测方案-20261121.md`。
+
+**2026-11-21 实刷复测（5 次，同一版 V0.0.6）**：成功 3 / 失败 2 —— R1 `App→DFU` 21.6 s 成功、R2 22.1 s 成功、R3 挂死在块 **365/658**（界面卡「探测设备 5%」73 s）、R4 从 Bootloader 续刷挂死在块 **652/658**（360 s 无结果）、R5 续刷 21.3 s 成功。两次失败后设备都是**仅 HID + OUT 写超时**，必须物理拔插；拔插后 `mode=Bootloader`（`END_FAIL` 已预写），再续刷可恢复。结论：**成功率约 60%，且失败概率与偏移无关 —— 不能交付**。另注：本机 SWD/JTAG 当时连不上目标（`VTref=3.269V` 正常但 4 个速率、`rx 2`、通用 `Cortex-M4` 全 `Cannot connect to target`），JFlash 走同一驱动同样无效，救砖最终靠的是界面续刷而非 SWD。
+
 ### 2026-11-13 界面改版（软件测试问题清单第 4 条）
 
 - 主界面：场景顺序 安静房间 → 会议 → 播客 → 唱歌 → 自定义；`降噪强度/声音平稳` 改为直接写协议的 `噪声门阈值/压缩器阈值`（dB，步进同参数表）；音色 5 个（原声 / 人声增强 / 温暖 / 明亮 / 自定义），去掉「音乐」；「增益」卡从高级参数移除，麦克风静音 / 监听 / 电平信号静音三个开关放进「快速调音」；中栏说明文字在 `.console` 内隐藏、输入开关三列排布（1280×820 不溢出）。
@@ -613,3 +633,18 @@ Fix：
 - 旁通：`comp.Enable`/`limit.Enable`/`enc.OnOff` 用真实使能位。**2026-11-21 参数表 V0.3 给噪声门与三分频动态补了使能位（`0x2074`/`0x2075`）**，这两项也改成真实开关（高级参数卡里 `data-enable="noisegate"` / `data-enable="drc3"`，关掉即直通，参数值照常保存），原先「钉阈值 / preGain=0+ratio=1」的中性参数近似已删除；`AppStore.setBypass()` 现在只剩均衡器一项（写 7 段 `enable=0`，真旁通）。旁通中对应字段禁用并显示说明的做法，仅 EQ 段表保留。
 - 高级参数：移除「增益」卡与「均衡器模式」卡（`eq.mode` 参数仍保留，只是没有 UI）；三分频动态加「旁通」与「恢复推荐分频点（1000/3000）」，`fc1 >= fc2`（含默认 50/50 的相等）会标黄提示"分频点无效"。
 - 三分频"听不出变化"的固件根因：第六轮联调发现固件预设结构体从 `0x205B` 起整体右移 2 字；协议读写无偏移，但 DSP 若按结构体取值，NoiseGate/DRC 参数会落到错误字段（见 `真机联调报告-第六轮.md` §7.1）。上位机侧已把默认 50/50 的退化分频提示出来并提供一键修正，真机是否生效仍需固件确认。
+
+### 2026-11-21 夜间界面问题单（`usb audio demo buglist(1).docx` 23:42 那一节，13 条）
+
+需求源：`Document/Update/hardware/v0.0.6/usb audio demo buglist_20261121.docx`；逐条处置与取证见 `Document/Update/hardware/v0.0.6/修复记录-界面问题单20261121.md`。上位机 9 条全改、2 条各改一半、4 条判给下位机。
+
+- **快速调音三行阈值各带开关**：`噪声门阈值 / 压缩器阈值 / 防爆音` 都由 `macroSlider` 的 `toggle` 选项渲染（开关是无文案的 `switchControl`，`switch-row--bare` + `aria-label`），绑定 `noisegate.Enable` / `comp.Enable` / `limit.Enable`，与高级参数是**同一个参数 id**，联动就是同一份 store 状态。「快捷开关」里原来的「防爆音」开关已删——一个模块只留一个开关，别在两处各加一个。第三行**必须写「防爆音」**（产品叫法，高级参数里才叫「限幅器」）：2026-11-22 曾按问题单原文写成「限幅器阈值」，用户当场反馈"界面上的防爆音没了"，改回来才过。
+- **音色曲线卡头两个动作**：`复位` + `逐段精调`。复位只在 `tone === 'custom'` 时可用，落点是新增的 `domain/eq-reset.ts`（7 段 **gain 0 / Q 0.7**，类型与频点沿用参数表）。它与参数表的**出厂默认**（Band-3 −3.5 dB、Q 0.8/1.5/1.0/1.0）刻意不同，`registers.ts` 不要跟着改。高级参数「全部复位」共用同一 preset。
+- **抽屉跳转**：`ShellApi.openAdvanced(section?)` → `openPanel(id, { section })`，打开后下一帧在抽屉内 `scrollIntoView`；`AdvancedSectionId` 由 `advanced-view.ts` 导出，主界面只引类型（无运行时依赖）。
+- **电平表**：`MeterChannel.showPeak`（缺省 true），输出通道传 false → 不画峰值读数也不画峰值保持线（问题单「输出峰值可以不要」）。
+- **样式坑**：`.switch-row + .switch-row { margin-top:10px }` 是给竖排开关列表用的，三列网格 `.tune-switch-grid` 里会让第 2、3 个开关下沉 10 px（问题单「三个开关不在同一水平线」），网格内已显式清零。`--bare` / `--toggle` / `.console-eq-actions` / `.console-link:disabled` 等新规则都在 `styles/components.css`。
+- **文案**：`param.gain.Hp.label` 耳机增益 → **耳机音量**；`param.noisegate.ratio.label` 扩展比 → **压缩比**（对应 `0x205C`，`value=param/1000`），噪声门卡加 `module.noisegate.ratioHint` 说明「开关 + 阈值 + 压缩比三样都要下发」。设置页 VID 占位符 `0x352F` → `0x0A67`。
+- **留给下位机**（详见修复记录 §4）：旋钮 ADC 端点到不了 0/100（`0x2023`/`0x205A` 只读，上位机只显示）；Bootloader 的 Product String 与 VID（描述符在固件）；噪声门「没有效果」（`0x2074` 使能位与 `0x205C` 是否真的进 DSP）。
+- **复测入口**：`node scripts/probes/verify-buglist-20261121.mjs`（CDP 驱动真实界面，16 条断言，结果写 `artifacts/verify-20261121/result.json`）。它默认跑在真机上并在收尾用「设置 → 复位全部参数」还原，不想动真机就先拔线（退化为 mock）。公共 CDP 驱动在 `scripts/probes/lib/cdp.mjs`。若某条断言偶发"找不到抽屉里的控件"，先看 `ensureDrawer()`——截图那一步之后偶尔要等一拍（探针已内置重试）。
+- **打包与启动器**：`.\dist.cmd` 出 `release/MicStudio-<ver>-portable.exe`；`release/MIC STUDIO.exe` 是这个包的**一键启动器**（自带 `--no-sandbox`，本机 App Control 挡双击时用它），源码 `scripts/launcher/MicStudioLauncher.cs` 里写的 payload 版本号要随发版改。重新编译必须显式传仓库根：`powershell -NoProfile -ExecutionPolicy Bypass -File scripts\build-launcher.ps1 -RepoRoot .`——本机 5.1 在 `-File` 模式下 `$PSScriptRoot` / `$PSCommandPath` 全是空，脚本会报「RepoRoot 推断失败」。csc 产物带时间戳与随机 MVID，每次重编 SHA256 都会变，别当作"产物被改过"。
+- **顺手修的旧探针**：`verify-buglist-20261113.mjs` 里 3 条「中性参数旁通」断言（噪声门钉 −91 dB + 禁用字段、三分频禁用整片）自 V0.3 换版起就一直 FAIL，与本轮改动无关；已改成读 `[data-enable="noisegate"|"drc3"]` 的使能位语义，现在 26/26 全过。

@@ -1,4 +1,4 @@
-import { DEFAULT_BANDS } from '../../domain/defaults';
+import { eqResetBands } from '../../domain/eq-reset';
 import type { AppState, AppStore } from '../../domain/state';
 import { EqModel } from '../../eq/model';
 import { EQ_TYPE_LABEL, type EqBand, type EqFilterType } from '../../eq/types';
@@ -31,10 +31,10 @@ export function createEqBandTable(store: AppStore): HTMLElement {
   reset.className = 'btn btn--ghost btn--small';
   reset.textContent = t('eq.resetAll');
   reset.addEventListener('click', () => {
-    for (let index = 0; index < model.visibleCount(); index += 1) {
-      const band = DEFAULT_BANDS[index];
-      if (!band) continue;
-      model.setBand(index, { type: band.type, freq: band.freq, gain: band.gain, q: band.q });
+    // 复位值 = 问题单 2026-11-21 第 12 条那张表（7 段增益 0、Q 0.7），
+    // 与主界面音色曲线卡上的「复位」用同一个 preset
+    for (const band of eqResetBands()) {
+      model.setBand(band.index, { type: band.type, freq: band.freq, gain: band.gain, q: band.q });
     }
     commit();
   });
