@@ -14,9 +14,14 @@ import {
  * 「自定义」场景只换音色曲线，不替用户改压缩/降噪——那条曲线是用户自己在主界面拖出来的
  * （2026-11-13 需求：场景里增加自定义，且只有自定义曲线和高级参数里的 EQ 值可调）。
  *
- * 顺序即界面顺序：安静房间 → 会议 → 播客 → 唱歌 → 自定义（用户指定）。
+ * 顺序即界面顺序：安静房间 → 游戏 → 播客 → 唱歌 → 自定义（用户指定）。
+ * 「会议」在 2026-11-22 问题单第 7 条改名为「游戏」：只换名字与说明，
+ * 处理链参数（压噪 + 稳人声）沿用上一版的会议预设，没有依据时不自造另一套数值。
+ *
+ * 2026-11-22 问题单第 6 条：三分频动态默认关闭，因此所有场景都不再打开 `drc3.Enable`。
+ * 每个场景的参数改动由 `domain/scene-presets.ts` 单独保存（同一问题单第 9 条）。
  */
-export type SceneId = 'quiet' | 'meeting' | 'podcast' | 'sing' | 'custom';
+export type SceneId = 'quiet' | 'game' | 'podcast' | 'sing' | 'custom';
 
 export interface ScenePreset {
   readonly id: SceneId;
@@ -30,7 +35,7 @@ export interface ScenePreset {
   readonly encOn?: boolean;
   readonly encLevel?: number;
   readonly limiterOn?: boolean;
-  /** 三分频动态使能位（`0x2075`） */
+  /** 三分频动态使能位（`0x2075`）；默认关闭，场景也不再打开 */
   readonly drc3On?: boolean;
 }
 
@@ -44,10 +49,10 @@ export const SCENES: readonly ScenePreset[] = Object.freeze([
     encOn: false,
     encLevel: 1,
     limiterOn: true,
-    drc3On: true,
+    drc3On: false,
   },
   {
-    id: 'meeting',
+    id: 'game',
     gateThreshold: -41,
     gateOn: true,
     compThreshold: -36,
@@ -55,7 +60,7 @@ export const SCENES: readonly ScenePreset[] = Object.freeze([
     encOn: true,
     encLevel: 2,
     limiterOn: true,
-    drc3On: true,
+    drc3On: false,
   },
   {
     id: 'podcast',
@@ -66,7 +71,7 @@ export const SCENES: readonly ScenePreset[] = Object.freeze([
     encOn: true,
     encLevel: 1,
     limiterOn: true,
-    drc3On: true,
+    drc3On: false,
   },
   {
     id: 'sing',
@@ -77,7 +82,7 @@ export const SCENES: readonly ScenePreset[] = Object.freeze([
     encOn: false,
     encLevel: 1,
     limiterOn: true,
-    drc3On: true,
+    drc3On: false,
   },
   {
     id: 'custom',
@@ -90,7 +95,7 @@ export const SCENES: readonly ScenePreset[] = Object.freeze([
     encOn: false,
     encLevel: 1,
     limiterOn: true,
-    drc3On: true,
+    drc3On: false,
   },
 ]);
 
@@ -119,7 +124,10 @@ export function scenePatch(scene: ScenePreset, customGains: readonly number[] = 
 }
 
 /**
- * 当前参数是否仍然完整匹配某个场景（用于高亮；用户手调后自动取消高亮）。
+ * 当前参数是否仍然完整匹配某个场景（用于高亮）。
+ *
+ * 2026-11-22 起场景可以逐项微调并自动保存，因此界面高亮优先用「显式选中的场景」
+ * （`domain/scene-presets.ts`），只有没有显式选择时才退回这里按参数反推。
  *
  * `tone` 由调用方从 `AppState.tone` 传入：自定义曲线默认全平，只靠波形反推会和
  * 固定「原声」混为一谈，因此显式选择优先；传 `null` 时才按曲线反推。

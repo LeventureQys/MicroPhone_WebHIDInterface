@@ -12,10 +12,10 @@ function bandsFor(gains: readonly number[]) {
 }
 
 describe('one-tap scenes', () => {
-  it('orders scenes as quiet → meeting → podcast → singing → custom', () => {
+  it('orders scenes as quiet → game → podcast → singing → custom', () => {
     expect(SCENES.map((scene) => scene.id)).toEqual([
       'quiet',
-      'meeting',
+      'game',
       'podcast',
       'sing',
       'custom',
@@ -36,20 +36,22 @@ describe('one-tap scenes', () => {
       // C-15：防爆音写使能位，绝不替用户改限幅阈值
       expect(patch.params['limit.Enable']).toBe(scene.limiterOn ? 1 : 0);
       expect(patch.params).not.toHaveProperty('limit.Threshold');
-      // 参数表 V0.3：场景也要把噪声门 / 三分频动态打开，否则调了阈值不生效
+      // 参数表 V0.3：场景要把噪声门打开，否则调了阈值不生效；
+      // 三分频动态按 2026-11-22 问题单第 6 条默认关闭，场景也不再打开它
       expect(patch.params['noisegate.Enable']).toBe(1);
-      expect(patch.params['drc3.Enable']).toBe(1);
+      expect(patch.params['drc3.Enable']).toBe(0);
     }
   });
 
-  it('drops the match when a module enable bit is switched off after applying a scene', () => {
+  it('drops the match when a module enable bit is switched after applying a scene', () => {
     const scene = SCENES[0];
     const patch = scenePatch(scene);
     const bands = bandsFor(patch.gains);
     const gateOff = { ...DEFAULT_PARAMS, ...patch.params, 'noisegate.Enable': 0 };
     expect(matchScene(gateOff, bands, DEFAULT_CUSTOM_GAINS)).toBeNull();
-    const drcOff = { ...DEFAULT_PARAMS, ...patch.params, 'drc3.Enable': 0 };
-    expect(matchScene(drcOff, bands, DEFAULT_CUSTOM_GAINS)).toBeNull();
+    // 三分频默认关：手动打开就不再是场景原样（问题单第 6 条）
+    const drcOn = { ...DEFAULT_PARAMS, ...patch.params, 'drc3.Enable': 1 };
+    expect(matchScene(drcOn, bands, DEFAULT_CUSTOM_GAINS)).toBeNull();
   });
 
   it('applies the saved custom curve for the custom scene', () => {

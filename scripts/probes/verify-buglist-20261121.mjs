@@ -235,7 +235,10 @@ async function main() {
 
     check(
       '问题4：限幅器开关只保留一个（不再同时出现在「快捷开关」）',
-      consoleState.quickSwitches.length === 1 && consoleState.quickSwitches[0]?.label === '环境降噪',
+      consoleState.quickSwitches.length === 2 &&
+        consoleState.quickSwitches[0]?.label === '环境降噪' &&
+        // 2026-11-22 问题单第 5 条：灯效搬到「快捷开关」的第二列，不再是限幅器
+        consoleState.quickSwitches[1]?.label === '灯效',
       `快捷开关：${consoleState.quickSwitches.map((item) => item.label).join(',')}`,
     );
 
@@ -353,15 +356,16 @@ async function main() {
     const expected = [
       { type: '4', freq: '50', gain: '0', q: '0.7' },
       { type: '3', freq: '20000', gain: '0', q: '0.7' },
-      { type: '0', freq: '215', gain: '0', q: '0.7' },
+      // 2026-11-22 问题单第 2/3 条把 3–7 段的默认频点改成 63/250/1k/4k/12.5k
+      { type: '0', freq: '63', gain: '0', q: '0.7' },
+      { type: '0', freq: '250', gain: '0', q: '0.7' },
       { type: '0', freq: '1000', gain: '0', q: '0.7' },
-      { type: '0', freq: '2000', gain: '0', q: '0.7' },
-      { type: '0', freq: '5000', gain: '0', q: '0.7' },
-      { type: '0', freq: '10000', gain: '0', q: '0.7' },
+      { type: '0', freq: '4000', gain: '0', q: '0.7' },
+      { type: '0', freq: '12500', gain: '0', q: '0.7' },
     ];
     const actual = afterReset.eqRows.map((row) => ({ type: row.type, freq: row.freq, gain: row.gain, q: row.q }));
     check(
-      '问题12：复位后 7 段 EQ 与问题单那张表一致（增益全 0、Q 全 0.7、类型/频点沿用参数表）',
+      '问题12：复位后 7 段 EQ 与问题单那张表一致（增益全 0、Q 全 0.7、类型沿用参数表、频点按 2026-11-22 默认）',
       actual.length === 7 && expected.every((row, index) => JSON.stringify(actual[index]) === JSON.stringify(row)),
       `改脏后 #3 ${dirty.eqRows[2]?.freq}Hz/${dirty.eqRows[2]?.gain}dB Q${dirty.eqRows[2]?.q} → 复位后 ${actual.map((row) => `${row.freq}Hz/${row.gain}dB/Q${row.q}`).join(' , ')}`,
     );
@@ -394,18 +398,22 @@ async function main() {
     );
 
     // ---- 收尾：恢复参数表默认值 --------------------------------------------
+    // 2026-11-23：复位改成分批写（6 项 / 320 ms，7 段 EQ 一段一次），全程约 3–6 s。
+    // 这里必须等按钮从「正在复位…」回到「复位全部参数」再判链路，否则会在复位中途取样。
     const resetInfo = await cdp.json(`(async () => {
       const button = document.querySelector('.modal-body .btn--danger');
       if (!button) return JSON.stringify({ error: 'no reset button' });
+      const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
       button.click();
-      await new Promise((resolve) => setTimeout(resolve, 350));
+      await sleep(350);
       const armed = button.textContent.trim();
       button.click();
-      await new Promise((resolve) => setTimeout(resolve, 1200));
-      return JSON.stringify({ armed, done: button.textContent.trim() });
+      const deadline = Date.now() + 25_000;
+      while (Date.now() < deadline && button.textContent.trim() !== '复位全部参数') await sleep(200);
+      return JSON.stringify({ armed, done: button.textContent.trim(), sync: document.querySelector('#sync-pill')?.className ?? null });
     })()`);
     results.measurements.restore = resetInfo;
-    await wait(6000);
+    await wait(4000);
     const restored = await cdp.json(`(() => JSON.stringify({
       syncReady: !!document.querySelector('#sync-pill')?.classList.contains('state-pill--ready'),
       tone: document.querySelector('.tone-chip.is-active')?.dataset.tone ?? null,

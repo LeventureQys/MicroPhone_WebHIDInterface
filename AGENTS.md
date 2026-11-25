@@ -116,7 +116,7 @@ Ground truth（地址 / 标定 / 权限 / 默认值，唯一权威）：`Documen
 
 Electron 主进程只负责窗口、菜单、WebHID 会话策略与 IPC；渲染进程是唯一业务层：`AppStore` 是状态唯一写入口，参数改动经 `Transport` 出站（Alpha 用 `MockTransport`），`EqModel` + `computeCurve` 产出曲线数据、Canvas 分层绘制。主进程不参与业务计算，渲染进程不碰 Node API。
 
-界面是**一屏工作台**（`ui/views/console-view.ts`），没有导航与路由：所有日常逻辑同屏——顶部一键场景（`domain/scenes.ts`，顺序 安静房间 → 会议 → 播客 → 唱歌 → 自定义），左侧实时电平 + 只读增益 + 设备摘要，中间**噪声门阈值 / 压缩器阈值**（直接写协议 dB，不再是 0..100 抽象强度）、音色（原声 / 人声增强 / 温暖 / 明亮 / 自定义）、三个输入开关（麦克风静音 / 监听 / 电平信号静音），右侧 7 段音色曲线，底部环境降噪与防爆音开关。**只有选中「自定义」音色时主界面曲线才可拖**；其它音色的细调走「逐段精调」抽屉。协议原始参数收进顶栏「高级参数」抽屉（`ui/views/advanced-view.ts`，由 `ui/modal.ts` 承载），设备与设置也以抽屉打开，不切页。`domain/quick-controls.ts` 只保留固定音色表、自定义曲线比较与防爆音使能换算，不再做强度↔阈值映射。
+界面是**一屏工作台**（`ui/views/console-view.ts`），没有导航与路由：所有日常逻辑同屏——顶部一键场景（`domain/scenes.ts`，顺序 安静房间 → 游戏 → 播客 → 唱歌 → 自定义，2026-11-22 起「会议」改名「游戏」；每个场景的改动由 `domain/scene-presets.ts` 自动保存，卡片右侧「复位」清回出厂预设），左侧实时电平 + 只读增益 + 设备摘要，中间**噪声门阈值 / 压缩器阈值 / 防爆音**（三行各带模块开关，直接写协议 dB，不再是 0..100 抽象强度）、音色（原声 / 人声增强 / 温暖 / 明亮 / 自定义，启动默认「自定义」）、三个输入开关（麦克风静音 / 监听 / 电平信号静音），右侧 7 段音色曲线，底部环境降噪与**灯效开关 + 0–7 模式**（与高级参数同一组寄存器）。**只有选中「自定义」音色时主界面曲线才可拖**；其它音色的细调走「逐段精调」抽屉。协议原始参数收进顶栏「高级参数」抽屉（`ui/views/advanced-view.ts`，由 `ui/modal.ts` 承载），设备与设置也以抽屉打开，不切页。`domain/quick-controls.ts` 只保留固定音色表、自定义曲线比较与防爆音使能换算，不再做强度↔阈值映射。
 
 设备抽屉（`ui/views/device-view.ts`）走 `device/webhid/` 适配层调用第三方套件：只做「发现设备 / 开关设备 / 报告解码」，不参与参数 ↔ 字节映射，因此**不实现** `Transport`，`AppStore` 的 Mock 链路不变。详见 §WebHID 接入。
 
@@ -127,7 +127,9 @@ Electron 主进程只负责窗口、菜单、WebHID 会话策略与 IPC；渲染
 - `src/renderer/src/ui/views/console-view.ts`：一屏工作台（主界面）
 - `src/renderer/src/ui/views/advanced-view.ts`：高级参数抽屉（复用 input/dynamics/drc 视图与 EQ 段表）
 - `src/renderer/src/ui/modal.ts`：抽屉/弹层宿主，Esc、遮罩点击、内容 destroy
-- `src/renderer/src/domain/scenes.ts`：一键场景（场景 → 5 个协议字段 + 7 段 EQ；顺序 安静房间/会议/播客/唱歌/自定义）
+- `src/renderer/src/domain/scenes.ts`：一键场景（场景 → 7 个协议字段 + 7 段 EQ；顺序 安静房间/游戏/播客/唱歌/自定义）
+- `src/renderer/src/domain/scene-presets.ts`：场景的可编辑值（localStorage `micstudio.scenes` / 自定义曲线 `micstudio.customEq`；改一项存一项，复位只清当前场景）
+- `src/renderer/src/domain/defaults.ts`：产品默认值（三分频动态默认关、3–7 段频点 63/250/1k/4k/12.5k —— 与参数表 G 列刻意不同，见注释）
 - `src/renderer/src/domain/quick-controls.ts`：固定音色表、自定义曲线比较、防爆音使能换算（不再做 0..100 强度映射）
 - `src/renderer/src/device/webhid`：webhid-kit 适配层（`types` 契约 / `kit` 唯一 import / `session` 状态机）
 - `src/renderer/src/device/registers.ts`：寄存器真值表（地址 / 原始值域 / 标定 / 权限 / 默认值）+ `toRaw`/`fromRaw`；`domain/params.ts` 的 46 项由它派生
@@ -647,4 +649,19 @@ Fix（已落盘）：
 - **留给下位机**（详见修复记录 §4）：旋钮 ADC 端点到不了 0/100（`0x2023`/`0x205A` 只读，上位机只显示）；Bootloader 的 Product String 与 VID（描述符在固件）；噪声门「没有效果」（`0x2074` 使能位与 `0x205C` 是否真的进 DSP）。
 - **复测入口**：`node scripts/probes/verify-buglist-20261121.mjs`（CDP 驱动真实界面，16 条断言，结果写 `artifacts/verify-20261121/result.json`）。它默认跑在真机上并在收尾用「设置 → 复位全部参数」还原，不想动真机就先拔线（退化为 mock）。公共 CDP 驱动在 `scripts/probes/lib/cdp.mjs`。若某条断言偶发"找不到抽屉里的控件"，先看 `ensureDrawer()`——截图那一步之后偶尔要等一拍（探针已内置重试）。
 - **打包与启动器**：`.\dist.cmd` 出 `release/MicStudio-<ver>-portable.exe`；`release/MIC STUDIO.exe` 是这个包的**一键启动器**（自带 `--no-sandbox`，本机 App Control 挡双击时用它），源码 `scripts/launcher/MicStudioLauncher.cs` 里写的 payload 版本号要随发版改。重新编译必须显式传仓库根：`powershell -NoProfile -ExecutionPolicy Bypass -File scripts\build-launcher.ps1 -RepoRoot .`——本机 5.1 在 `-File` 模式下 `$PSScriptRoot` / `$PSCommandPath` 全是空，脚本会报「RepoRoot 推断失败」。csc 产物带时间戳与随机 MVID，每次重编 SHA256 都会变，别当作"产物被改过"。
-- **顺手修的旧探针**：`verify-buglist-20261113.mjs` 里 3 条「中性参数旁通」断言（噪声门钉 −91 dB + 禁用字段、三分频禁用整片）自 V0.3 换版起就一直 FAIL，与本轮改动无关；已改成读 `[data-enable="noisegate"|"drc3"]` 的使能位语义，现在 26/26 全过。
+- **顺手修的旧探针**：`verify-buglist-20261113.mjs` 里 3 条「中性参数旁通」断言（噪声门钉 −91 dB + 禁用字段、三分频禁用整片）自 V0.3 换版起就一直 FAIL，与本轮改动无关；已改成读 `[data-enable="noisegate"|"drc3"]` 的启用位语义，现在 26/26 全过。
+
+### 2026-11-22 界面问题单（`usb audio demo buglist 2026-11-22.docx` 17:43 那一节，12 条）
+
+需求源：`Document/Update/Testing/v1.1.4 新增测试/usb audio demo buglist 2026-11-22.docx`；逐条处置见 `Document/Update/hardware/v0.0.6/修复记录-界面问题单20261122.md`。上位机 9 条落地、2 条判给固件、1 条是新增测试资产。
+
+- **场景变成"可编辑 + 自动保存"**：`domain/scene-presets.ts`（localStorage `micstudio.scenes` / `microstudio.customEq` 实际为 `micstudio.customEq`）按场景 id 存**用户改过的项**（sparse，只存差异）。选场景写 `store.setActiveScene(id)`；用户改任意参数（`PARAM_CHANGED_EVENT`）或拖曲线都记到当前场景名下；「复位」= 清掉该场景的覆盖值再按 `SCENES` 出厂预设应用一遍。`applyingScene` 这个闸门**不能删**：应用预设时的 `setParam` 也是用户改动的同一条路径，不挡住就会把出厂值当成"用户刚改的"存下来，复位后永远回不到默认。
+- **场景改名**：`SceneId` 的 `meeting` → `game`（会议 → 游戏，处理链数值不变）。改 id 会牵连 `SCENE_ICON`、i18n `console.scene.game*`、`fulltest-u.mjs` / `ui-e2e-full.mjs` / `verify-buglist-20261113.mjs` 里的场景 id 断言，改的时候一起搜。
+- **产品默认值放在 `domain/defaults.ts`，不要改 `registers.ts`**：参数表 V0.3 是真值来源，产品要求与表不同时用 `PRODUCT_PARAM_DEFAULTS`（三分频动态默认关 `drc3.Enable=0`）与 `PRODUCT_BAND_FREQS`（3–7 段频点 63/250/1k/4k/12.5k）覆盖。设备上电加载的那份预设由固件按表决定：`复位全部参数`/场景会写 0，但开机回读仍是固件的值，除非固件改 G 列。
+- **启动默认「自定义」**：`quick-controls.DEFAULT_TONE='custom'` + `AppState.activeScene` 默认 `'custom'`；`domain/scene-presets.ts` 的 `loadCustomEq()` 在 `createConsoleView()` 开头把上次的曲线套到 `bands` 上（`setBands` 在 `sync!=='ready'` 时不发帧，连上设备后仍由回读接管）。
+- **灯效上主页**：`快捷开关` 卡现在是两列——`环境降噪 + 档位` 与 `灯效 + 模式 0–7`（`switch-item--light`、`segmented--modes`：8 个 chip 等分压缩，窄列里每个 ~11–15 px）。与高级参数「灯效」是同一组参数 id（`rgb.OnOff`/`rgb.Mode`），联动同 store。**不要**把它做成跨两列的 `switch-item--wide`：那样中栏会多出 ~70 px，1266×783 下「快速调音」卡会被挤到内部滚动甚至压住下面的卡。
+- **阈值行开关位置**：`.pfield--toggle .macro-toggle { margin-left: 0 }` + 读数 `margin-left:auto`。旧写法把开关顶到右边，读数宽度一变（−80 dB / −4.1 dB）开关就横向跳（问题单第 1 条）。
+- **一屏工作台的纵向预算很紧**：1266×783 下中栏只差十几像素就会出滚动条。`.tune-grid` gap 10 / 分组 `padding-top: 12` / `.pfield--macro .pfield-head` 2px / `.macro-range` 22px 都是为这个尺寸压出来的；再加控件先跑 `node scripts/probes/inspect-console-budget.mjs`（看 `scrollable.scroll` / 标签是否省略 / 模式 chip 宽度）再改。中栏 `.card-body` 有 `overflow-y:auto` 兜底：窗口低于 ~700 高时内部滚动，而不是让「输入开关」压到「快捷开关」上。
+- **`复位全部参数` 改成按批写**：`ui/views/settings-view.ts` 6 项一批、批间隔 320 ms（> `writeThrottleMs` 300，保证每批单独成帧），7 段 EQ 一段一次；设备已经 `sync==='error'` 就停手。**起因**：真机（V0.0.6）在一次性写回几十项之后 HID 不再吃 OUT 报告（`WriteFile timeout`、product string 变空、Modbus/DFU 都不应答），只能物理拔插——旧版和新版都能复现，属于固件侧问题（见修复记录 §5），上位机只能降低触发概率。
+- **自动连接多给两次"冷启动"重试**：`AutoConnector` 的 `coldSyncRetries=2`（2 s 间隔）+ `link.onChange()` 订阅。设备自己复位在 USB 上看起来就是"拔掉又插回"，`wasReady` 会被清零；不给冷重试就会一次同步失败直接 `parked`，用户得手动点「打开」。真正的 Bootloader 设备仍然会在 ~6 s 后停手。
+- **复测入口**：`node scripts/probes/verify-buglist-20261122.mjs`（14 条断言）与 `node scripts/probes/heavyload-20261122.mjs --seconds=180`（最重负载，8 条断言：链路 ready / 无错误提示 / 全部效果器仍开 / 录音出帧 + 回放 / 参数一直在变 / 无超时与 CRC 错 / 主线程最长 rAF < 1.5 s / 电平来源仍是音频输入）。探针结束都会用「复位全部参数」还原——**先看设备是否还活着再跑下一轮**。

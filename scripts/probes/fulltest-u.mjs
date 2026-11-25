@@ -443,10 +443,11 @@ async function main() {
 
     // ===== U2 一键场景 ======================================================
     const scenes = await cdp.evaluate(`window.__ft.consoleState()`);
-    check('U2.1 五个场景按钮顺序 安静房间→会议→播客→唱歌→自定义', scenes.scenes.join(',') === 'quiet,meeting,podcast,sing,custom', scenes.scenes);
+    check('U2.1 五个场景按钮顺序 安静房间→游戏→播客→唱歌→自定义', scenes.scenes.join(',') === 'quiet,game,podcast,sing,custom', scenes.scenes);
     const expected = {
       quiet: { gate: '-82', comp: '-18', tone: 'flat', enc: false, level: '1' },
-      meeting: { gate: '-41', comp: '-36', tone: 'vocal', enc: true, level: '2' },
+      // 2026-11-22 问题单第 7 条：会议 → 游戏（处理链数值不变）
+      game: { gate: '-41', comp: '-36', tone: 'vocal', enc: true, level: '2' },
       podcast: { gate: '-59', comp: '-42', tone: 'warm', enc: true, level: '1' },
       sing: { gate: '-73', comp: '-21', tone: 'bright', enc: false, level: '1' },
       custom: { gate: '-91', comp: '-60', tone: 'custom', enc: false, level: '1' },

@@ -88,7 +88,7 @@ describe('eq model', () => {
     model.setBand(2, { gain: Number.NaN, freq: Number.POSITIVE_INFINITY });
     expect(events).toHaveLength(0);
     expect(requireBand(model, 2).gain).toBe(-3.5);
-    expect(requireBand(model, 2).freq).toBe(215);
+    expect(requireBand(model, 2).freq).toBe(63);
   });
 
   it('resets gain and q on resetBandGain', () => {

@@ -14,7 +14,7 @@ internal static class Program
         {
             string dir = AppDomain.CurrentDomain.BaseDirectory;
             // 优先当前发布版本的 payload；发布新版本时改这一行即可（找不到就退回目录里最新的包）
-            string target = Path.Combine(dir, "MicStudio-1.1.3-portable.exe");
+            string target = Path.Combine(dir, "MicStudio-1.1.4-portable.exe");
             if (!File.Exists(target))
             {
                 string[] found = Directory.GetFiles(dir, "MicStudio-*-portable.exe");

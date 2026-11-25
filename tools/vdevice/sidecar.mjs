@@ -755,7 +755,7 @@ function main() {
   const ROUTES = Object.freeze({
     '/control/stats': 'GET',
     '/control/log': 'GET',
-    '/control/registers': 'POST',
+    '/control/registers': 'GET|POST',
     '/control/reset': 'POST',
     '/control/faults': 'POST',
     '/control/mode': 'POST',
@@ -770,7 +770,7 @@ function main() {
       sendJson(res, 404, { ok: false, error: `no route for ${url.pathname}` });
       return;
     }
-    if (req.method !== expected) {
+    if (!expected.split('|').includes(req.method)) {
       sendJson(res, 405, { ok: false, error: `${req.method} not allowed on ${url.pathname}` });
       return;
     }
@@ -780,6 +780,11 @@ function main() {
     }
     if (url.pathname === '/control/log') {
       sendJson(res, 200, entries);
+      return;
+    }
+    // 只读快照（Alpha v1.3.0 / SubStage 4.1）：回读校验需要读侧，不改任何寄存器
+    if (url.pathname === '/control/registers' && req.method === 'GET') {
+      sendJson(res, 200, { ok: true, registers: paramStack.snapshot() });
       return;
     }
     let body;

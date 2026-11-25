@@ -34,6 +34,12 @@ export const EQ_PRESETS: Record<Exclude<EqPresetId, 'custom'>, readonly number[]
 /** 自定义音色的初始曲线（全平），之后由用户在曲线上拖出来 */
 export const DEFAULT_CUSTOM_GAINS: readonly number[] = Object.freeze([0, 0, 0, 0, 0, 0, 0]);
 
+/**
+ * 软件打开时默认选中的音色（2026-11-22 问题单第 8 条「默认处于自定义模式」）。
+ * 选自定义是因为只有它能直接拖曲线，打开就能调；固定音色的曲线只读。
+ */
+export const DEFAULT_TONE: EqPresetId = 'custom';
+
 /** 当前可见段是否与某个固定风格一致（用于高亮；自定义曲线由调用方另判） */
 export function matchEqPreset(bands: readonly EqBand[], visibleCount: number): EqPresetId | null {
   for (const id of Object.keys(EQ_PRESETS) as Array<Exclude<EqPresetId, 'custom'>>) {

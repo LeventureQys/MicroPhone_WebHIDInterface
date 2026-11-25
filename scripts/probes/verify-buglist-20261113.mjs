@@ -253,8 +253,9 @@ async function main() {
     results.measurements.gains = consoleState.gains;
     await cdp.shot('01-console.png');
     check(
-      '一键场景顺序 安静房间-会议-播客-唱歌-自定义',
-      consoleState.scenes.map((item) => item.id).join(',') === 'quiet,meeting,podcast,sing,custom',
+      // 2026-11-22 问题单第 7 条：会议 → 游戏
+      '一键场景顺序 安静房间-游戏-播客-唱歌-自定义',
+      consoleState.scenes.map((item) => item.id).join(',') === 'quiet,game,podcast,sing,custom',
       consoleState.scenes.map((item) => item.name).join(' → '),
     );
     check(
@@ -477,6 +478,13 @@ async function main() {
     );
 
     // 2026-11-21 V0.3：三分频「旁通」换成三分频动态开关（`0x2075`），字段仍可编辑、值照常保存
+    // 2026-11-22 起产品默认是"关"，所以先确保它在开上，再点一下测"关掉后字段仍可编辑"
+    await cdp.evaluate(`(() => {
+      const input = document.querySelector('.modal-body [data-enable="drc3"] input[type="checkbox"]');
+      if (input && !input.checked) input.click();
+      return true;
+    })()`);
+    await wait(600);
     await cdp.evaluate(`document.querySelector('.modal-body [data-enable="drc3"] input[type="checkbox"]')?.click(); true`);
     await wait(700);
     const drcOff = await cdp.json(ADVANCED_SNAPSHOT);
@@ -645,12 +653,16 @@ async function main() {
     );
 
     // ---- 10. 自定义场景 -----------------------------------------------------
+    // 2026-11-22 起场景参数会「自动保存」：本探针前面改过噪声门/压缩器，那些改动已经记进
+    // 当前场景名下，所以先点场景「复位」把它清回出厂预设，再验证"自定义 = 中性处理 + 自定义曲线"
     await cdp.evaluate(`document.querySelector('.scene-btn[data-scene="custom"]')?.click(); true`);
-    await wait(1200);
+    await wait(900);
+    await cdp.evaluate(`document.querySelector('.scene-reset')?.click(); true`);
+    await wait(1500);
     const customScene = await cdp.json(CONSOLE_SNAPSHOT);
     await cdp.shot('06-custom-scene.png');
     check(
-      '「自定义」场景存在且应用中性处理 + 自定义曲线',
+      '「自定义」场景存在且应用中性处理 + 自定义曲线（场景复位后回到出厂值）',
       customScene.scenes.find((item) => item.id === 'custom')?.active === true &&
         customScene.macros.denoise?.value === '-91 dB' &&
         customScene.macros.evenness?.value === '-60 dB' &&

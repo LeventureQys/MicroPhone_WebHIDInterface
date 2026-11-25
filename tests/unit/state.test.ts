@@ -335,6 +335,10 @@ describe('AppStore', () => {
     expect(write).toHaveBeenCalledWith([{ id: 'noisegate.Enable', value: 0 }]);
 
     write.mockClear();
+    // 三分频动态的产品默认是关（2026-11-22 问题单第 6 条），所以这里先打开再关
+    store.setParam('drc3.Enable', 1);
+    expect(store.get().params['drc3.Enable']).toBe(1);
+    write.mockClear();
     store.setParam('drc3.Enable', 0);
     expect(store.get().params['drc3.Enable']).toBe(0);
     expect(store.get().params['drc3.low.ratio']).toBe(1);

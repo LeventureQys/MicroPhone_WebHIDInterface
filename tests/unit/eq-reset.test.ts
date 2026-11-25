@@ -4,11 +4,12 @@ import { DEFAULT_BANDS } from '../../src/renderer/src/domain/defaults';
 import { EQ_BAND_EDITABLE, EQ_BAND_TOTAL, EQ_TYPE_LABEL } from '../../src/renderer/src/eq/types';
 
 /**
- * 「均衡器复位」的落点固定为 2026-11-21 问题单第 12 条那张频段列表：
- * 1 HPF 50 / 2 LPF 20000 / 3–7 PEAK 215·1000·2000·5000·10000，增益全 0、Q 全 0.7。
- * 这**不是**参数表的出厂默认值（那条是 Band-3 −3.5 dB、Q 0.8/1.5/1.0/1.0），所以单独锁住。
+ * 「均衡器复位」的落点：2026-11-21 问题单第 12 条那张频段列表 +
+ * 2026-11-22 问题单第 2、3 条改过的默认频点（3–7 段 63 / 250 / 1k / 4k / 12.5k）。
+ * 7 段增益全 0、Q 全 0.7；这**不是**参数表的出厂默认值
+ * （那条是 Band-3 −3.5 dB、Q 0.8/1.5/1.0/1.0/0.7，频点 215/1000/2000/5000/10000），所以单独锁住。
  */
-describe('eq reset preset (buglist 2026-11-21 #12)', () => {
+describe('eq reset preset (buglist 2026-11-21 #12 + 2026-11-22 #2/#3)', () => {
   it('resets all seven editable bands to 0 dB and Q 0.7', () => {
     const bands = eqResetBands();
     expect(bands).toHaveLength(EQ_BAND_EDITABLE);
@@ -19,10 +20,10 @@ describe('eq reset preset (buglist 2026-11-21 #12)', () => {
     }
   });
 
-  it('keeps the register types and frequencies from the parameter table', () => {
+  it('keeps the types and the product default frequencies', () => {
     const bands = eqResetBands();
     expect(bands.map((band) => EQ_TYPE_LABEL[band.type])).toEqual(['HPF', 'LPF', 'PEAK', 'PEAK', 'PEAK', 'PEAK', 'PEAK']);
-    expect(bands.map((band) => band.freq)).toEqual([50, 20000, 215, 1000, 2000, 5000, 10000]);
+    expect(bands.map((band) => band.freq)).toEqual([50, 20000, 63, 250, 1000, 4000, 12500]);
     expect(bands.map((band) => band.index)).toEqual([0, 1, 2, 3, 4, 5, 6]);
   });
 

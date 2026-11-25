@@ -42,12 +42,13 @@ describe('value rules', () => {
 });
 
 describe('default bands', () => {
-  it('has 14 bands with the register table defaults up front', () => {
+  it('has 14 bands with the table types / gains and the product default frequencies', () => {
     expect(DEFAULT_BANDS).toHaveLength(14);
-    // 前 7 段来自寄存器表（HPF 50 Hz / LPF 20 kHz / 第 3 段 −3.5 dB），后 7 段保持本地平直默认
+    // 前 7 段：类型与增益取寄存器表（HPF 50 Hz / LPF 20 kHz / 第 3 段 −3.5 dB），
+    // 频点取 2026-11-22 问题单的产品默认；后 7 段保持本地平直默认
     expect(DEFAULT_BANDS.slice(0, 7).map((band) => band.type)).toEqual([4, 3, 0, 0, 0, 0, 0]);
     expect(DEFAULT_BANDS.slice(0, 7).map((band) => band.freq)).toEqual([
-      50, 20000, 215, 1000, 2000, 5000, 10000,
+      50, 20000, 63, 250, 1000, 4000, 12500,
     ]);
     expect(DEFAULT_BANDS.slice(7).map((band) => band.type)).toEqual([0, 0, 0, 0, 0, 0, 0]);
     for (const band of DEFAULT_BANDS) {
@@ -63,7 +64,7 @@ describe('default bands', () => {
   it('spreads the editable bands over the audio range', () => {
     const editable = DEFAULT_BANDS.slice(0, 7).map((band) => band.freq);
     expect(editable[0]).toBe(50);
-    expect(editable[6]).toBe(10000);
+    expect(editable[6]).toBe(12500);
     for (let i = 1; i < editable.length; i += 1) {
       expect(editable[i]).not.toBe(editable[i - 1]);
     }

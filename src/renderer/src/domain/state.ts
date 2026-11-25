@@ -6,7 +6,8 @@ import type { Lang } from '../i18n';
 import { currentLang, setLang as setI18nLang } from '../i18n';
 import { DEFAULT_BANDS, DEFAULT_PARAMS } from './defaults';
 import { findParam } from './params';
-import { DEFAULT_CUSTOM_GAINS, type EqPresetId } from './quick-controls';
+import { DEFAULT_CUSTOM_GAINS, DEFAULT_TONE, type EqPresetId } from './quick-controls';
+import type { SceneId } from './scenes';
 import { quantize } from './values';
 
 /** 事件名：'change' 携带完整快照，'param-changed' 携带 {id, value} */
@@ -51,6 +52,12 @@ export interface AppState {
    * 不能只靠曲线反推：自定义曲线默认全平，会和固定「原声」撞成同一条。
    */
   tone: EqPresetId | null;
+  /**
+   * 当前选中的场景（2026-11-22 起场景可逐项微调并自动保存）：
+   * 参数改动记到这个场景名下；`null` = 用户手动换过音色、离开了场景。
+   * 放在 store 里是为了语言切换重建工作台后选择不丢（与 `tone` 同一个理由）。
+   */
+  activeScene: SceneId | null;
   /** 均衡器旁通状态（噪声门 / 三分频动态改用各自的使能位参数） */
   bypass: BypassState;
 }
@@ -153,7 +160,10 @@ export class AppStore extends EventTarget {
       scene: initial?.scene ?? 'speech',
       sync: initial?.sync ?? 'idle',
       customEq: initial?.customEq ? [...initial.customEq] : DEFAULT_CUSTOM_GAINS,
-      tone: initial?.tone ?? null,
+      // 没传就按产品默认：软件打开时停在「自定义」音色（2026-11-22 问题单第 8 条）
+      tone: initial?.tone ?? DEFAULT_TONE,
+      // 与音色配套：打开即「自定义」场景，场景条也是这个高亮
+      activeScene: initial?.activeScene ?? 'custom',
       bypass: initial?.bypass ?? DEFAULT_BYPASS,
     };
     this._snapshot = snapshot(this._state);
@@ -258,6 +268,13 @@ export class AppStore extends EventTarget {
   setTone(tone: EqPresetId | null): void {
     if (this._state.tone === tone) return;
     this._state = { ...this._state, tone };
+    this._commit();
+  }
+
+  /** 记录当前场景（不下发；场景的参数由调用方经 `setParam` 写） */
+  setActiveScene(scene: SceneId | null): void {
+    if (this._state.activeScene === scene) return;
+    this._state = { ...this._state, activeScene: scene };
     this._commit();
   }
 

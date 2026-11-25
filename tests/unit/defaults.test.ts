@@ -1,18 +1,27 @@
 import { describe, expect, it } from 'vitest';
-import { DEFAULT_BANDS, DEFAULT_LANG, DEFAULT_PARAMS } from '../../src/renderer/src/domain/defaults';
+import {
+  DEFAULT_BANDS,
+  DEFAULT_LANG,
+  DEFAULT_PARAMS,
+  PRODUCT_BAND_FREQS,
+} from '../../src/renderer/src/domain/defaults';
 import { PARAMS } from '../../src/renderer/src/domain/params';
 import { findRegister, fromRaw, eqBandAddr } from '../../src/renderer/src/device/registers';
 import { EQ_BAND_TOTAL } from '../../src/renderer/src/eq/types';
 
-/** 设计文档 §5.3 的 EQ 默认表：type / freq / gain(dB) / q */
+/**
+ * 设计文档 §5.3 的 EQ 默认表：type / freq / gain(dB) / q。
+ * 频点取 2026-11-22 问题单的产品默认（3–7 段 63 / 250 / 1k / 4k / 12.5k），
+ * 类型 / 增益 / Q 仍来自参数表 V0.3。
+ */
 const EDITABLE_DEFAULTS = [
   { type: 4, freq: 50, gain: 0, q: 0.7 },
   { type: 3, freq: 20000, gain: 0, q: 0.7 },
-  { type: 0, freq: 215, gain: -3.5, q: 0.8 },
-  { type: 0, freq: 1000, gain: 0, q: 1.5 },
-  { type: 0, freq: 2000, gain: 0, q: 1.0 },
-  { type: 0, freq: 5000, gain: 0, q: 1.0 },
-  { type: 0, freq: 10000, gain: 0, q: 0.7 },
+  { type: 0, freq: 63, gain: -3.5, q: 0.8 },
+  { type: 0, freq: 250, gain: 0, q: 1.5 },
+  { type: 0, freq: 1000, gain: 0, q: 1.0 },
+  { type: 0, freq: 4000, gain: 0, q: 1.0 },
+  { type: 0, freq: 12500, gain: 0, q: 0.7 },
 ] as const;
 
 /** 内部段沿用 v1.0.0 的对数插值频点（round(20 × 10^position)） */
@@ -23,7 +32,9 @@ describe('default params', () => {
     expect(Object.isFrozen(DEFAULT_PARAMS)).toBe(true);
     expect(Object.keys(DEFAULT_PARAMS)).toHaveLength(46);
     for (const spec of PARAMS) {
-      expect(DEFAULT_PARAMS[spec.id]).toBe(spec.default);
+      // 唯一的产品覆盖：三分频动态默认关（2026-11-22 问题单第 6 条）
+      const expected = spec.id === 'drc3.Enable' ? 0 : spec.default;
+      expect(DEFAULT_PARAMS[spec.id], spec.id).toBe(expected);
     }
   });
 
@@ -50,11 +61,13 @@ describe('default params', () => {
     expect(DEFAULT_PARAMS['drc3.low.attackTime']).toBe(1);
     expect(DEFAULT_PARAMS['drc3.low.releaseTime']).toBe(5);
     expect(DEFAULT_PARAMS['hp.OnOff']).toBe(1);
-    // 参数表 V0.3 新增：灯效默认开、模式 0；噪声门与三分频动态默认使能
+    // 参数表 V0.3 新增：灯效默认开、模式 0；噪声门默认使能
     expect(DEFAULT_PARAMS['rgb.OnOff']).toBe(1);
     expect(DEFAULT_PARAMS['rgb.Mode']).toBe(0);
     expect(DEFAULT_PARAMS['noisegate.Enable']).toBe(1);
-    expect(DEFAULT_PARAMS['drc3.Enable']).toBe(1);
+    // 产品覆盖：参数表 G 列写 1，2026-11-22 问题单第 6 条要求默认关闭
+    expect(DEFAULT_PARAMS['drc3.Enable']).toBe(0);
+    expect(findRegister(0x2075)?.defaultRaw).toBe(1);
     expect(DEFAULT_LANG).toBe('zh');
   });
 });
@@ -67,7 +80,7 @@ describe('default eq bands', () => {
     );
   });
 
-  it('takes the first 7 bands from the register defaults', () => {
+  it('takes the first 7 band types, gains and Q from the register table', () => {
     EDITABLE_DEFAULTS.forEach((expected, index) => {
       const band = DEFAULT_BANDS[index];
       expect(band.index, `band ${index + 1} index`).toBe(index);
@@ -76,7 +89,7 @@ describe('default eq bands', () => {
       expect(band.gain, `band ${index + 1} gain`).toBeCloseTo(expected.gain, 6);
       expect(band.q, `band ${index + 1} q`).toBeCloseTo(expected.q, 6);
     });
-    // 逐段核对确实来自寄存器表 G 列，而不是另写一份字面量
+    // 逐段核对确实来自寄存器表 G 列，而不是另写一份字面量（频点除外，见下一条）
     for (let band = 0; band < 7; band += 1) {
       const gainSpec = findRegister(eqBandAddr(band, 'gain'));
       const qSpec = findRegister(eqBandAddr(band, 'q'));
@@ -86,8 +99,15 @@ describe('default eq bands', () => {
       expect(DEFAULT_BANDS[band].gain).toBe(fromRaw(gainSpec, gainSpec.defaultRaw));
       expect(DEFAULT_BANDS[band].q).toBe(fromRaw(qSpec, qSpec.defaultRaw));
       expect(DEFAULT_BANDS[band].type).toBe(findRegister(eqBandAddr(band, 'type'))?.defaultRaw);
-      expect(DEFAULT_BANDS[band].freq).toBe(findRegister(eqBandAddr(band, 'freq'))?.defaultRaw);
     }
+  });
+
+  it('uses the product default frequencies from the 2026-11-22 buglist', () => {
+    // 3–7 段按问题单改成 63 / 250 / 1k / 4k / 12.5k，表里仍是 215/1000/2000/5000/10000
+    expect([...PRODUCT_BAND_FREQS]).toEqual([50, 20000, 63, 250, 1000, 4000, 12500]);
+    expect(DEFAULT_BANDS.slice(0, 7).map((band) => band.freq)).toEqual([...PRODUCT_BAND_FREQS]);
+    expect(findRegister(eqBandAddr(2, 'freq'))?.defaultRaw).toBe(215);
+    expect(findRegister(eqBandAddr(5, 'freq'))?.defaultRaw).toBe(5000);
   });
 
   it('keeps the inner 7 bands on the local logarithmic defaults', () => {

@@ -23,9 +23,11 @@ function mount(api: typeof NO_API = NO_API) {
 
 const text = (node: Element | null): string => node?.textContent?.replace(/\s+/g, ' ').trim() ?? '';
 
-describe('console view (2026-11-13 revision)', () => {
+describe('console view', () => {
   beforeEach(() => {
     vi.stubGlobal('ResizeObserver', FakeResizeObserver);
+    // 场景与自定义曲线会落到 localStorage：用例之间不能互相污染
+    localStorage.clear();
     setLang('zh');
     document.body.innerHTML = '';
   });
@@ -34,7 +36,7 @@ describe('console view (2026-11-13 revision)', () => {
     const { view, destroy } = mount();
     expect(Array.from(view.querySelectorAll('.scene-btn')).map((node) => node.getAttribute('data-scene'))).toEqual([
       'quiet',
-      'meeting',
+      'game',
       'podcast',
       'sing',
       'custom',
@@ -42,6 +44,16 @@ describe('console view (2026-11-13 revision)', () => {
     const tones = Array.from(view.querySelectorAll('.tone-chip')).map((node) => text(node));
     expect(tones).toEqual(['原声', '人声增强', '温暖', '明亮', '自定义']);
     expect(tones).not.toContain('音乐');
+    destroy?.();
+  });
+
+  it('starts in the custom tone and highlights the custom scene (buglist 2026-11-22 #8)', () => {
+    const { store, view, destroy } = mount();
+    expect(store.get().tone).toBe('custom');
+    expect(view.querySelector('.tone-chip[data-tone="custom"]')?.getAttribute('aria-pressed')).toBe('true');
+    expect(view.querySelector('.scene-btn[data-scene="custom"]')?.getAttribute('aria-pressed')).toBe('true');
+    // 「自定义」是唯一能拖曲线的音色，一进来就该可用
+    expect(view.querySelector<HTMLButtonElement>('.console-eq-reset')?.disabled).toBe(false);
     destroy?.();
   });
 
@@ -135,17 +147,62 @@ describe('console view (2026-11-13 revision)', () => {
     destroy?.();
   });
 
+  it('keeps every threshold toggle right after the label so it never jumps (buglist 2026-11-22 #1)', () => {
+    const { view, destroy } = mount();
+    for (const key of ['denoise', 'evenness', 'limiter']) {
+      const head = view.querySelector(`[data-macro="${key}"] .pfield-head`);
+      const order = Array.from(head?.children ?? []).map((node) => node.className);
+      // 标题 → 开关 → 读数：开关宽度固定、读数靠右，读数变宽也不会把开关推走
+      expect(order[0]).toContain('pfield-label');
+      expect(order[1]).toContain('macro-toggle');
+      expect(order[2]).toContain('pfield-value');
+    }
+    destroy?.();
+  });
+
+  it('reflects the scene value changes made from the quick switches', () => {
+    const { store, view, destroy } = mount();
+    // 主界面直接改压缩器阈值：改动落进 store，高级参数与场景都读同一个参数
+    const range = view.querySelector<HTMLInputElement>('[data-macro="evenness"] input[type="range"]');
+    range!.value = '-24';
+    range!.dispatchEvent(new Event('input', { bubbles: true }));
+    expect(store.get().params['comp.Threshold']).toBe(-24);
+    destroy?.();
+  });
+
   it('keeps the limiter threshold writable and leaves one switch per module', () => {
     const { store, view, destroy } = mount();
-    // 限幅器开关搬进「快速调音」后，「快捷开关」只剩环境降噪一组
-    const quickSwitches = view.querySelectorAll('.console-middle > .card:last-child .switch-row');
-    expect(quickSwitches).toHaveLength(1);
-    expect(text(quickSwitches[0]?.querySelector('.switch-label') ?? null)).toBe('环境降噪');
+    // 「快捷开关」卡：环境降噪 + 灯效（灯效 2026-11-22 上主页），限幅器只有一个开关（在快速调音里）
+    const quickLabels = Array.from(
+      view.querySelectorAll('.console-middle > .card:last-child .switch-label'),
+    ).map((node) => text(node));
+    expect(quickLabels).toEqual(['环境降噪', '灯效']);
+    expect(view.querySelectorAll('[data-param="limit.Enable"]')).toHaveLength(1);
     const range = view.querySelector<HTMLInputElement>('[data-macro="limiter"] input[type="range"]');
     expect(range).not.toBeNull();
     range!.value = '-12';
     range!.dispatchEvent(new Event('input', { bubbles: true }));
     expect(store.get().params['limit.Threshold']).toBe(-12);
+    destroy?.();
+  });
+
+  it('puts the lighting switch and mode on the main screen (buglist 2026-11-22 #5)', () => {
+    const { store, view, destroy } = mount();
+    const lightSwitch = view.querySelector<HTMLElement>('.switch-item--light [data-param="rgb.OnOff"]');
+    expect(text(lightSwitch?.querySelector('.switch-label') ?? null)).toBe('灯效');
+    const mode = view.querySelectorAll<HTMLElement>('.switch-item--light [data-param="rgb.Mode"] .seg-btn');
+    expect(Array.from(mode).map((node) => node.dataset.value)).toEqual(['0', '1', '2', '3', '4', '5', '6', '7']);
+
+    // 与高级参数里的灯效是同一个参数 id：主界面改 → store 变 → 高级参数回填
+    lightSwitch?.querySelector<HTMLInputElement>('input')?.click();
+    expect(store.get().params['rgb.OnOff']).toBe(0);
+    mode[5].click();
+    expect(store.get().params['rgb.Mode']).toBe(5);
+    // 反向：外部（高级参数）改动回填主界面
+    store.setParam('rgb.Mode', 2);
+    expect(
+      view.querySelector('.switch-item--light [data-param="rgb.Mode"] .seg-btn.is-active')?.getAttribute('data-value'),
+    ).toBe('2');
     destroy?.();
   });
 
@@ -163,8 +220,9 @@ describe('console view (2026-11-13 revision)', () => {
     const { store, view, destroy } = mount();
     const reset = view.querySelector<HTMLButtonElement>('.console-eq-reset');
     expect(reset).not.toBeNull();
-    expect(reset?.disabled).toBe(true);
-    expect(reset?.getAttribute('aria-disabled')).toBe('true');
+    // 软件打开默认就是「自定义」（2026-11-22 问题单第 8 条），因此一进来就可用
+    expect(reset?.disabled).toBe(false);
+    expect(reset?.getAttribute('aria-disabled')).toBe('false');
 
     view.querySelector<HTMLElement>('.tone-chip[data-tone="flat"]')?.click();
     expect(reset?.disabled).toBe(true);
@@ -182,7 +240,8 @@ describe('console view (2026-11-13 revision)', () => {
       expect(bands[index].gain).toBe(0);
       expect(bands[index].q).toBe(0.7);
     }
-    expect(bands.map((band) => band.freq).slice(0, 7)).toEqual([50, 20000, 215, 1000, 2000, 5000, 10000]);
+    // 频点取产品默认（2026-11-22 问题单第 2、3 条）
+    expect(bands.map((band) => band.freq).slice(0, 7)).toEqual([50, 20000, 63, 250, 1000, 4000, 12500]);
     expect(store.get().tone).toBe('custom');
     // 自定义曲线也一起被复位，下一次点「自定义」不会把脏曲线带回来
     expect(store.get().customEq).toEqual([0, 0, 0, 0, 0, 0, 0]);
@@ -193,6 +252,63 @@ describe('console view (2026-11-13 revision)', () => {
     const { view, destroy } = mount();
     const labels = Array.from(view.querySelectorAll('.console-gain-label > span:first-child')).map((node) => text(node));
     expect(labels).toEqual(['麦克风增益', '耳机音量']);
+    destroy?.();
+  });
+
+  it('saves per-scene tweaks and resets only the selected scene (buglist 2026-11-22 #9)', () => {
+    const { store, view, destroy } = mount();
+    const scene = (id: string): HTMLElement | null => view.querySelector<HTMLElement>(`.scene-btn[data-scene="${id}"]`);
+
+    scene('game')?.click();
+    expect(store.get().params['noisegate.threshold_db']).toBe(-41);
+    expect(store.get().params['comp.Threshold']).toBe(-36);
+
+    // 微调压缩器阈值：算「游戏」场景的改动，自动保存
+    const range = view.querySelector<HTMLInputElement>('[data-macro="evenness"] input[type="range"]');
+    range!.value = '-28';
+    range!.dispatchEvent(new Event('input', { bubbles: true }));
+    expect(store.get().params['comp.Threshold']).toBe(-28);
+
+    // 切别的场景再切回来：微调还在
+    scene('podcast')?.click();
+    expect(store.get().params['comp.Threshold']).toBe(-42);
+    scene('game')?.click();
+    expect(store.get().params['comp.Threshold']).toBe(-28);
+
+    // 复位：只把当前场景恢复出厂预设
+    const reset = view.querySelector<HTMLButtonElement>('.scene-reset');
+    expect(reset?.disabled).toBe(false);
+    reset?.click();
+    expect(store.get().params['comp.Threshold']).toBe(-36);
+    expect(store.get().params['noisegate.threshold_db']).toBe(-41);
+    destroy?.();
+  });
+
+  it('remembers per-scene tweaks across a remount', () => {
+    const first = mount();
+    first.view.querySelector<HTMLElement>('.scene-btn[data-scene="sing"]')?.click();
+    const range = first.view.querySelector<HTMLInputElement>('[data-macro="denoise"] input[type="range"]');
+    range!.value = '-66';
+    range!.dispatchEvent(new Event('input', { bubbles: true }));
+    expect(first.store.get().params['noisegate.threshold_db']).toBe(-66);
+    first.destroy?.();
+    document.body.innerHTML = '';
+
+    const second = mount();
+    second.view.querySelector<HTMLElement>('.scene-btn[data-scene="sing"]')?.click();
+    expect(second.store.get().params['noisegate.threshold_db']).toBe(-66);
+    second.destroy?.();
+  });
+
+  it('drops the scene highlight when the tone is changed by hand', () => {
+    const { store, view, destroy } = mount();
+    view.querySelector<HTMLElement>('.scene-btn[data-scene="quiet"]')?.click();
+    expect(view.querySelector('.scene-btn[data-scene="quiet"]')?.getAttribute('aria-pressed')).toBe('true');
+    view.querySelector<HTMLElement>('.tone-chip[data-tone="bright"]')?.click();
+    expect(store.get().tone).toBe('bright');
+    expect(view.querySelector('.scene-btn[data-scene="quiet"]')?.getAttribute('aria-pressed')).toBe('false');
+    // 没有场景就不给复位（复位的是"当前场景"）
+    expect(view.querySelector<HTMLButtonElement>('.scene-reset')?.disabled).toBe(true);
     destroy?.();
   });
 });

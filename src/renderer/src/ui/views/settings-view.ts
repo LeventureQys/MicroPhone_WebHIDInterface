@@ -16,6 +16,7 @@ import {
   type ChannelConfigStore,
   type ChannelKind,
 } from '../../domain/channel-config';
+import { EQ_BAND_COUNT } from '../../device/registers';
 import { DEFAULT_BANDS, DEFAULT_PARAMS } from '../../domain/defaults';
 import { PARAMS } from '../../domain/params';
 import { DEFAULT_CUSTOM_GAINS } from '../../domain/quick-controls';
@@ -368,17 +369,78 @@ export function createSettingsView(store: AppStore, options?: SettingsViewOption
   let armed = false;
   let armedTimer: number | null = null;
   let doneTimer: number | null = null;
+  let resetting = false;
 
   const disarm = (): void => {
     armed = false;
     if (armedTimer !== null) window.clearTimeout(armedTimer);
     armedTimer = null;
     resetButton.classList.remove('is-armed');
-    resetButton.textContent = t('settings.resetAll');
-    resetButton.disabled = false;
+    if (!resetting) {
+      resetButton.textContent = t('settings.resetAll');
+      resetButton.disabled = false;
+    }
+  };
+
+  const sleep = (ms: number): Promise<void> =>
+    new Promise((resolve) => {
+      window.setTimeout(resolve, ms);
+    });
+
+  /**
+   * 分批写默认值（2026-11-22 真机实测）：真机每写一项都可能落 Flash，
+   * 46 项挤在一帧里发出去会把固件压住——整帧跨两个 USB 报告，设备还来不及 ACK 下一条。
+   * 因此按 `RESET_BATCH` 项一批、批间隔大于写合并窗口，让每批单独成一帧；
+   * 7 段 EQ 同样一段一次。模拟通道没有真实设备，不做等待（保持原来的瞬时复位）。
+   */
+  const RESET_BATCH = 6;
+  const RESET_BATCH_GAP_MS = 320;
+
+  const runReset = async (): Promise<void> => {
+    resetting = true;
+    resetButton.disabled = true;
+    resetButton.textContent = t('settings.resetRunning');
+    const gap = store.channelKind() === 'webhid' ? RESET_BATCH_GAP_MS : 0;
+    try {
+      // 先取消旁通：旁通模块的参数要按快照恢复，若放在复位之后会把刚写回的默认值覆盖掉
+      for (const module of BYPASS_MODULES) store.setBypass(module, false);
+      const writable = PARAMS.filter((spec) => !spec.readonly);
+      for (let index = 0; index < writable.length; index += RESET_BATCH) {
+        for (const spec of writable.slice(index, index + RESET_BATCH)) {
+          const value = DEFAULT_PARAMS[spec.id];
+          if (value === undefined) {
+            console.warn('[settings] missing default for', spec.id);
+            continue;
+          }
+          store.setParam(spec.id, value);
+        }
+        // 设备已经不应答时别继续压：再发只会把链路彻底打成 error
+        if (store.get().sync === 'error') break;
+        if (gap > 0) await sleep(gap);
+      }
+      if (store.get().sync !== 'error') {
+        for (let band = 0; band < EQ_BAND_COUNT; band += 1) {
+          const target = DEFAULT_BANDS[band];
+          if (!target) continue;
+          store.setBands(
+            store.get().bands.map((item, index) => (index === band ? { ...target } : { ...item })),
+          );
+          if (gap > 0) await sleep(gap);
+        }
+        store.setCustomEq(DEFAULT_CUSTOM_GAINS);
+      }
+      resetButton.textContent = t('settings.resetDone');
+    } finally {
+      resetting = false;
+      doneTimer = window.setTimeout(() => {
+        resetButton.disabled = false;
+        resetButton.textContent = t('settings.resetAll');
+      }, 1500);
+    }
   };
 
   resetButton.addEventListener('click', () => {
+    if (resetting) return;
     if (!armed) {
       armed = true;
       resetButton.classList.add('is-armed');
@@ -386,27 +448,8 @@ export function createSettingsView(store: AppStore, options?: SettingsViewOption
       armedTimer = window.setTimeout(disarm, 4000);
       return;
     }
-
     disarm();
-    // 先取消旁通：旁通模块的参数要按快照恢复，若放在复位之后会把刚写回的默认值覆盖掉
-    for (const module of BYPASS_MODULES) store.setBypass(module, false);
-    for (const spec of PARAMS) {
-      if (spec.readonly) continue;
-      const value = DEFAULT_PARAMS[spec.id];
-      if (value === undefined) {
-        console.warn('[settings] missing default for', spec.id);
-        continue;
-      }
-      store.setParam(spec.id, value);
-    }
-    store.setBands(DEFAULT_BANDS);
-    store.setCustomEq(DEFAULT_CUSTOM_GAINS);
-    resetButton.textContent = t('settings.resetDone');
-    resetButton.disabled = true;
-    doneTimer = window.setTimeout(() => {
-      resetButton.disabled = false;
-      resetButton.textContent = t('settings.resetAll');
-    }, 1500);
+    void runReset();
   });
 
   dataCard.body.append(resetButton);

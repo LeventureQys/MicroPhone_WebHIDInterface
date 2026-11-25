@@ -300,7 +300,7 @@ async function run1() {
 
   // 场景
   out.scenes = [];
-  for (const scene of ['meeting', 'podcast', 'sing', 'quiet']) {
+  for (const scene of ['game', 'podcast', 'sing', 'quiet']) {
     await cdp.evaluate(`document.querySelector('.scene-btn[data-scene="${scene}"]')?.click(); true`);
     await wait(1500);
     const snap = await cdp.json(CONSOLE_SNAPSHOT);

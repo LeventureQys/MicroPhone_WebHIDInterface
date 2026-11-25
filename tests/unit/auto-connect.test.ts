@@ -107,6 +107,7 @@ class FakeLink implements AutoConnectLink {
     errorCode: null,
   };
   readonly attachments: string[] = [];
+  private readonly listeners = new Set<() => void>();
 
   getState(): LinkState {
     return {
@@ -121,6 +122,20 @@ class FakeLink implements AutoConnectLink {
     };
   }
 
+  onChange(cb: () => void): () => void {
+    this.listeners.add(cb);
+    return () => {
+      this.listeners.delete(cb);
+    };
+  }
+
+  /** 测试里模拟"别的路径把链路连上了"（用户手动连接 / 会话恢复） */
+  emitReady(): void {
+    this.status = 'ready';
+    this.errorCode = null;
+    for (const cb of [...this.listeners]) cb();
+  }
+
   async attach(deviceId: string): Promise<void> {
     this.attachments.push(deviceId);
     this.status = 'connecting';
@@ -129,7 +144,11 @@ class FakeLink implements AutoConnectLink {
   }
 }
 
-function build(options: { readonly intervalMs?: number; readonly maxAttempts?: number } = {}) {
+function build(options: {
+  readonly intervalMs?: number;
+  readonly maxAttempts?: number;
+  readonly coldSyncRetries?: number;
+} = {}) {
   const session = new FakeSession();
   const link = new FakeLink();
   const events: string[] = [];
@@ -139,6 +158,7 @@ function build(options: { readonly intervalMs?: number; readonly maxAttempts?: n
     timers: idleTimers(),
     intervalMs: options.intervalMs ?? 100,
     maxAttempts: options.maxAttempts ?? 3,
+    ...(options.coldSyncRetries === undefined ? {} : { coldSyncRetries: options.coldSyncRetries }),
     onEvent: (message) => events.push(message),
   });
   return { session, link, connector, events };
@@ -249,19 +269,26 @@ describe('AutoConnector', () => {
     expect(link.attachments).toHaveLength(4);
   });
 
-  it('parks immediately when parameter sync fails (device stuck in update mode)', async () => {
-    const { session, link, connector } = build();
+  it('retries a cold device a couple of times before parking (stuck in update mode)', async () => {
+    const { session, link, connector } = build({ coldSyncRetries: 2 });
     session.probes = [summary()];
     link.afterAttach = { status: 'error', errorCode: 'sync' };
 
+    // 设备刚复位回来时 USB 已枚举、Modbus 还没起来：第一次同步失败不算数
     await connector.tickOnce();
     expect(link.attachments).toHaveLength(1);
-    expect(connector.state().parked).toBe(true);
+    expect(connector.state().parked).toBe(false);
+    await connector.tickOnce();
+    expect(link.attachments).toHaveLength(2);
+    expect(connector.state().parked).toBe(false);
 
-    // 停在升级模式的设备自动重连永远不会成功，不能一直摸
+    // 两次冷重试都失败：当成停在升级模式，不再对着它空转
+    await connector.tickOnce();
+    expect(link.attachments).toHaveLength(3);
+    expect(connector.state().parked).toBe(true);
     await connector.tickOnce();
     await connector.tickOnce();
-    expect(link.attachments).toHaveLength(1);
+    expect(link.attachments).toHaveLength(3);
   });
 
   // ---- 掉线后自动重连（用户要求：丢失了连接就要尝试重新连接）--------------------
@@ -345,6 +372,72 @@ describe('AutoConnector', () => {
     expect(connector.state().parked).toBe(true);
 
     // 停手后不再对着设备空转；拔插一次或手动连接才会重新武装
+    const before = link.attachments.length;
+    await connector.tickOnce();
+    expect(link.attachments).toHaveLength(before);
+  });
+
+  it('gives a device that rebooted mid-session two cold sync retries before parking', async () => {
+    const { session, link, connector, events } = build({ coldSyncRetries: 2 });
+    session.probes = [summary()];
+    await connector.tickOnce();
+    expect(link.getState().status).toBe('ready');
+
+    // 固件把参数落盘后自己复位：在 USB 上看起来就是"拔掉再插回"，device id 也变了
+    link.status = 'error';
+    link.errorCode = 'device';
+    session.probes = [];
+    await connector.tickOnce();
+
+    session.probes = [summary({ id: 'native-0a67-0010-6' })];
+    link.afterAttach = { status: 'error', errorCode: 'sync' };
+    await connector.tickOnce();
+    expect(link.attachments).toHaveLength(2);
+    // 曾经连上过的设备不能一次同步失败就被判成"停在升级模式"
+    expect(connector.state().parked).toBe(false);
+
+    link.afterAttach = { status: 'ready', errorCode: null };
+    await connector.tickOnce();
+    expect(link.getState().status).toBe('ready');
+    expect(events.some((line) => line.includes('还没有准备好应答参数同步'))).toBe(true);
+  });
+
+  it('remembers a link that was connected outside the background connector', async () => {
+    const { session, link, connector, events } = build({ coldSyncRetries: 2 });
+    connector.start();
+    // 用户手动连接（或会话恢复）先连上了，后台 tick 还没跑过
+    link.emitReady();
+    expect(link.getState().status).toBe('ready');
+
+    // 固件复位：设备消失、带着新 id 回来，同步失败
+    link.status = 'error';
+    link.errorCode = 'device';
+    session.probes = [];
+    await connector.tickOnce();
+    session.probes = [summary({ id: 'native-0a67-0010-7' })];
+    link.afterAttach = { status: 'error', errorCode: 'sync' };
+    await connector.tickOnce();
+
+    expect(connector.state().parked).toBe(false);
+    expect(events.some((line) => line.includes('还没有准备好应答参数同步'))).toBe(true);
+  });
+
+  it('parks once the cold retries are used up', async () => {
+    const { session, link, connector } = build({ coldSyncRetries: 2 });
+    session.probes = [summary()];
+    await connector.tickOnce();
+
+    link.status = 'error';
+    session.probes = [];
+    await connector.tickOnce();
+    session.probes = [summary()];
+    link.afterAttach = { status: 'error', errorCode: 'sync' };
+    await connector.tickOnce();
+    await connector.tickOnce();
+    expect(connector.state().parked).toBe(false);
+    await connector.tickOnce();
+    expect(connector.state().parked).toBe(true);
+
     const before = link.attachments.length;
     await connector.tickOnce();
     expect(link.attachments).toHaveLength(before);

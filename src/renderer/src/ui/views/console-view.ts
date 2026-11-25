@@ -1,16 +1,29 @@
 import type { DeviceSnapshot, LevelFrame, Transport } from '../../device/transport';
 import { withEqReset } from '../../domain/eq-reset';
 import { findParam, type ParamSpec } from '../../domain/params';
-import { matchScene, scenePatch, SCENES, type SceneId, type ScenePreset } from '../../domain/scenes';
+import { matchScene, SCENES, type SceneId, type ScenePreset } from '../../domain/scenes';
 import {
+  clearSceneOverride,
+  loadCustomEq,
+  loadSceneOverrides,
+  recordSceneGains,
+  recordSceneParams,
+  saveCustomEq,
+  saveSceneOverrides,
+  sceneGains,
+  sceneParams,
+  type SceneOverrides,
+} from '../../domain/scene-presets';
+import {
+  DEFAULT_CUSTOM_GAINS,
   EQ_PRESETS,
   gainsOf,
   matchEqPreset,
   matchesGains,
   type EqPresetId,
 } from '../../domain/quick-controls';
-import type { AppState, AppStore, LocalErrorDetail } from '../../domain/state';
-import { LOCAL_ERROR_EVENT } from '../../domain/state';
+import type { AppState, AppStore, LocalErrorDetail, ParamChangedDetail } from '../../domain/state';
+import { LOCAL_ERROR_EVENT, PARAM_CHANGED_EVENT } from '../../domain/state';
 import { formatValue } from '../../domain/values';
 import { computeCurve } from '../../eq/curve';
 import { attachEqInteractions } from '../../eq/interactions';
@@ -48,7 +61,7 @@ const TONES: EqPresetId[] = ['flat', 'vocal', 'warm', 'bright', 'custom'];
 /** 映射器与 drawEq 必须用同一套边距，否则网格和曲线会错开 */
 const EQ_MARGIN = { top: 26, right: 32, bottom: 28, left: 40 };
 const SCENE_ICON: Record<SceneId, IconName> = {
-  meeting: 'meeting',
+  game: 'game',
   podcast: 'podcast',
   sing: 'sing',
   quiet: 'quiet',
@@ -105,6 +118,21 @@ export function createConsoleView(
   api: ConsoleApi,
   deviceInfo?: ConsoleDeviceInfo,
 ): HTMLElement {
+  /**
+   * 软件打开默认停在「自定义」音色（2026-11-22 问题单第 8 条）：把上次存下来的曲线套上，
+   * 一进来看到的、能拖的就是用户自己那条。连上设备后仍由回读值接管
+   * （`applyBands` 不发帧，不会把本地曲线写回设备）。
+   */
+  const storedCustomEq = loadCustomEq();
+  if (storedCustomEq) {
+    store.setCustomEq(storedCustomEq);
+    const base = store.get().bands;
+    store.setBands(
+      base.map((band, index) =>
+        index < storedCustomEq.length ? { ...band, gain: storedCustomEq[index] } : { ...band },
+      ),
+    );
+  }
   const state = store.get();
 
   const root = document.createElement('div');
@@ -199,6 +227,16 @@ export function createConsoleView(
     sceneButtons.set(scene.id, button);
     sceneRow.append(button);
   }
+  // 场景复位（2026-11-22 问题单第 9 条）：只复位当前选中的那个场景，
+  // 清掉它自动保存过的改动，回到 `SCENES` 里的出厂预设
+  const sceneReset = document.createElement('button');
+  sceneReset.type = 'button';
+  sceneReset.className = 'scene-reset';
+  sceneReset.append(icon('reset', 14), element('span', '', t('console.scene.reset')));
+  sceneReset.title = t('console.scene.resetHint');
+  sceneReset.setAttribute('aria-label', t('console.scene.resetHint'));
+  sceneReset.addEventListener('click', () => resetScene());
+  sceneRow.append(sceneReset);
   sceneCard.body.append(sceneRow);
 
   // ---- 快速调音 ------------------------------------------------------------
@@ -372,6 +410,8 @@ export function createConsoleView(
     label: t('console.enc'),
     onChange: (checked) => store.setParam('enc.OnOff', checked ? 1 : 0),
   });
+  // 与三个输入开关一致：带 data-param，探针/验收按参数 id 定位，不靠文案
+  encSwitch.dataset.param = 'enc.OnOff';
   const encLevel = segmented<number>({
     options: [0, 1, 2, 3].map((value) => ({ value, label: String(value) })),
     value: state.params['enc.Level'] ?? 1,
@@ -383,7 +423,34 @@ export function createConsoleView(
   encLevelRow.append(element('span', 'switch-sub-label', t('console.enc.level')), encLevel);
   encGroup.append(encSwitch, encLevelRow);
 
-  switchGrid.append(encGroup);
+  /**
+   * 灯效搬上主界面（2026-11-22 问题单第 5 条）：开关 + 0–7 模式。
+   *
+   * 两项与高级参数里的「灯效」是同一个参数 id（`rgb.OnOff` / `rgb.Mode`），
+   * 因此两处天然联动，不需要额外同步；8 个模式按钮等宽铺满一行，
+   * 弯道比一根滑杆少一步（演示时直接点数字）。
+   */
+  const lightGroup = document.createElement('div');
+  lightGroup.className = 'switch-item switch-item--light';
+  const lightSwitch = switchControl({
+    checked: (state.params['rgb.OnOff'] ?? 0) === 1,
+    label: t('console.lighting'),
+    onChange: (checked) => store.setParam('rgb.OnOff', checked ? 1 : 0),
+  });
+  lightSwitch.dataset.param = 'rgb.OnOff';
+  const lightMode = segmented<number>({
+    options: Array.from({ length: 8 }, (_, value) => ({ value, label: String(value) })),
+    value: state.params['rgb.Mode'] ?? 0,
+    onChange: (value) => store.setParam('rgb.Mode', value),
+  });
+  lightMode.classList.add('segmented--modes');
+  lightMode.dataset.param = 'rgb.Mode';
+  const lightModeRow = document.createElement('div');
+  lightModeRow.className = 'switch-sub';
+  lightModeRow.append(element('span', 'switch-sub-label', t('console.lighting.mode')), lightMode);
+  lightGroup.append(lightSwitch, lightModeRow);
+
+  switchGrid.append(encGroup, lightGroup);
   switchCard.body.append(switchGrid);
 
   const middle = document.createElement('div');
@@ -485,17 +552,54 @@ export function createConsoleView(
   // ---- 场景 / 音色 应用与高亮 ---------------------------------------------
   /** 当前高亮的音色；只有「自定义」允许直接拖曲线（2026-11-13 需求） */
   let activeTone: EqPresetId | null = null;
+  /** 场景自己正在写 store：这时的 setParam 是"应用预设"，不能被当成用户改动存起来 */
+  let applyingScene = false;
+  let sceneOverrides: SceneOverrides = loadSceneOverrides();
+
+  /**
+   * 应用一个场景：写出它保存过的参数与曲线（没改过的项就是出厂预设），
+   * 并把它设为当前场景。整个过程用 `applyingScene` 压住自动保存，避免把预设
+   * 当成"用户刚改的值"再存一遍（那样复位后就再也回不到出厂值）。
+   */
+  function applySceneValues(id: SceneId, opts: { resetCustomCurve?: boolean } = {}): void {
+    const scene = SCENES.find((item) => item.id === id);
+    if (!scene) return;
+    applyingScene = true;
+    try {
+      if (opts.resetCustomCurve && id === 'custom') {
+        // 「自定义」场景的默认曲线就是那条平直线：复位连用户拖过的曲线一起清掉
+        store.setCustomEq(DEFAULT_CUSTOM_GAINS);
+        saveCustomEq(DEFAULT_CUSTOM_GAINS);
+      }
+      const params = sceneParams(id, sceneOverrides);
+      const gains = sceneGains(id, sceneOverrides, store.get().customEq);
+      store.setTone(scene.tone);
+      for (const [paramId, value] of Object.entries(params)) store.setParam(paramId, value);
+      const bands = store.get().bands;
+      store.setBands(
+        bands.map((band, index) =>
+          index < gains.length ? { ...band, gain: gains[index] } : { ...band },
+        ),
+      );
+      if (scene.tone === 'custom') store.setCustomEq(gains);
+    } finally {
+      applyingScene = false;
+    }
+    store.setActiveScene(id);
+    syncScene(store.get());
+  }
 
   function applyScene(scene: ScenePreset): void {
-    const patch = scenePatch(scene, store.get().customEq);
-    store.setTone(scene.tone);
-    for (const [id, value] of Object.entries(patch.params)) store.setParam(id, value);
-    const bands = store.get().bands;
-    store.setBands(
-      bands.map((band, index) =>
-        index < patch.gains.length ? { ...band, gain: patch.gains[index] } : { ...band },
-      ),
-    );
+    applySceneValues(scene.id);
+  }
+
+  /** 场景复位：清掉这个场景自动保存的改动，再按出厂预设应用一遍（问题单第 9 条） */
+  function resetScene(): void {
+    const id = store.get().activeScene;
+    if (!id) return;
+    sceneOverrides = clearSceneOverride(sceneOverrides, id);
+    saveSceneOverrides(sceneOverrides);
+    applySceneValues(id, { resetCustomCurve: true });
   }
 
   function toneGains(id: EqPresetId): readonly number[] {
@@ -503,6 +607,8 @@ export function createConsoleView(
   }
 
   function applyTone(id: EqPresetId): void {
+    // 手动换音色就是离开场景：场景的曲线由场景自己管，这里不再往场景里记
+    store.setActiveScene(null);
     store.setTone(id);
     const gains = toneGains(id);
     const bands = store.get().bands;
@@ -511,11 +617,13 @@ export function createConsoleView(
         index < gains.length ? { ...band, gain: gains[index] } : { ...band },
       ),
     );
+    syncScene(store.get());
   }
 
   /**
    * 「均衡器复位」：只允许在「自定义」音色下用（问题单 13），
-   * 复位后的频段值按问题单手写的那张表——7 段增益全 0、Q 全 0.7（问题单 12）。
+   * 复位后的频段值按问题单手写的那张表——7 段增益全 0、Q 全 0.7（问题单 12），
+   * 频点取产品默认（2026-11-22 问题单第 2、3 条：3–7 段 63/250/1k/4k/12.5k）。
    * 曲线/段值的刷新走 `store` → `syncBands`，这里不直接动 model。
    */
   function resetEq(): void {
@@ -524,15 +632,45 @@ export function createConsoleView(
     store.setTone('custom');
     store.setBands(bands);
     store.setCustomEq(gainsOf(bands));
+    persistCustomGains(bands);
   }
 
+  /** 用户拖过的自定义曲线要跨重启保留，并且记到当前场景名下（问题单第 9 条） */
+  function persistCustomGains(bands: readonly EqBand[]): void {
+    if (activeTone !== 'custom') return;
+    const gains = gainsOf(bands);
+    saveCustomEq(gains);
+    const sceneId = store.get().activeScene;
+    if (applyingScene || !sceneId) return;
+    sceneOverrides = recordSceneGains(sceneOverrides, sceneId, gains);
+    saveSceneOverrides(sceneOverrides);
+  }
+
+  /** 主界面/高级参数改过的参数都记在当前场景名下：复位一次就全回到出厂预设 */
+  const onParamChanged = (event: Event): void => {
+    const sceneId = store.get().activeScene;
+    if (applyingScene || !sceneId) return;
+    const detail = (event as CustomEvent<ParamChangedDetail>).detail;
+    if (!detail || typeof detail.id !== 'string') return;
+    const next = recordSceneParams(sceneOverrides, sceneId, { [detail.id]: detail.value });
+    if (next === sceneOverrides) return;
+    sceneOverrides = next;
+    saveSceneOverrides(sceneOverrides);
+  };
+  store.addEventListener(PARAM_CHANGED_EVENT, onParamChanged);
+
   function syncScene(stateNow: ReturnType<AppStore['get']>): void {
-    const active = matchScene(stateNow.params, stateNow.bands, stateNow.customEq, stateNow.tone);
+    // 显式选中的场景优先（它可能已经被微调过，参数不再与出厂值一致）；
+    // 没选场景（用户手动换了音色）时才按参数反推
+    const active = stateNow.activeScene ?? matchScene(stateNow.params, stateNow.bands, stateNow.customEq, stateNow.tone);
     for (const [id, button] of sceneButtons) {
       const on = id === active;
       button.classList.toggle('is-active', on);
       button.setAttribute('aria-pressed', String(on));
     }
+    const canReset = stateNow.activeScene !== null;
+    if (sceneReset.disabled !== !canReset) sceneReset.disabled = !canReset;
+    sceneReset.setAttribute('aria-disabled', String(!canReset));
   }
 
   function syncTone(stateNow: ReturnType<AppStore['get']>): void {
@@ -641,7 +779,10 @@ export function createConsoleView(
       renderCanvas();
       const bands = model.allBands();
       store.setBands(bands);
-      if (activeTone === 'custom') store.setCustomEq(gainsOf(bands));
+      if (activeTone === 'custom') {
+        store.setCustomEq(gainsOf(bands));
+        persistCustomGains(bands);
+      }
     },
   });
   const observer = new ResizeObserver(() => renderCanvas());
@@ -762,6 +903,9 @@ export function createConsoleView(
     }
     setSwitchChecked(encSwitch, (next.params['enc.OnOff'] ?? 0) === 1);
     setSegmentedValue(encLevel, next.params['enc.Level'] ?? 1);
+    // 灯效与高级参数共用同一参数：两边任改一处，这里都要跟着回填
+    setSwitchChecked(lightSwitch, (next.params['rgb.OnOff'] ?? 0) === 1);
+    setSegmentedValue(lightMode, next.params['rgb.Mode'] ?? 0);
     syncScene(next);
     syncTone(next);
     syncBands(next);
@@ -783,6 +927,7 @@ export function createConsoleView(
     window.clearInterval(staleTimer);
     clearNoticeTimer();
     store.removeEventListener(LOCAL_ERROR_EVENT, onLocalError);
+    store.removeEventListener(PARAM_CHANGED_EVENT, onParamChanged);
     offTransportError();
     offDeviceInfo?.();
     offLevels();

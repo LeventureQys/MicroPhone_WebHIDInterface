@@ -30,7 +30,7 @@ describe('eq curve', () => {
     expect(Math.abs(bandGainDb(peak, 20000, SAMPLE_RATE))).toBeLessThan(0.2);
   });
 
-  it('renders the register table default bands instead of a flat curve', () => {
+  it('renders the default bands instead of a flat curve', () => {
     expect(DEFAULT_BANDS).toHaveLength(14);
     const curve = computeCurve(DEFAULT_BANDS);
     expect(curve).toHaveLength(480);
@@ -39,13 +39,15 @@ describe('eq curve', () => {
     expect(curve[0].gainDb).toBeLessThan(-6);
     // 第 2 段是 20 kHz LPF，20 kHz 处约 −3 dB
     expect(curve[curve.length - 1].gainDb).toBeLessThan(-1.5);
-    // 第 3 段 215 Hz / −3.5 dB 凹陷
+    // 第 3 段 63 Hz / −3.5 dB 凹陷（频点取 2026-11-22 问题单的产品默认）
     const dip = curve.reduce((best, point) =>
-      (Math.abs(point.freq - 215) < Math.abs(best.freq - 215) ? point : best), curve[0]);
-    expect(dip.freq).toBeGreaterThan(200);
-    expect(dip.freq).toBeLessThan(230);
-    expect(dip.gainDb).toBeLessThan(-3);
-    expect(dip.gainDb).toBeGreaterThan(-5);
+      (Math.abs(point.freq - 63) < Math.abs(best.freq - 63) ? point : best), curve[0]);
+    expect(dip.freq).toBeGreaterThan(60);
+    expect(dip.freq).toBeLessThan(66);
+    // 63 Hz 同时被 50 Hz HPF 压着，所以看的是"比邻居低"而不是绝对值
+    const neighbour = curve.reduce((best, point) =>
+      (Math.abs(point.freq - 250) < Math.abs(best.freq - 250) ? point : best), curve[0]);
+    expect(dip.gainDb).toBeLessThan(neighbour.gainDb);
   });
 
   it('rolls low pass and high pass off outside the cutoff', () => {

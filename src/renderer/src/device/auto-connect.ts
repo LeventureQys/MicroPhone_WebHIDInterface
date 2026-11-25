@@ -26,6 +26,11 @@ import type { WebHidDeviceSummary, WebHidMode, WebHidSessionState } from './webh
 export interface AutoConnectLink {
   getState(): LinkState;
   attach(deviceId: string): Promise<void>;
+  /**
+   * 链路状态变化（可选）。设备可能是别的路径连上的（用户手动连接 / 会话恢复），
+   * 只看 5 s 一次的 tick 会漏掉"这台设备其实已经可用过"，设备复位后就容易误判成升级模式。
+   */
+  onChange?(cb: () => void): () => void;
 }
 
 /** 自动连接需要的设备会话面（`WebHidSession` 满足它） */
@@ -58,6 +63,11 @@ export interface AutoConnectOptions {
   readonly intervalMs?: number;
   /** 连续失败多少次后停手（等设备重新插上或用户手动连接） */
   readonly maxAttempts?: number;
+  /**
+   * 设备中途复位（参数同步失败、看起来像重新插拔）后，在判定"停在升级模式"之前
+   * 还愿意再试几次。设备刚重启时 USB 已枚举但 Modbus 还没起来，一次失败不代表救不回来。
+   */
+  readonly coldSyncRetries?: number;
   readonly timers?: Timers;
   /** 诊断/日志出口；缺省静默 */
   readonly onEvent?: (message: string) => void;
@@ -73,6 +83,9 @@ export interface AutoConnectState {
 
 const DEFAULT_INTERVAL_MS = 5000;
 const DEFAULT_MAX_ATTEMPTS = 3;
+/** 设备复位后第一次同步失败时的重试间隔：设备刚重启要一点时间才能应答整段回读 */
+const COLD_SYNC_RETRY_MS = 2000;
+const DEFAULT_COLD_SYNC_RETRIES = 2;
 /** 退避上限：设备一直连不上时也别每 5 s 摸一次 */
 const MAX_BACKOFF_MS = 30000;
 /** 插拔事件合并窗口：系统一次拔插常连发 connect/disconnect 两条 */
@@ -90,6 +103,7 @@ export class AutoConnector {
 
   private timer: unknown = null;
   private watchOff: (() => void) | null = null;
+  private linkOff: (() => void) | null = null;
   private watchTimer: unknown = null;
   private stopped = true;
   private paused = false;
@@ -103,6 +117,9 @@ export class AutoConnector {
    * 与"连上过之后掉下去、重连时设备还没缓过来"（要给几次退避重试，否则一次失败就再也连不回来）。
    */
   private wasReady = false;
+  /** 冷启动重试次数：设备刚复位回来时 USB 已枚举、Modbus 还没起来，一次同步说明不了问题 */
+  private coldAttempts = 0;
+  private readonly coldSyncRetries: number;
 
   constructor(options: AutoConnectOptions) {
     this.link = options.link;
@@ -111,6 +128,7 @@ export class AutoConnector {
     this.productId = options.productId ?? EXPECTED_PRODUCT_ID;
     this.intervalMs = Math.max(200, options.intervalMs ?? DEFAULT_INTERVAL_MS);
     this.maxAttempts = Math.max(1, options.maxAttempts ?? DEFAULT_MAX_ATTEMPTS);
+    this.coldSyncRetries = Math.max(0, options.coldSyncRetries ?? DEFAULT_COLD_SYNC_RETRIES);
     this.timers = options.timers ?? defaultTimers();
     this.onEvent = options.onEvent;
   }
@@ -123,7 +141,9 @@ export class AutoConnector {
     this.parked = false;
     this.attempts = 0;
     this.wasReady = false;
+    this.coldAttempts = 0;
     this.bindWatch();
+    this.bindLink();
     this.schedule(0);
   }
 
@@ -139,6 +159,8 @@ export class AutoConnector {
     }
     this.watchOff?.();
     this.watchOff = null;
+    this.linkOff?.();
+    this.linkOff = null;
   }
 
   /** 设置页开关：关掉立即停，打开立刻查一次 */
@@ -217,6 +239,7 @@ export class AutoConnector {
       this.paused = false;
       // 拔掉了就回到"这一轮还没连上过"：再插回时若同步失败，按开机就在升级模式处理
       this.wasReady = false;
+      this.coldAttempts = 0;
       this.reset();
       return this.intervalMs;
     }
@@ -249,6 +272,14 @@ export class AutoConnector {
     // 否则一次重连失败就再也不会自己连回来（用户要求：丢失连接后要尝试重连）。
     if (after.errorCode === 'sync') {
       if (!this.wasReady) {
+        // 设备自己复位（固件把参数落盘后重启）在 USB 上看起来就是"拔掉又插回"：
+        // USB 已枚举、Modbus 还没起来，第一次同步必然失败。给两次短的冷启动重试，
+        // 仍然失败才当成停在升级模式（Bootloader 也是这个症状，多试两次不影响它被停手）。
+        if (this.coldAttempts < this.coldSyncRetries) {
+          this.coldAttempts += 1;
+          this.log(`设备还没有准备好应答参数同步（第 ${this.coldAttempts}/${this.coldSyncRetries} 次重试）`);
+          return COLD_SYNC_RETRY_MS;
+        }
         this.parked = true;
         this.log('设备参数同步失败（可能停在升级模式），停止自动重连');
         return this.backoff();
@@ -260,6 +291,22 @@ export class AutoConnector {
 
   private matches(summary: WebHidDeviceSummary): boolean {
     return summary.vendorId === this.vendorId && summary.productId === this.productId;
+  }
+
+  /** 订阅链路状态：设备哪怕不是后台连上的，也要记住"这台设备曾经可用" */
+  private bindLink(): void {
+    if (this.linkOff !== null) return;
+    if (typeof this.link.onChange !== 'function') return;
+    try {
+      this.linkOff = this.link.onChange(() => this.noteLinkState());
+    } catch {
+      this.linkOff = null;
+    }
+  }
+
+  private noteLinkState(): void {
+    if (this.link.getState().status !== 'ready') return;
+    this.wasReady = true;
   }
 
   /**
@@ -289,6 +336,7 @@ export class AutoConnector {
 
   private reset(): void {
     this.attempts = 0;
+    this.coldAttempts = 0;
     this.parked = false;
   }
 
