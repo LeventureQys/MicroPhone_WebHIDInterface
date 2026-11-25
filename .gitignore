@@ -24,3 +24,13 @@ third_party/*.zip
 
 # Python 运行 tools/ 下的脚本时产生的字节码缓存
 __pycache__/
+
+# tools/dfu/m001-dfu.py 默认把逐块 JSONL 日志写到当前工作目录（跑在仓库根时会产生）
+dfu-*.jsonl
+
+# 语音链路的模型 / 虚拟环境 / 训练产物（tools/voice/fetch-models.mjs 可一键重建，见 v1.3.0 设计文档 §2.1）
+tools/voice/models/
+tools/voice/.venv/
+tools/voice/.venv-train/
+tools/voice/train/out/
+artifacts/voice/

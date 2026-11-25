@@ -1,0 +1,25 @@
+# SubStage 5.2 训练依赖。只装进 tools/voice/.venv-train，绝不装进推理侧 tools/voice/.venv。
+#
+# torch 必须是 CUDA 轮子：Windows 的默认 PyPI 轮子是 CPU-only，装上会白跑（SubStage_5.2 §5 要求
+# 无 GPU 时直接退出码 6，而不是退回 CPU 训练）。`voice.cmd trainenv` 分两步装：
+#   ① 先从 https://download.pytorch.org/whl/cu124 装 torch==2.6.0+cu124（--no-deps，依赖先由镜像装好）
+#   ② 再按本文件从镜像装其余依赖（torch 已满足，不会再回 CUDA 索引）
+# 之所以不让 pip 一次性带 --extra-index-url：那个索引对任意包名都回整张 flat 清单（实测 /jinja2/ 也是
+# HTTP 200 的大页面），解析器会卡在下载页面上十几分钟。
+#
+# 版本是同一轮互测过的组合：transformers 4.51 起才认 Qwen3（Qwen3ForCausalLM），peft 0.15 / trl 0.17 /
+# accelerate 1.6 / datasets 3.6 与它同期发布；bitsandbytes 0.46.1 是本机实测可用的 Windows 轮子
+#（0.43 之前没有 Windows 轮子，0.48 之后对 torch/CUDA 的绑定收紧，换版本必须先重跑 --smoke）。
+# gguf 不是 pip 包：PyPI 的 gguf 停在 0.9.1，而 b9000 的 convert_hf_to_gguf.py 要
+# gguf.vocab.MistralTokenizerType / MistralVocab（gguf-py 0.18 才有）。所以 gguf 与转换脚本一起
+# 从 llama.cpp b9000 原样放进 train/vendor/（见 vendor/commit.txt），运行时用 PYTHONPATH 指过去。
+# sentencepiece 是 gguf.vocab 的硬依赖（Windows py3.12 有轮子）。
+torch==2.6.0+cu124
+transformers==4.51.3
+peft==0.15.2
+trl==0.17.0
+datasets==3.6.0
+accelerate==1.6.0
+bitsandbytes==0.46.1
+sentencepiece==0.2.3
+numpy

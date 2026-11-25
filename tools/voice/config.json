@@ -1,0 +1,10 @@
+{
+  "v": 1,
+  "tier": "ft",
+  "evalTier": "ft",
+  "model": "Qwen3-1.7B-ft-Q4_K_M.gguf",
+  "promptMode": "fewshot（llm.py 默认恒带 5 条）",
+  "chosenAt": "2026-11-24T10:37:14.920Z",
+  "source": "tools/voice/eval/compare.mjs",
+  "servingNote": "评测用的是纯 system；线上 pipeline.py → llm.py 恒带 few-shot，落地形态等价于 ft-fs"
+}

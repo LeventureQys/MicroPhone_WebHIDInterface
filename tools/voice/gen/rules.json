@@ -1,0 +1,1455 @@
+{
+  "v": 1,
+  "strengths": [
+    "slight",
+    "medium",
+    "strong"
+  ],
+  "directions": [
+    "more",
+    "less"
+  ],
+  "dims": [
+    {
+      "id": "brightness",
+      "nameZh": "明亮度",
+      "writable": [
+        "eq.band6.gain",
+        "eq.band7.gain"
+      ],
+      "aliasSide": "more",
+      "more": {
+        "slight": [
+          {
+            "kind": "band",
+            "band": 7,
+            "field": "gain",
+            "delta": 1.5
+          },
+          {
+            "kind": "band",
+            "band": 6,
+            "field": "gain",
+            "delta": 1
+          }
+        ],
+        "medium": [
+          {
+            "kind": "band",
+            "band": 7,
+            "field": "gain",
+            "delta": 3
+          },
+          {
+            "kind": "band",
+            "band": 6,
+            "field": "gain",
+            "delta": 2
+          }
+        ],
+        "strong": [
+          {
+            "kind": "band",
+            "band": 7,
+            "field": "gain",
+            "delta": 5
+          },
+          {
+            "kind": "band",
+            "band": 6,
+            "field": "gain",
+            "delta": 3
+          }
+        ]
+      },
+      "less": {
+        "slight": [
+          {
+            "kind": "band",
+            "band": 7,
+            "field": "gain",
+            "delta": -1.5
+          },
+          {
+            "kind": "band",
+            "band": 6,
+            "field": "gain",
+            "delta": -1
+          }
+        ],
+        "medium": [
+          {
+            "kind": "band",
+            "band": 7,
+            "field": "gain",
+            "delta": -3
+          },
+          {
+            "kind": "band",
+            "band": 6,
+            "field": "gain",
+            "delta": -2
+          }
+        ],
+        "strong": [
+          {
+            "kind": "band",
+            "band": 7,
+            "field": "gain",
+            "delta": -5
+          },
+          {
+            "kind": "band",
+            "band": 6,
+            "field": "gain",
+            "delta": -3
+          }
+        ]
+      }
+    },
+    {
+      "id": "warmth",
+      "nameZh": "温暖度",
+      "writable": [
+        "eq.band3.gain",
+        "eq.band7.gain"
+      ],
+      "aliasSide": "more",
+      "more": {
+        "slight": [
+          {
+            "kind": "band",
+            "band": 3,
+            "field": "gain",
+            "delta": 1.5
+          },
+          {
+            "kind": "band",
+            "band": 7,
+            "field": "gain",
+            "delta": -1
+          }
+        ],
+        "medium": [
+          {
+            "kind": "band",
+            "band": 3,
+            "field": "gain",
+            "delta": 3
+          },
+          {
+            "kind": "band",
+            "band": 7,
+            "field": "gain",
+            "delta": -2
+          }
+        ],
+        "strong": [
+          {
+            "kind": "band",
+            "band": 3,
+            "field": "gain",
+            "delta": 4.5
+          },
+          {
+            "kind": "band",
+            "band": 7,
+            "field": "gain",
+            "delta": -3
+          }
+        ]
+      },
+      "less": {
+        "slight": [
+          {
+            "kind": "band",
+            "band": 3,
+            "field": "gain",
+            "delta": -1.5
+          },
+          {
+            "kind": "band",
+            "band": 7,
+            "field": "gain",
+            "delta": 1
+          }
+        ],
+        "medium": [
+          {
+            "kind": "band",
+            "band": 3,
+            "field": "gain",
+            "delta": -3
+          },
+          {
+            "kind": "band",
+            "band": 7,
+            "field": "gain",
+            "delta": 2
+          }
+        ],
+        "strong": [
+          {
+            "kind": "band",
+            "band": 3,
+            "field": "gain",
+            "delta": -4.5
+          },
+          {
+            "kind": "band",
+            "band": 7,
+            "field": "gain",
+            "delta": 3
+          }
+        ]
+      }
+    },
+    {
+      "id": "lowEnd",
+      "nameZh": "低频量感",
+      "writable": [
+        "eq.band3.gain"
+      ],
+      "aliasSide": "more",
+      "more": {
+        "slight": [
+          {
+            "kind": "band",
+            "band": 3,
+            "field": "gain",
+            "delta": 2
+          }
+        ],
+        "medium": [
+          {
+            "kind": "band",
+            "band": 3,
+            "field": "gain",
+            "delta": 4
+          }
+        ],
+        "strong": [
+          {
+            "kind": "band",
+            "band": 3,
+            "field": "gain",
+            "delta": 6
+          }
+        ]
+      },
+      "less": {
+        "slight": [
+          {
+            "kind": "band",
+            "band": 3,
+            "field": "gain",
+            "delta": -2
+          }
+        ],
+        "medium": [
+          {
+            "kind": "band",
+            "band": 3,
+            "field": "gain",
+            "delta": -4
+          }
+        ],
+        "strong": [
+          {
+            "kind": "band",
+            "band": 3,
+            "field": "gain",
+            "delta": -6
+          }
+        ]
+      }
+    },
+    {
+      "id": "muddiness",
+      "nameZh": "浑浊",
+      "writable": [
+        "eq.band4.gain",
+        "eq.band7.gain"
+      ],
+      "aliasSide": "less",
+      "more": {
+        "slight": [
+          {
+            "kind": "band",
+            "band": 4,
+            "field": "gain",
+            "delta": 1.5
+          },
+          {
+            "kind": "band",
+            "band": 7,
+            "field": "gain",
+            "delta": -1
+          }
+        ],
+        "medium": [
+          {
+            "kind": "band",
+            "band": 4,
+            "field": "gain",
+            "delta": 3
+          },
+          {
+            "kind": "band",
+            "band": 7,
+            "field": "gain",
+            "delta": -2
+          }
+        ],
+        "strong": [
+          {
+            "kind": "band",
+            "band": 4,
+            "field": "gain",
+            "delta": 4.5
+          },
+          {
+            "kind": "band",
+            "band": 7,
+            "field": "gain",
+            "delta": -3
+          }
+        ]
+      },
+      "less": {
+        "slight": [
+          {
+            "kind": "band",
+            "band": 4,
+            "field": "gain",
+            "delta": -1.5
+          },
+          {
+            "kind": "band",
+            "band": 7,
+            "field": "gain",
+            "delta": 1
+          }
+        ],
+        "medium": [
+          {
+            "kind": "band",
+            "band": 4,
+            "field": "gain",
+            "delta": -3
+          },
+          {
+            "kind": "band",
+            "band": 7,
+            "field": "gain",
+            "delta": 2
+          }
+        ],
+        "strong": [
+          {
+            "kind": "band",
+            "band": 4,
+            "field": "gain",
+            "delta": -4.5
+          },
+          {
+            "kind": "band",
+            "band": 7,
+            "field": "gain",
+            "delta": 3
+          }
+        ]
+      }
+    },
+    {
+      "id": "clarity",
+      "nameZh": "清晰度",
+      "writable": [
+        "eq.band5.gain",
+        "eq.band6.gain"
+      ],
+      "aliasSide": "more",
+      "more": {
+        "slight": [
+          {
+            "kind": "band",
+            "band": 5,
+            "field": "gain",
+            "delta": 1
+          },
+          {
+            "kind": "band",
+            "band": 6,
+            "field": "gain",
+            "delta": 1
+          }
+        ],
+        "medium": [
+          {
+            "kind": "band",
+            "band": 5,
+            "field": "gain",
+            "delta": 2
+          },
+          {
+            "kind": "band",
+            "band": 6,
+            "field": "gain",
+            "delta": 1.5
+          }
+        ],
+        "strong": [
+          {
+            "kind": "band",
+            "band": 5,
+            "field": "gain",
+            "delta": 3
+          },
+          {
+            "kind": "band",
+            "band": 6,
+            "field": "gain",
+            "delta": 2
+          }
+        ]
+      },
+      "less": {
+        "slight": [
+          {
+            "kind": "band",
+            "band": 5,
+            "field": "gain",
+            "delta": -1
+          },
+          {
+            "kind": "band",
+            "band": 6,
+            "field": "gain",
+            "delta": -1
+          }
+        ],
+        "medium": [
+          {
+            "kind": "band",
+            "band": 5,
+            "field": "gain",
+            "delta": -2
+          },
+          {
+            "kind": "band",
+            "band": 6,
+            "field": "gain",
+            "delta": -1.5
+          }
+        ],
+        "strong": [
+          {
+            "kind": "band",
+            "band": 5,
+            "field": "gain",
+            "delta": -3
+          },
+          {
+            "kind": "band",
+            "band": 6,
+            "field": "gain",
+            "delta": -2
+          }
+        ]
+      }
+    },
+    {
+      "id": "sibilance",
+      "nameZh": "齿音",
+      "writable": [
+        "eq.band6.gain",
+        "eq.band7.gain"
+      ],
+      "aliasSide": "less",
+      "more": {
+        "slight": [
+          {
+            "kind": "band",
+            "band": 7,
+            "field": "gain",
+            "delta": 1.5
+          },
+          {
+            "kind": "band",
+            "band": 6,
+            "field": "gain",
+            "delta": 1
+          }
+        ],
+        "medium": [
+          {
+            "kind": "band",
+            "band": 7,
+            "field": "gain",
+            "delta": 3
+          },
+          {
+            "kind": "band",
+            "band": 6,
+            "field": "gain",
+            "delta": 1.5
+          }
+        ],
+        "strong": [
+          {
+            "kind": "band",
+            "band": 7,
+            "field": "gain",
+            "delta": 5
+          },
+          {
+            "kind": "band",
+            "band": 6,
+            "field": "gain",
+            "delta": 2
+          }
+        ]
+      },
+      "less": {
+        "slight": [
+          {
+            "kind": "band",
+            "band": 7,
+            "field": "gain",
+            "delta": -1.5
+          },
+          {
+            "kind": "band",
+            "band": 6,
+            "field": "gain",
+            "delta": -1
+          }
+        ],
+        "medium": [
+          {
+            "kind": "band",
+            "band": 7,
+            "field": "gain",
+            "delta": -3
+          },
+          {
+            "kind": "band",
+            "band": 6,
+            "field": "gain",
+            "delta": -1.5
+          }
+        ],
+        "strong": [
+          {
+            "kind": "band",
+            "band": 7,
+            "field": "gain",
+            "delta": -5
+          },
+          {
+            "kind": "band",
+            "band": 6,
+            "field": "gain",
+            "delta": -2
+          }
+        ]
+      }
+    },
+    {
+      "id": "harshness",
+      "nameZh": "毛刺",
+      "writable": [
+        "eq.band5.gain",
+        "eq.band6.gain"
+      ],
+      "aliasSide": "less",
+      "more": {
+        "slight": [
+          {
+            "kind": "band",
+            "band": 6,
+            "field": "gain",
+            "delta": 1.5
+          },
+          {
+            "kind": "band",
+            "band": 5,
+            "field": "gain",
+            "delta": 0.5
+          }
+        ],
+        "medium": [
+          {
+            "kind": "band",
+            "band": 6,
+            "field": "gain",
+            "delta": 3
+          },
+          {
+            "kind": "band",
+            "band": 5,
+            "field": "gain",
+            "delta": 1
+          }
+        ],
+        "strong": [
+          {
+            "kind": "band",
+            "band": 6,
+            "field": "gain",
+            "delta": 4.5
+          },
+          {
+            "kind": "band",
+            "band": 5,
+            "field": "gain",
+            "delta": 1.5
+          }
+        ]
+      },
+      "less": {
+        "slight": [
+          {
+            "kind": "band",
+            "band": 6,
+            "field": "gain",
+            "delta": -1.5
+          },
+          {
+            "kind": "band",
+            "band": 5,
+            "field": "gain",
+            "delta": -0.5
+          }
+        ],
+        "medium": [
+          {
+            "kind": "band",
+            "band": 6,
+            "field": "gain",
+            "delta": -3
+          },
+          {
+            "kind": "band",
+            "band": 5,
+            "field": "gain",
+            "delta": -1
+          }
+        ],
+        "strong": [
+          {
+            "kind": "band",
+            "band": 6,
+            "field": "gain",
+            "delta": -4.5
+          },
+          {
+            "kind": "band",
+            "band": 5,
+            "field": "gain",
+            "delta": -1.5
+          }
+        ]
+      }
+    },
+    {
+      "id": "noiseFloor",
+      "nameZh": "底噪",
+      "writable": [
+        "enc.Level",
+        "enc.OnOff"
+      ],
+      "aliasSide": "less",
+      "more": {
+        "slight": [
+          {
+            "kind": "param",
+            "id": "enc.Level",
+            "delta": -1
+          }
+        ],
+        "medium": [
+          {
+            "kind": "param",
+            "id": "enc.Level",
+            "delta": -2
+          }
+        ],
+        "strong": [
+          {
+            "kind": "param",
+            "id": "enc.Level",
+            "delta": -3
+          }
+        ]
+      },
+      "less": {
+        "slight": [
+          {
+            "kind": "param",
+            "id": "enc.Level",
+            "delta": 1
+          },
+          {
+            "kind": "paramSet",
+            "id": "enc.OnOff",
+            "value": 1
+          }
+        ],
+        "medium": [
+          {
+            "kind": "param",
+            "id": "enc.Level",
+            "delta": 2
+          },
+          {
+            "kind": "paramSet",
+            "id": "enc.OnOff",
+            "value": 1
+          }
+        ],
+        "strong": [
+          {
+            "kind": "param",
+            "id": "enc.Level",
+            "delta": 3
+          },
+          {
+            "kind": "paramSet",
+            "id": "enc.OnOff",
+            "value": 1
+          }
+        ]
+      }
+    },
+    {
+      "id": "compression",
+      "nameZh": "压缩强度",
+      "writable": [
+        "comp.Enable",
+        "comp.Rate",
+        "comp.Threshold"
+      ],
+      "aliasSide": "more",
+      "more": {
+        "slight": [
+          {
+            "kind": "param",
+            "id": "comp.Threshold",
+            "delta": -3
+          },
+          {
+            "kind": "param",
+            "id": "comp.Rate",
+            "delta": 1
+          }
+        ],
+        "medium": [
+          {
+            "kind": "param",
+            "id": "comp.Threshold",
+            "delta": -6
+          },
+          {
+            "kind": "param",
+            "id": "comp.Rate",
+            "delta": 2
+          }
+        ],
+        "strong": [
+          {
+            "kind": "param",
+            "id": "comp.Threshold",
+            "delta": -10
+          },
+          {
+            "kind": "param",
+            "id": "comp.Rate",
+            "delta": 3
+          }
+        ]
+      },
+      "less": {
+        "slight": [
+          {
+            "kind": "param",
+            "id": "comp.Threshold",
+            "delta": 3
+          },
+          {
+            "kind": "param",
+            "id": "comp.Rate",
+            "delta": -1
+          }
+        ],
+        "medium": [
+          {
+            "kind": "param",
+            "id": "comp.Threshold",
+            "delta": 6
+          },
+          {
+            "kind": "param",
+            "id": "comp.Rate",
+            "delta": -2
+          }
+        ],
+        "strong": [
+          {
+            "kind": "param",
+            "id": "comp.Threshold",
+            "delta": 10
+          },
+          {
+            "kind": "param",
+            "id": "comp.Rate",
+            "delta": -3
+          }
+        ]
+      }
+    },
+    {
+      "id": "loudness",
+      "nameZh": "响度",
+      "writable": [
+        "comp.MakeUpGain"
+      ],
+      "aliasSide": "more",
+      "more": {
+        "slight": [
+          {
+            "kind": "param",
+            "id": "comp.MakeUpGain",
+            "delta": 1.5
+          }
+        ],
+        "medium": [
+          {
+            "kind": "param",
+            "id": "comp.MakeUpGain",
+            "delta": 3
+          }
+        ],
+        "strong": [
+          {
+            "kind": "param",
+            "id": "comp.MakeUpGain",
+            "delta": 6
+          }
+        ]
+      },
+      "less": {
+        "slight": [
+          {
+            "kind": "param",
+            "id": "comp.MakeUpGain",
+            "delta": -1.5
+          }
+        ],
+        "medium": [
+          {
+            "kind": "param",
+            "id": "comp.MakeUpGain",
+            "delta": -3
+          }
+        ],
+        "strong": [
+          {
+            "kind": "param",
+            "id": "comp.MakeUpGain",
+            "delta": -6
+          }
+        ]
+      }
+    },
+    {
+      "id": "gate",
+      "nameZh": "噪声门",
+      "writable": [
+        "noisegate.Enable",
+        "noisegate.threshold_db"
+      ],
+      "aliasSide": "less",
+      "more": {
+        "slight": [
+          {
+            "kind": "param",
+            "id": "noisegate.threshold_db",
+            "delta": 3
+          }
+        ],
+        "medium": [
+          {
+            "kind": "param",
+            "id": "noisegate.threshold_db",
+            "delta": 6
+          }
+        ],
+        "strong": [
+          {
+            "kind": "param",
+            "id": "noisegate.threshold_db",
+            "delta": 9
+          }
+        ]
+      },
+      "less": {
+        "slight": [
+          {
+            "kind": "param",
+            "id": "noisegate.threshold_db",
+            "delta": -3
+          }
+        ],
+        "medium": [
+          {
+            "kind": "param",
+            "id": "noisegate.threshold_db",
+            "delta": -6
+          }
+        ],
+        "strong": [
+          {
+            "kind": "param",
+            "id": "noisegate.threshold_db",
+            "delta": -9
+          }
+        ]
+      }
+    },
+    {
+      "id": "limiter",
+      "nameZh": "防爆音",
+      "writable": [
+        "limit.Enable",
+        "limit.Threshold"
+      ],
+      "aliasSide": "more",
+      "more": {
+        "slight": [
+          {
+            "kind": "param",
+            "id": "limit.Threshold",
+            "delta": -1
+          }
+        ],
+        "medium": [
+          {
+            "kind": "param",
+            "id": "limit.Threshold",
+            "delta": -2
+          }
+        ],
+        "strong": [
+          {
+            "kind": "param",
+            "id": "limit.Threshold",
+            "delta": -3
+          }
+        ]
+      },
+      "less": {
+        "slight": [
+          {
+            "kind": "param",
+            "id": "limit.Threshold",
+            "delta": 1
+          }
+        ],
+        "medium": [
+          {
+            "kind": "param",
+            "id": "limit.Threshold",
+            "delta": 2
+          }
+        ],
+        "strong": [
+          {
+            "kind": "param",
+            "id": "limit.Threshold",
+            "delta": 3
+          }
+        ]
+      }
+    },
+    {
+      "id": "rgbMode",
+      "nameZh": "灯效模式",
+      "writable": [
+        "rgb.Mode",
+        "rgb.OnOff"
+      ],
+      "aliasSide": "more",
+      "more": {
+        "slight": [
+          {
+            "kind": "param",
+            "id": "rgb.Mode",
+            "delta": 1
+          }
+        ],
+        "medium": [
+          {
+            "kind": "param",
+            "id": "rgb.Mode",
+            "delta": 2
+          }
+        ],
+        "strong": [
+          {
+            "kind": "param",
+            "id": "rgb.Mode",
+            "delta": 3
+          }
+        ]
+      },
+      "less": {
+        "slight": [
+          {
+            "kind": "param",
+            "id": "rgb.Mode",
+            "delta": -1
+          }
+        ],
+        "medium": [
+          {
+            "kind": "param",
+            "id": "rgb.Mode",
+            "delta": -2
+          }
+        ],
+        "strong": [
+          {
+            "kind": "param",
+            "id": "rgb.Mode",
+            "delta": -3
+          }
+        ]
+      }
+    }
+  ],
+  "toggle": {
+    "noiseFloor": {
+      "on": [
+        {
+          "kind": "paramSet",
+          "id": "enc.OnOff",
+          "value": 1
+        }
+      ],
+      "off": [
+        {
+          "kind": "paramSet",
+          "id": "enc.OnOff",
+          "value": 0
+        }
+      ]
+    },
+    "gate": {
+      "on": [
+        {
+          "kind": "paramSet",
+          "id": "noisegate.Enable",
+          "value": 1
+        }
+      ],
+      "off": [
+        {
+          "kind": "paramSet",
+          "id": "noisegate.Enable",
+          "value": 0
+        }
+      ]
+    },
+    "limiter": {
+      "on": [
+        {
+          "kind": "paramSet",
+          "id": "limit.Enable",
+          "value": 1
+        }
+      ],
+      "off": [
+        {
+          "kind": "paramSet",
+          "id": "limit.Enable",
+          "value": 0
+        }
+      ]
+    },
+    "compression": {
+      "on": [
+        {
+          "kind": "paramSet",
+          "id": "comp.Enable",
+          "value": 1
+        }
+      ],
+      "off": [
+        {
+          "kind": "paramSet",
+          "id": "comp.Enable",
+          "value": 0
+        }
+      ]
+    },
+    "rgbMode": {
+      "on": [
+        {
+          "kind": "paramSet",
+          "id": "rgb.OnOff",
+          "value": 1
+        }
+      ],
+      "off": [
+        {
+          "kind": "paramSet",
+          "id": "rgb.OnOff",
+          "value": 0
+        }
+      ]
+    },
+    "mute": {
+      "on": [
+        {
+          "kind": "paramSet",
+          "id": "mic.mute",
+          "value": 1
+        }
+      ],
+      "off": [
+        {
+          "kind": "paramSet",
+          "id": "mic.mute",
+          "value": 0
+        }
+      ]
+    },
+    "monitor": {
+      "on": [
+        {
+          "kind": "paramSet",
+          "id": "hp.OnOff",
+          "value": 1
+        }
+      ],
+      "off": [
+        {
+          "kind": "paramSet",
+          "id": "hp.OnOff",
+          "value": 0
+        }
+      ]
+    }
+  },
+  "eqDeltas": {
+    "gain": {
+      "more": {
+        "slight": [
+          {
+            "kind": "band",
+            "band": 0,
+            "field": "gain",
+            "delta": 1
+          }
+        ],
+        "medium": [
+          {
+            "kind": "band",
+            "band": 0,
+            "field": "gain",
+            "delta": 2
+          }
+        ],
+        "strong": [
+          {
+            "kind": "band",
+            "band": 0,
+            "field": "gain",
+            "delta": 3
+          }
+        ]
+      },
+      "less": {
+        "slight": [
+          {
+            "kind": "band",
+            "band": 0,
+            "field": "gain",
+            "delta": -1
+          }
+        ],
+        "medium": [
+          {
+            "kind": "band",
+            "band": 0,
+            "field": "gain",
+            "delta": -2
+          }
+        ],
+        "strong": [
+          {
+            "kind": "band",
+            "band": 0,
+            "field": "gain",
+            "delta": -3
+          }
+        ]
+      }
+    },
+    "q": {
+      "more": {
+        "slight": [
+          {
+            "kind": "band",
+            "band": 0,
+            "field": "q",
+            "delta": 0.5
+          }
+        ],
+        "medium": [
+          {
+            "kind": "band",
+            "band": 0,
+            "field": "q",
+            "delta": 1
+          }
+        ],
+        "strong": [
+          {
+            "kind": "band",
+            "band": 0,
+            "field": "q",
+            "delta": 2
+          }
+        ]
+      },
+      "less": {
+        "slight": [
+          {
+            "kind": "band",
+            "band": 0,
+            "field": "q",
+            "delta": -0.5
+          }
+        ],
+        "medium": [
+          {
+            "kind": "band",
+            "band": 0,
+            "field": "q",
+            "delta": -1
+          }
+        ],
+        "strong": [
+          {
+            "kind": "band",
+            "band": 0,
+            "field": "q",
+            "delta": -2
+          }
+        ]
+      }
+    },
+    "freqPct": {
+      "more": {
+        "slight": [
+          {
+            "kind": "band",
+            "band": 0,
+            "field": "freq",
+            "delta": 10
+          }
+        ],
+        "medium": [
+          {
+            "kind": "band",
+            "band": 0,
+            "field": "freq",
+            "delta": 20
+          }
+        ],
+        "strong": [
+          {
+            "kind": "band",
+            "band": 0,
+            "field": "freq",
+            "delta": 30
+          }
+        ]
+      },
+      "less": {
+        "slight": [
+          {
+            "kind": "band",
+            "band": 0,
+            "field": "freq",
+            "delta": -10
+          }
+        ],
+        "medium": [
+          {
+            "kind": "band",
+            "band": 0,
+            "field": "freq",
+            "delta": -20
+          }
+        ],
+        "strong": [
+          {
+            "kind": "band",
+            "band": 0,
+            "field": "freq",
+            "delta": -30
+          }
+        ]
+      }
+    }
+  },
+  "turnCaps": {
+    "eqGainDb": 6,
+    "encLevel": 3,
+    "makeUpGainDb": 6
+  },
+  "bands": [
+    {
+      "band": 1,
+      "centerHz": 50,
+      "kind": "hpf"
+    },
+    {
+      "band": 2,
+      "centerHz": 20000,
+      "kind": "lpf"
+    },
+    {
+      "band": 3,
+      "centerHz": 63,
+      "kind": "peak"
+    },
+    {
+      "band": 4,
+      "centerHz": 250,
+      "kind": "peak"
+    },
+    {
+      "band": 5,
+      "centerHz": 1000,
+      "kind": "peak"
+    },
+    {
+      "band": 6,
+      "centerHz": 4000,
+      "kind": "peak"
+    },
+    {
+      "band": 7,
+      "centerHz": 12500,
+      "kind": "peak"
+    }
+  ],
+  "conditionals": [
+    {
+      "target": "noiseFloor",
+      "direction": "more",
+      "when": {
+        "id": "enc.Level",
+        "atOrBelow": 0
+      },
+      "then": [
+        {
+          "kind": "paramSet",
+          "id": "enc.OnOff",
+          "value": 0
+        }
+      ]
+    },
+    {
+      "target": "gate",
+      "direction": "less",
+      "when": {
+        "id": "noisegate.threshold_db",
+        "atOrBelow": -91
+      },
+      "then": [
+        {
+          "kind": "paramSet",
+          "id": "noisegate.Enable",
+          "value": 0
+        }
+      ]
+    }
+  ],
+  "scenarios": [
+    {
+      "id": "live",
+      "baseScene": "podcast",
+      "patch": [
+        {
+          "kind": "param",
+          "id": "enc.Level",
+          "delta": 1
+        },
+        {
+          "kind": "param",
+          "id": "noisegate.threshold_db",
+          "delta": 3
+        }
+      ]
+    },
+    {
+      "id": "meeting",
+      "baseScene": "podcast",
+      "patch": []
+    },
+    {
+      "id": "sing",
+      "baseScene": "sing",
+      "patch": []
+    },
+    {
+      "id": "game",
+      "baseScene": "game",
+      "patch": []
+    },
+    {
+      "id": "podcast",
+      "baseScene": "podcast",
+      "patch": []
+    },
+    {
+      "id": "record",
+      "baseScene": "quiet",
+      "patch": [
+        {
+          "kind": "paramSet",
+          "id": "enc.OnOff",
+          "value": 0
+        }
+      ]
+    },
+    {
+      "id": "dub",
+      "baseScene": "podcast",
+      "patch": [
+        {
+          "kind": "band",
+          "band": 3,
+          "field": "gain",
+          "delta": 1.5
+        }
+      ]
+    },
+    {
+      "id": "asmr",
+      "baseScene": "quiet",
+      "patch": [
+        {
+          "kind": "param",
+          "id": "noisegate.threshold_db",
+          "delta": -6
+        }
+      ]
+    }
+  ]
+}

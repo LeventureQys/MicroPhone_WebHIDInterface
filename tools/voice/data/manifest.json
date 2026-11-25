@@ -1,0 +1,401 @@
+{
+  "v": 1,
+  "createdAt": "2026-11-24T05:27:45.116Z",
+  "seed": 20261124,
+  "kbSha256": "1183ad13f7f2d4f8dbe040db96b459c9e4094fd65ff38dd5bb3bfcc56cafffdf",
+  "teacher": "Qwen3-8B-Q4_K_M.gguf@120307ba529eb243",
+  "counts": {
+    "train": 4549,
+    "holdout": 501,
+    "total": 5050,
+    "rejected": 1740,
+    "deduped": 994
+  },
+  "byClass": {
+    "tune": 3361,
+    "eq": 430,
+    "toggle": 187,
+    "scene": 164,
+    "set": 200,
+    "unsupported": 316,
+    "explain": 257,
+    "clarify": 135
+  },
+  "splitKeys": {
+    "train": [
+      "brightness:less:slight",
+      "brightness:more:medium",
+      "brightness:more:slight",
+      "brightness:more:strong",
+      "clarify:generic:null",
+      "clarity:less:medium",
+      "clarity:less:slight",
+      "clarity:less:strong",
+      "clarity:more:medium",
+      "clarity:more:slight",
+      "clarity:more:strong",
+      "compression:less:medium",
+      "compression:less:slight",
+      "compression:less:strong",
+      "compression:more:medium",
+      "compression:more:slight",
+      "compression:more:strong",
+      "eq:band1.freq:medium",
+      "eq:band2.freq:strong",
+      "eq:band3.gain:slight",
+      "eq:band4.gain:medium",
+      "eq:band4.q:strong",
+      "eq:band5.gain:strong",
+      "eq:band6.gain:slight",
+      "eq:band6.q:medium",
+      "eq:band7.gain:medium",
+      "eq:band7.q:strong",
+      "eq:hz1000.gain:slight",
+      "eq:hz1000.gain:strong",
+      "eq:hz12500.gain:slight",
+      "eq:hz12500.gain:strong",
+      "eq:hz200.gain:medium",
+      "eq:hz200.gain:slight",
+      "eq:hz200.gain:strong",
+      "eq:hz250.gain:medium",
+      "eq:hz250.gain:slight",
+      "eq:hz3000.gain:medium",
+      "eq:hz3000.gain:slight",
+      "eq:hz3000.gain:strong",
+      "eq:hz4000.gain:medium",
+      "eq:hz4000.gain:slight",
+      "eq:hz4000.gain:strong",
+      "eq:hz800.gain:medium",
+      "eq:hz800.gain:slight",
+      "eq:hz800.gain:strong",
+      "gate:less:medium",
+      "gate:less:strong",
+      "gate:more:medium",
+      "gate:more:slight",
+      "gate:more:strong",
+      "harshness:less:medium",
+      "harshness:less:slight",
+      "harshness:less:strong",
+      "harshness:more:slight",
+      "harshness:more:strong",
+      "limiter:less:slight",
+      "limiter:less:strong",
+      "limiter:more:medium",
+      "limiter:more:slight",
+      "limiter:more:strong",
+      "loudness:less:medium",
+      "loudness:less:slight",
+      "loudness:less:strong",
+      "loudness:more:medium",
+      "loudness:more:slight",
+      "loudness:more:strong",
+      "lowEnd:less:medium",
+      "lowEnd:less:slight",
+      "lowEnd:less:strong",
+      "lowEnd:more:medium",
+      "lowEnd:more:slight",
+      "lowEnd:more:strong",
+      "muddiness:less:medium",
+      "muddiness:less:slight",
+      "muddiness:less:strong",
+      "muddiness:more:strong",
+      "noiseFloor:less:medium",
+      "noiseFloor:less:strong",
+      "noiseFloor:more:medium",
+      "noiseFloor:more:strong",
+      "outofscope:bgm:null",
+      "outofscope:echo:null",
+      "outofscope:generic:null",
+      "outofscope:hum:null",
+      "outofscope:plosive:null",
+      "rgbMode:less:medium",
+      "rgbMode:less:slight",
+      "rgbMode:less:strong",
+      "rgbMode:more:medium",
+      "rgbMode:more:slight",
+      "rgbMode:more:strong",
+      "scene:custom:null",
+      "scene:game:null",
+      "scene:podcast:null",
+      "scene:quiet:null",
+      "scene:sing:null",
+      "set:eq.band3.freq:null",
+      "set:eq.band4.gain:null",
+      "set:eq.band4.q:null",
+      "set:eq.band5.freq:null",
+      "set:eq.band5.gain:null",
+      "set:eq.band6.freq:null",
+      "set:eq.band6.gain:null",
+      "set:eq.band6.q:null",
+      "set:eq.band7.freq:null",
+      "set:eq.band7.q:null",
+      "sibilance:less:medium",
+      "sibilance:less:slight",
+      "sibilance:less:strong",
+      "sibilance:more:medium",
+      "sibilance:more:slight",
+      "sibilance:more:strong",
+      "switch:compression:off",
+      "switch:compression:on",
+      "switch:gate:off",
+      "switch:gate:on",
+      "switch:limiter:off",
+      "switch:monitor:off",
+      "switch:monitor:on",
+      "switch:mute:off",
+      "switch:mute:on",
+      "switch:noiseFloor:off",
+      "switch:noiseFloor:on",
+      "switch:rgbMode:off",
+      "switch:rgbMode:on",
+      "tone:bright:null",
+      "tone:custom:null",
+      "tone:flat:null",
+      "tone:vocal:null",
+      "tone:warm:null",
+      "warmth:less:slight",
+      "warmth:less:strong",
+      "warmth:more:medium",
+      "warmth:more:slight",
+      "warmth:more:strong"
+    ],
+    "holdout": [
+      "brightness:less:medium",
+      "brightness:less:strong",
+      "eq:band3.q:medium",
+      "eq:band5.q:slight",
+      "eq:hz1000.gain:medium",
+      "eq:hz12500.gain:medium",
+      "eq:hz250.gain:strong",
+      "eq:hz63.gain:medium",
+      "eq:hz63.gain:slight",
+      "eq:hz63.gain:strong",
+      "gate:less:slight",
+      "limiter:less:medium",
+      "muddiness:more:medium",
+      "muddiness:more:slight",
+      "noiseFloor:less:slight",
+      "noiseFloor:more:slight",
+      "set:eq.band3.gain:null",
+      "set:eq.band4.freq:null",
+      "set:eq.band5.q:null",
+      "set:eq.band7.gain:null",
+      "switch:limiter:on",
+      "warmth:less:medium"
+    ]
+  },
+  "adversarial": {
+    "rows": 407,
+    "ratio": 0.0806
+  },
+  "digitPolicy": {
+    "teacher": "no-arabic-digits",
+    "set": "template-only",
+    "eqCenterHz": "template-only"
+  },
+  "unexpressedCells": [
+    "harshness.more.medium"
+  ],
+  "semanticConsistency": 0.6488,
+  "rejectedTop": [
+    {
+      "reason": "ops-mismatch",
+      "count": 1393,
+      "samples": [
+        {
+          "text": "声音有点亮，我听着特别清楚",
+          "detail": "期望 tune|brightness|more|slight，实际 tune|brightness|more|strong ; tune|clarity|more|strong"
+        },
+        {
+          "text": "声音有点亮，能调暗一点不",
+          "detail": "期望 tune|brightness|more|slight，实际 tune|brightness|less|slight"
+        },
+        {
+          "text": "声音有点亮，感觉很清晰",
+          "detail": "期望 tune|brightness|more|slight，实际 tune|brightness|more|strong ; tune|clarity|more|strong"
+        }
+      ]
+    },
+    {
+      "reason": "parse-none",
+      "count": 258,
+      "samples": [
+        {
+          "text": "这个声音有点低，能调高一点吗",
+          "detail": "期望命中，实际未命中"
+        },
+        {
+          "text": "人声特别突出，能调低一点吗",
+          "detail": "期望命中，实际未命中"
+        },
+        {
+          "text": "人声特别突出，能不能压一压",
+          "detail": "期望命中，实际未命中"
+        }
+      ]
+    },
+    {
+      "reason": "unexpected-hit",
+      "count": 35,
+      "samples": [
+        {
+          "text": "我想听点摇滚，音色要有点闷",
+          "detail": "期望未命中，实际命中 tune|muddiness|less|slight"
+        },
+        {
+          "text": "我想听点摇滚，你能不能调得响一点",
+          "detail": "期望未命中，实际命中 tune|loudness|more|slight"
+        },
+        {
+          "text": "我想听点摇滚，声音太闷了",
+          "detail": "期望未命中，实际命中 tune|muddiness|less|strong"
+        }
+      ]
+    },
+    {
+      "reason": "too-long",
+      "count": 24,
+      "samples": [
+        {
+          "text": "刚才用手机录了一段在家说话的音频，回放给朋友听了一下，感觉声音闷，你帮我调一下",
+          "detail": "39 字：刚才用手机录了一段在家说话的音频，回放给朋友听了一下，感觉声音闷，你帮我调一下"
+        },
+        {
+          "text": "刚才用手机录了一段在家说话的音频，回放给朋友听了一下，声音闷，你帮我调一下吧",
+          "detail": "38 字：刚才用手机录了一段在家说话的音频，回放给朋友听了一下，声音闷，你帮我调一下吧"
+        },
+        {
+          "text": "我用手机录了段在家说话的音频，回放给朋友听了，感觉声音闷，你帮我调调",
+          "detail": "34 字：我用手机录了段在家说话的音频，回放给朋友听了，感觉声音闷，你帮我调调"
+        }
+      ]
+    },
+    {
+      "reason": "has-digit",
+      "count": 22,
+      "samples": [
+        {
+          "text": "房间里有50赫兹哼声，怎么处理",
+          "detail": "含阿拉伯数字：房间里有50赫兹哼声，怎么处理"
+        },
+        {
+          "text": "房间里有50赫兹哼声，能不能帮我消除下",
+          "detail": "含阿拉伯数字：房间里有50赫兹哼声，能不能帮我消除下"
+        },
+        {
+          "text": "房间里听到50赫兹哼声，麻烦调一下",
+          "detail": "含阿拉伯数字：房间里听到50赫兹哼声，麻烦调一下"
+        }
+      ]
+    },
+    {
+      "reason": "status-mismatch",
+      "count": 4,
+      "samples": [
+        {
+          "text": "声音隆隆的，有回声",
+          "detail": "期望 ok，实际 unsupported"
+        },
+        {
+          "text": "我听起来像是在桶里，声音有点闷",
+          "detail": "期望 unsupported，实际 ok"
+        },
+        {
+          "text": "听起来像是在桶里，感觉声音闷",
+          "detail": "期望 unsupported，实际 ok"
+        }
+      ]
+    },
+    {
+      "reason": "too-short",
+      "count": 3,
+      "samples": [
+        {
+          "text": "静音",
+          "detail": "2 字"
+        },
+        {
+          "text": "闭麦",
+          "detail": "2 字"
+        },
+        {
+          "text": "开麦",
+          "detail": "2 字"
+        }
+      ]
+    },
+    {
+      "reason": "say-mismatch",
+      "count": 1,
+      "samples": [
+        {
+          "text": "我这边有串音，可能是房间里有回声",
+          "detail": "期望「这是串音：建议戴封闭式耳机并把音量降下来」，实际「这是房间声学问题，调 EQ 只会更糟：建议加吸音或靠近麦说话」"
+        }
+      ]
+    }
+  ],
+  "files": {
+    "train": {
+      "path": "tools/voice/data/train.jsonl",
+      "rows": 4549,
+      "sha256": "b21b1db739facb847d232eca32a79107cf754bd1c4e1ad7ac249c98248c7c93b"
+    },
+    "holdout": {
+      "path": "tools/voice/data/holdout.jsonl",
+      "rows": 501,
+      "sha256": "176440da02e4eb34263a4993f9304189a5fb979cc2dbf3e9b87738b2188fe48c"
+    }
+  },
+  "student": {
+    "file": "Qwen3-1.7B-ft-Q4_K_M.gguf",
+    "path": "tools\\voice\\models\\student\\Qwen3-1.7B-ft-Q4_K_M.gguf",
+    "size": 1107408608,
+    "sha256": "1d71cbb5202a5469fb031a2368449c95900146f266c311b7ee49bc307547b04c",
+    "quant": "Q4_K_M",
+    "base": "Qwen/Qwen3-1.7B（HF bf16，models/base-hf/Qwen3-1.7B）",
+    "lora": {
+      "r": 16,
+      "alpha": 32,
+      "dropout": 0.05,
+      "target_modules": [
+        "q_proj",
+        "k_proj",
+        "v_proj",
+        "o_proj",
+        "gate_proj",
+        "up_proj",
+        "down_proj"
+      ]
+    },
+    "train": {
+      "epochs": 3,
+      "batchSize": 4,
+      "gradAccum": 4,
+      "lr": 0.0002,
+      "maxLen": 2048,
+      "warmupRatio": 0.03,
+      "seed": 20261124
+    },
+    "metrics": {
+      "steps": 285,
+      "train_loss": 0.07325416702058232,
+      "eval_loss": 0.00761426186384212,
+      "tokens_per_s": 2274.6,
+      "peak_mem_mb": 19156.1,
+      "elapsed_s": 3863.6
+    },
+    "run": {
+      "runSteps": 285,
+      "effectiveEpochs": 1.0,
+      "baseDtype": "bf16",
+      "effectiveBatch": 16,
+      "batchSize": 1,
+      "gradAccum": 16,
+      "maxLen": 2048,
+      "lr": 0.0002,
+      "seed": 20261124
+    },
+    "recordedAt": "2026-11-24T07:42:39+00:00"
+  }
+}

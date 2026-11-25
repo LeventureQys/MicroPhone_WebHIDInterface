@@ -1,0 +1,361 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "v",
+    "status",
+    "ops",
+    "say",
+    "confidence"
+  ],
+  "properties": {
+    "v": {
+      "const": 1
+    },
+    "status": {
+      "type": "string",
+      "enum": [
+        "ok",
+        "clarify",
+        "unsupported"
+      ]
+    },
+    "ops": {
+      "type": "array",
+      "items": {
+        "oneOf": [
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "kind",
+              "target",
+              "direction",
+              "strength"
+            ],
+            "properties": {
+              "kind": {
+                "const": "tune"
+              },
+              "target": {
+                "type": "string",
+                "enum": [
+                  "brightness",
+                  "warmth",
+                  "lowEnd",
+                  "muddiness",
+                  "clarity",
+                  "sibilance",
+                  "harshness",
+                  "noiseFloor",
+                  "compression",
+                  "loudness",
+                  "gate",
+                  "limiter",
+                  "rgbMode"
+                ]
+              },
+              "direction": {
+                "type": "string",
+                "enum": [
+                  "more",
+                  "less"
+                ]
+              },
+              "strength": {
+                "type": "string",
+                "enum": [
+                  "slight",
+                  "medium",
+                  "strong"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "kind",
+              "band",
+              "direction",
+              "field"
+            ],
+            "properties": {
+              "kind": {
+                "const": "eq"
+              },
+              "band": {
+                "type": "number",
+                "minimum": 1,
+                "maximum": 7
+              },
+              "direction": {
+                "type": "string",
+                "enum": [
+                  "more",
+                  "less"
+                ]
+              },
+              "strength": {
+                "type": "string",
+                "enum": [
+                  "slight",
+                  "medium",
+                  "strong"
+                ]
+              },
+              "field": {
+                "type": "string",
+                "enum": [
+                  "gain",
+                  "q",
+                  "freq"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "kind",
+              "centerHz",
+              "direction",
+              "field"
+            ],
+            "properties": {
+              "kind": {
+                "const": "eq"
+              },
+              "centerHz": {
+                "type": "number",
+                "minimum": 20,
+                "maximum": 20000
+              },
+              "direction": {
+                "type": "string",
+                "enum": [
+                  "more",
+                  "less"
+                ]
+              },
+              "strength": {
+                "type": "string",
+                "enum": [
+                  "slight",
+                  "medium",
+                  "strong"
+                ]
+              },
+              "field": {
+                "type": "string",
+                "enum": [
+                  "gain",
+                  "q",
+                  "freq"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "kind",
+              "target",
+              "on"
+            ],
+            "properties": {
+              "kind": {
+                "const": "toggle"
+              },
+              "target": {
+                "type": "string",
+                "enum": [
+                  "noiseFloor",
+                  "gate",
+                  "limiter",
+                  "compression",
+                  "rgbMode",
+                  "mute",
+                  "monitor"
+                ]
+              },
+              "on": {
+                "type": "boolean"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "kind",
+              "param",
+              "value"
+            ],
+            "properties": {
+              "kind": {
+                "const": "set"
+              },
+              "param": {
+                "type": "string",
+                "enum": [
+                  "mic.mute",
+                  "mic.sigMute",
+                  "hp.OnOff",
+                  "enc.OnOff",
+                  "enc.Level",
+                  "eq.mode",
+                  "comp.Enable",
+                  "comp.MakeUpGain",
+                  "comp.Threshold",
+                  "comp.Attack",
+                  "comp.Release",
+                  "comp.Rate",
+                  "comp.KneeWidth",
+                  "limit.Enable",
+                  "limit.Threshold",
+                  "limit.Attack",
+                  "limit.Release",
+                  "noisegate.Enable",
+                  "noisegate.threshold_db",
+                  "noisegate.ratio",
+                  "noisegate.attack_ms",
+                  "noisegate.release_ms",
+                  "noisegate.knee_width_db",
+                  "noisegate.hp_freq",
+                  "drc3.Enable",
+                  "drc3.fc1",
+                  "drc3.fc2",
+                  "drc3.low.preGain",
+                  "drc3.low.threshold",
+                  "drc3.low.attackTime",
+                  "drc3.low.releaseTime",
+                  "drc3.low.ratio",
+                  "drc3.high.preGain",
+                  "drc3.high.threshold",
+                  "drc3.high.attackTime",
+                  "drc3.high.releaseTime",
+                  "drc3.high.ratio",
+                  "drc3.mid.preGain",
+                  "drc3.mid.threshold",
+                  "drc3.mid.attackTime",
+                  "drc3.mid.releaseTime",
+                  "drc3.mid.ratio",
+                  "rgb.OnOff",
+                  "rgb.Mode",
+                  "eq.band1.type",
+                  "eq.band1.freq",
+                  "eq.band1.gain",
+                  "eq.band1.q",
+                  "eq.band2.type",
+                  "eq.band2.freq",
+                  "eq.band2.gain",
+                  "eq.band2.q",
+                  "eq.band3.type",
+                  "eq.band3.freq",
+                  "eq.band3.gain",
+                  "eq.band3.q",
+                  "eq.band4.type",
+                  "eq.band4.freq",
+                  "eq.band4.gain",
+                  "eq.band4.q",
+                  "eq.band5.type",
+                  "eq.band5.freq",
+                  "eq.band5.gain",
+                  "eq.band5.q",
+                  "eq.band6.type",
+                  "eq.band6.freq",
+                  "eq.band6.gain",
+                  "eq.band6.q",
+                  "eq.band7.type",
+                  "eq.band7.freq",
+                  "eq.band7.gain",
+                  "eq.band7.q"
+                ]
+              },
+              "value": {
+                "type": "number"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "kind",
+              "scene"
+            ],
+            "properties": {
+              "kind": {
+                "const": "scene"
+              },
+              "scene": {
+                "type": "string",
+                "enum": [
+                  "quiet",
+                  "game",
+                  "podcast",
+                  "sing",
+                  "custom"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "kind",
+              "tone"
+            ],
+            "properties": {
+              "kind": {
+                "const": "tone"
+              },
+              "tone": {
+                "type": "string",
+                "enum": [
+                  "flat",
+                  "vocal",
+                  "warm",
+                  "bright",
+                  "custom"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "kind"
+            ],
+            "properties": {
+              "kind": {
+                "const": "undo"
+              }
+            }
+          }
+        ]
+      }
+    },
+    "question": {
+      "type": "string"
+    },
+    "say": {
+      "type": "string"
+    },
+    "confidence": {
+      "enum": [
+        0,
+        0.25,
+        0.5,
+        0.75,
+        1
+      ]
+    }
+  }
+}

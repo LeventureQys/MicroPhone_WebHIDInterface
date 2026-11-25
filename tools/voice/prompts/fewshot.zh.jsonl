@@ -1,0 +1,5 @@
+{"text":"人声有点闷，还有点糊，帮我把中间那块收一收","plan":{"v":1,"status":"ok","say":"把闷的地方收一收","confidence":1,"ops":[{"kind":"tune","target":"muddiness","direction":"less","strength":"slight"}]}}
+{"text":"把噪声门打开","plan":{"v":1,"status":"ok","say":"噪声门已打开","confidence":1,"ops":[{"kind":"toggle","target":"gate","on":true}]}}
+{"text":"第六段提三分贝","plan":{"v":1,"status":"ok","say":"第六段增益提 3 dB","confidence":1,"ops":[{"kind":"set","param":"eq.band6.gain","value":3}]}}
+{"text":"我要开始直播了","plan":{"v":1,"status":"ok","say":"切到直播场景","confidence":0.75,"ops":[{"kind":"scene","scene":"podcast"}]}}
+{"text":"明天天气怎么样","plan":{"v":1,"status":"unsupported","say":"我只管调麦克风音色，比如声音亮一点","confidence":1,"ops":[]}}

@@ -1,0 +1,16 @@
+{
+  "v": 1,
+  "base": "tools/voice/models/base-hf/Qwen3-1.7B",
+  "data": "tools/voice/data/train.jsonl",
+  "out": "tools/voice/train/out/qwen3-1.7b-lora",
+  "lora": { "r": 16, "alpha": 32, "dropout": 0.05, "target_modules": ["q_proj","k_proj","v_proj","o_proj","gate_proj","up_proj","down_proj"] },
+  "train": { "epochs": 3, "batchSize": 4, "gradAccum": 4, "lr": 0.0002, "maxLen": 2048, "warmupRatio": 0.03, "seed": 20261124 },
+  "quant": { "bits": 4, "type": "Q4_K_M" },
+  "runtime": {
+    "dtype": "bf16",
+    "batchSize": 1,
+    "gradAccum": 16,
+    "effectiveBatch": 16,
+    "why": "本机 4070 SUPER 12GB + Windows 实测：4bit QLoRA batch1 1151 tok/s、batch2 溢出到共享显存只有 615 tok/s；bf16 batch1 2625 tok/s、峰值 7.9GB。4bit 反而更慢也不省可用显存，所以基座按 bf16 加载（LoRA 超参与样本格式不变）。train.batchSize/gradAccum 仍是契约值，真正生效的是本节的 1/16，有效 batch 保持 16。"
+  }
+}

@@ -1,0 +1,323 @@
+{
+  "v": 1,
+  "strengthWords": {
+    "slight": [
+      "一点",
+      "稍微",
+      "有点儿",
+      "略微",
+      "小一点"
+    ],
+    "strong": [
+      "很",
+      "特别",
+      "非常",
+      "太",
+      "超"
+    ]
+  },
+  "entries": [
+    {
+      "pattern": "暗|发暗|变暗|压暗一点|高音少|没有光泽|声音发暗",
+      "target": "brightness",
+      "direction": "less"
+    },
+    {
+      "pattern": "亮|明亮|清亮|通透|发亮|亮堂|声音发亮|高音多|不够亮|听着清亮|再亮一点|亮一些|提亮一点|多一点高频|亮起来",
+      "target": "brightness",
+      "direction": "more"
+    },
+    {
+      "pattern": "冷|发冷|薄|单薄|干|干瘪|声音太薄了|声音发干|太冷了",
+      "target": "warmth",
+      "direction": "less"
+    },
+    {
+      "pattern": "暖|温暖|厚|厚实|圆润|饱满|醇厚|有厚度|声音发暖|不够厚|再暖一点|暖一些|厚一点|加一点厚度|暖和点",
+      "target": "warmth",
+      "direction": "more"
+    },
+    {
+      "pattern": "低音少|低频少|不够低|把低音收一收|别那么轰",
+      "target": "lowEnd",
+      "direction": "less"
+    },
+    {
+      "pattern": "低音|低频|重低音|下潜|轰|发轰|低频足|低音多|隆隆的|低音轰隆|再加点低音|低音多一点|低频再足一点|轰鸣一点",
+      "target": "lowEnd",
+      "direction": "more"
+    },
+    {
+      "pattern": "更闷|再闷一点|闷一点|糊一点|浑一点|加点箱音",
+      "target": "muddiness",
+      "direction": "more"
+    },
+    {
+      "pattern": "闷|浑浊|浑|糊|箱音|鼻音|有点闷|听着发糊|蒙了一层|堵得慌|声音发闷|闷得慌|把闷的收一收|化开一点|去掉箱音|把浑浊收一收|别闷在里面",
+      "target": "muddiness",
+      "direction": "less"
+    },
+    {
+      "pattern": "发虚|不清楚|人声太靠后|细节不够|声音不实",
+      "target": "clarity",
+      "direction": "less"
+    },
+    {
+      "pattern": "清楚|清晰|人声突出|靠前|解析力|声音清楚|听得清|扎实|声音不虚|人声不够靠前|再清楚一点|清楚一点|人声靠前|多一点清晰度|声音再实一点",
+      "target": "clarity",
+      "direction": "more"
+    },
+    {
+      "pattern": "齿音重一点|再刺一点|高音再加一点|齿音再多点",
+      "target": "sibilance",
+      "direction": "more"
+    },
+    {
+      "pattern": "齿音|尖|si音|嘶|齿音重|太尖了|刺啦声|嘶嘶声|齿音太多|高频刺|有刺|刺得慌|刺一下|又刺|齿因|齿音压一压|别那么尖|收一点齿音|把嘶声去掉",
+      "target": "sibilance",
+      "direction": "less"
+    },
+    {
+      "pattern": "毛刺多一点|再刺耳一点|更硬一点",
+      "target": "harshness",
+      "direction": "more"
+    },
+    {
+      "pattern": "毛刺|刺耳|扎耳朵|刮|发硬|刺刺的|太扎耳|声音扎耳朵|刺耳难受|毛刺感重|柔一点|别那么刺|软化一下|把毛刺削掉|听着不扎耳",
+      "target": "harshness",
+      "direction": "less"
+    },
+    {
+      "pattern": "底噪多一点|别降那么狠|降噪弱一点|让环境声进来",
+      "target": "noiseFloor",
+      "direction": "more"
+    },
+    {
+      "pattern": "底噪|噪音|噪声|呼呼声|环境声|底噪大|背景噪音|沙沙声|噪声大|底噪明显|降噪强一点|把底噪压下去|安静一点|噪音小一点|降噪开大",
+      "target": "noiseFloor",
+      "direction": "less"
+    },
+    {
+      "pattern": "压缩轻一点|别压那么狠|动态大一点|别压得太死|起伏多一点",
+      "target": "compression",
+      "direction": "less"
+    },
+    {
+      "pattern": "压缩|忽大忽小|声音不稳|太平|压得死|动态小|忽高忽低|音量不稳|被压扁了|没起伏|压缩重一点|再压一点|压得更平|动态再小一点",
+      "target": "compression",
+      "direction": "more"
+    },
+    {
+      "pattern": "声音小一点|轻一点|音量降一点|别那么大声|小声点|声音有点大|声音太大|声音太大了|音量有点大",
+      "target": "loudness",
+      "direction": "less"
+    },
+    {
+      "pattern": "声音小|大声|音量|响度|听不清|太小了|声音大|音量高|声音太轻|不够响|声音有点小|声音太小|声音太小了|音量有点小|响一点|大声一点|音量提一点|再响一点|声音大一点",
+      "target": "loudness",
+      "direction": "more"
+    },
+    {
+      "pattern": "门严一点|切得狠一点|弱声切掉|门限高一点",
+      "target": "gate",
+      "direction": "more"
+    },
+    {
+      "pattern": "气口|呼吸声|杂音|断断续续|吞字|说话断续|气声太多|字被吃掉|尾音没了|一顿一顿|门松一点|别切那么狠|保留气口|门限低一点|让我小声也能过",
+      "target": "gate",
+      "direction": "less"
+    },
+    {
+      "pattern": "防爆音弱一点|保护少一点|别削那么狠",
+      "target": "limiter",
+      "direction": "less"
+    },
+    {
+      "pattern": "爆音|破音|削顶|过载|声音炸了|一喊就破|爆了|失真|噼啪声|炸麦|防爆音强一点|保护多一点|别爆",
+      "target": "limiter",
+      "direction": "more"
+    },
+    {
+      "pattern": "灯效上一个|上一个颜色|切回上一个灯效|退一个灯效",
+      "target": "rgbMode",
+      "direction": "less"
+    },
+    {
+      "pattern": "灯效|灯|颜色|氛围灯|灯的颜色|灯光|换灯效|灯效模式|灯光模式|彩灯|灯效下一个|换个颜色|切下一个灯效|灯效换一换",
+      "target": "rgbMode",
+      "direction": "more"
+    }
+  ],
+  "switches": [
+    {
+      "pattern": "打开降噪|开降噪|启用降噪",
+      "target": "noiseFloor",
+      "on": true
+    },
+    {
+      "pattern": "关掉降噪|关闭降噪|关降噪|不要降噪",
+      "target": "noiseFloor",
+      "on": false
+    },
+    {
+      "pattern": "打开噪声门|开噪声门",
+      "target": "gate",
+      "on": true
+    },
+    {
+      "pattern": "关掉噪声门|关噪声门",
+      "target": "gate",
+      "on": false
+    },
+    {
+      "pattern": "打开防爆音|开防爆音|开限幅",
+      "target": "limiter",
+      "on": true
+    },
+    {
+      "pattern": "关掉防爆音|关防爆音|关限幅",
+      "target": "limiter",
+      "on": false
+    },
+    {
+      "pattern": "打开压缩|开压缩",
+      "target": "compression",
+      "on": true
+    },
+    {
+      "pattern": "关掉压缩|关压缩",
+      "target": "compression",
+      "on": false
+    },
+    {
+      "pattern": "打开灯效|开灯效|把灯打开",
+      "target": "rgbMode",
+      "on": true
+    },
+    {
+      "pattern": "关闭灯效|关灯效|把灯关掉",
+      "target": "rgbMode",
+      "on": false
+    },
+    {
+      "pattern": "静音|闭麦|关麦|别收音了|关麦克风|关闭麦克风|把麦克风关掉|麦克风关掉",
+      "target": "mute",
+      "on": true
+    },
+    {
+      "pattern": "取消静音|开麦|解除静音",
+      "target": "mute",
+      "on": false
+    },
+    {
+      "pattern": "打开监听|开监听",
+      "target": "monitor",
+      "on": true
+    },
+    {
+      "pattern": "关掉监听|关监听|不要监听",
+      "target": "monitor",
+      "on": false
+    }
+  ],
+  "scenes": [
+    {
+      "pattern": "安静房间|安静模式",
+      "scene": "quiet"
+    },
+    {
+      "pattern": "游戏模式|打游戏",
+      "scene": "game"
+    },
+    {
+      "pattern": "播客模式|录播客",
+      "scene": "podcast"
+    },
+    {
+      "pattern": "唱歌模式|唱歌",
+      "scene": "sing"
+    },
+    {
+      "pattern": "自定义模式",
+      "scene": "custom"
+    }
+  ],
+  "scenarios": [
+    {
+      "pattern": "直播|带货|直播带货|开直播",
+      "scenario": "live"
+    },
+    {
+      "pattern": "会议|开会|网课|上课",
+      "scenario": "meeting"
+    },
+    {
+      "pattern": "唱歌|k歌|录歌",
+      "scenario": "sing"
+    },
+    {
+      "pattern": "游戏|开黑|打游戏|战队语音",
+      "scenario": "game"
+    },
+    {
+      "pattern": "播客|录播客|访谈",
+      "scenario": "podcast"
+    },
+    {
+      "pattern": "录课|试音|录音",
+      "scenario": "record"
+    },
+    {
+      "pattern": "配音|旁白|有声书",
+      "scenario": "dub"
+    },
+    {
+      "pattern": "asmr|轻声|耳语",
+      "scenario": "asmr"
+    }
+  ],
+  "tones": [
+    {
+      "pattern": "原声|原声模式",
+      "tone": "flat"
+    },
+    {
+      "pattern": "人声增强|人声模式",
+      "tone": "vocal"
+    },
+    {
+      "pattern": "温暖模式|温暖音色",
+      "tone": "warm"
+    },
+    {
+      "pattern": "明亮模式|明亮音色",
+      "tone": "bright"
+    },
+    {
+      "pattern": "自定义音色|自定义模式",
+      "tone": "custom"
+    }
+  ],
+  "explainOnly": [
+    {
+      "pattern": "回音|有回声|像在桶里|房间太空|声音空|回荡",
+      "id": "echo"
+    },
+    {
+      "pattern": "喷麦|p音爆|噗噗声|扑扑声|口水音",
+      "id": "plosive"
+    },
+    {
+      "pattern": "电流声|嗡嗡|50赫兹哼声|嗡声|低频哼声",
+      "id": "hum"
+    },
+    {
+      "pattern": "背景音乐串|耳机漏音|串音|听到音乐|伴奏串进来",
+      "id": "bgm"
+    }
+  ],
+  "undo": "撤销|撤消|回到上一步|刚才那个不要了|恢复原样",
+  "confirm": "确认|确定|好|可以|行|没问题|是的|对",
+  "bandParam": "第(?P<band>[1-7一二三四五六七])段(?P<field>增益|频率|q值|带宽)?",
+  "hzParam": "(?P<hz>\\d+(?:\\.\\d+)?)\\s*(?:赫兹|hz|k|千赫)"
+}
