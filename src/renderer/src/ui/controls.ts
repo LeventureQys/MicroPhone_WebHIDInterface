@@ -27,9 +27,51 @@ export function paintRange(range: HTMLInputElement): void {
   range.style.setProperty('--fill', `${(Math.max(0, Math.min(1, ratio)) * 100).toFixed(2)}%`);
 }
 
+export interface ResetControlOptions {
+  /** 点击“恢复”时执行的动作 */
+  onClick: () => void;
+  /** 当前值已经是目标值时禁用按钮 */
+  disabled?: boolean;
+  /** 覆盖按钮文案；默认使用统一的“恢复” */
+  label?: string;
+}
+
+/** 参数控件共用的轻量恢复按钮，避免每个视图重复拼 DOM 和无障碍属性。 */
+export function resetControl(opts: ResetControlOptions): HTMLButtonElement {
+  const button = document.createElement('button');
+  button.type = 'button';
+  button.className = 'param-reset';
+  button.dataset.reset = 'true';
+  button.textContent = opts.label ?? t('common.restore');
+  button.title = t('common.restoreHint');
+  button.setAttribute('aria-label', button.title);
+  button.disabled = opts.disabled ?? false;
+  button.setAttribute('aria-disabled', String(button.disabled));
+  // switchControl 的根节点是 label，按钮嵌在 label 内时必须阻止默认激活，
+  // 否则点击“恢复”会先恢复又切换一次开关。
+  button.addEventListener('mousedown', (event) => event.stopPropagation());
+  button.addEventListener('click', (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    opts.onClick();
+  });
+  return button;
+}
+
+/** 外部状态回填时同步恢复按钮的可用状态。 */
+export function setResetDisabled(root: HTMLElement, disabled: boolean, resetParam?: string): void {
+  const buttons = Array.from(root.querySelectorAll<HTMLButtonElement>('.param-reset'));
+  const button = resetParam
+    ? buttons.find((candidate) => candidate.dataset.resetParam === resetParam)
+    : buttons[0];
+  if (!button) return;
+  button.disabled = disabled;
+  button.setAttribute('aria-disabled', String(disabled));
+}
+
 export function paramSlider(
   spec: ParamSpec,
-  opts: { value: number; onInput: (value: number) => void },
+  opts: { value: number; onInput: (value: number) => void; reset?: ResetControlOptions },
 ): HTMLElement {
   const root = document.createElement('div');
   // pfield--slider：标签 + 数字框一行、滑杆一行（布局见 components.css）
@@ -51,7 +93,13 @@ export function paramSlider(
   readout.className = 'pfield-value';
   readout.textContent = valueText(spec, opts.value);
 
-  head.append(label, unit, readout);
+  head.append(label, unit);
+  if (opts.reset) {
+    const reset = resetControl(opts.reset);
+    reset.dataset.resetParam = spec.id;
+    head.append(reset);
+  }
+  head.append(readout);
 
   const body = document.createElement('div');
   body.className = 'pfield-body';
@@ -155,6 +203,7 @@ export function switchControl(opts: {
   /** 无障碍名：没有可见文案时必须给，否则屏幕阅读器只念"复选框" */
   ariaLabel?: string;
   onChange: (value: boolean) => void;
+  reset?: ResetControlOptions;
 }): HTMLElement {
   const accessibleName = opts.ariaLabel ?? opts.label;
   const root = document.createElement('label');
@@ -183,6 +232,10 @@ export function switchControl(opts: {
   } else {
     root.classList.add('switch-row--bare');
     root.append(shell);
+  }
+  if (opts.reset) {
+    const reset = resetControl(opts.reset);
+    root.append(reset);
   }
   return root;
 }
@@ -244,10 +297,12 @@ export function macroSlider(opts: {
   scale?: [string, string];
   hint?: string;
   onChange: (value: number) => void;
+  reset?: ResetControlOptions;
   toggle?: {
     checked: boolean;
     label: string;
     onChange: (checked: boolean) => void;
+    reset?: ResetControlOptions;
   };
 }): MacroSliderHandle {
   const min = opts.min ?? 0;
@@ -282,6 +337,7 @@ export function macroSlider(opts: {
       checked: spec.checked,
       ariaLabel: spec.label,
       onChange: (checked) => spec.onChange(checked),
+      reset: spec.reset,
     });
     toggle.classList.add('macro-toggle');
     // 标题行里开关紧贴读数：读数原本靠 margin-left:auto 顶到右边，有开关时让开关顶
@@ -289,6 +345,8 @@ export function macroSlider(opts: {
     root.classList.add('pfield--toggle');
     setToggle = (checked: boolean) => setSwitchChecked(toggle as HTMLElement, checked);
   }
+
+  if (opts.reset) head.append(resetControl(opts.reset));
 
   const range = document.createElement('input');
   range.type = 'range';

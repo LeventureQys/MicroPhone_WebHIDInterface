@@ -7,6 +7,7 @@ import { currentLang, setLang as setI18nLang } from '../i18n';
 import { DEFAULT_BANDS, DEFAULT_PARAMS } from './defaults';
 import { findParam } from './params';
 import { DEFAULT_CUSTOM_GAINS, DEFAULT_TONE, type EqPresetId } from './quick-controls';
+import { defaultSceneGains, defaultSceneParams } from './scene-presets';
 import type { SceneId } from './scenes';
 import { quantize } from './values';
 
@@ -15,6 +16,8 @@ export const CHANGE_EVENT = 'change';
 export const PARAM_CHANGED_EVENT = 'param-changed';
 /** 本地拦截：参数没有出站（只读 / 未同步），detail 为 { kind, id } */
 export const LOCAL_ERROR_EVENT = 'local-error';
+/** 场景的自动保存值被整体清空（设置页复位全部参数），视图层据此重读 localStorage */
+export const SCENES_CLEARED_EVENT = 'scenes-cleared';
 
 export type LocalErrorKind = 'readOnly' | 'notSynced';
 
@@ -297,6 +300,77 @@ export class AppStore extends EventTarget {
     if (next.every((value, index) => value === this._state.customEq[index])) return;
     this._state = { ...this._state, customEq: next };
     this._commit();
+  }
+
+  /**
+   * 单项「恢复」的目标值：优先取当前场景的出厂值，场景没覆盖的项回到寄存器默认值。
+   *
+   * 目标刻意是**出厂值**而不是场景里自动保存的当前值：2026-11-22 起每项改动都会
+   * 立即存进场景，拿保存值当目标等于什么都不做。所以这个按钮的语义是「这一项回默认」。
+   * 离开场景（`activeScene === null`）后目标仍是同一个默认值，按钮照常可用。
+   */
+  sceneTargetParam(id: string): number | undefined {
+    const scene = this._state.activeScene;
+    const factory = scene ? defaultSceneParams(scene)[id] : undefined;
+    return factory ?? findParam(id)?.default;
+  }
+
+  isParamAtSceneTarget(id: string): boolean {
+    const target = this.sceneTargetParam(id);
+    return target === undefined || this._state.params[id] === target;
+  }
+
+  restoreParam(id: string): void {
+    const target = this.sceneTargetParam(id);
+    if (target === undefined) return;
+    this.setParam(id, target);
+  }
+
+  /** EQ 单段恢复目标：出厂频段（频点 / Q / 类型）配当前场景的出厂增益 */
+  sceneTargetBand(index: number): EqBand | undefined {
+    const factory = DEFAULT_BANDS[index];
+    if (!factory) return undefined;
+    const scene = this._state.activeScene;
+    if (!scene) return { ...factory };
+    const gain = defaultSceneGains(scene)[index];
+    return gain === undefined ? { ...factory } : { ...factory, gain };
+  }
+
+  isBandAtSceneTarget(index: number): boolean {
+    const current = this._state.bands[index];
+    const target = this.sceneTargetBand(index);
+    if (!current || !target) return true;
+    return (
+      current.type === target.type &&
+      current.freq === target.freq &&
+      current.gain === target.gain &&
+      current.q === target.q
+    );
+  }
+
+  restoreBand(index: number): void {
+    const current = this._state.bands[index];
+    const target = this.sceneTargetBand(index);
+    if (!current || !target) return;
+    this.setBands(
+      this._state.bands.map((band, bandIndex) =>
+        bandIndex === index ? { ...band, type: target.type, freq: target.freq, gain: target.gain, q: target.q } : band,
+      ),
+    );
+    if (this._state.tone === 'custom') {
+      const gains = this._state.bands.slice(0, EQ_BAND_COUNT).map((band) => band.gain);
+      this.setCustomEq(gains);
+    }
+  }
+
+  /**
+   * 通知视图层：所有场景的自动保存值已被清空（设置页「复位全部参数」）。
+   *
+   * 覆盖值存在 localStorage、由工作台视图持有，store 只负责广播；监听方据此重读，
+   * 否则复位之后再点场景会把复位前的微调又写回去。
+   */
+  notifySceneOverridesCleared(): void {
+    this.dispatchEvent(new CustomEvent(SCENES_CLEARED_EVENT));
   }
 
   /**

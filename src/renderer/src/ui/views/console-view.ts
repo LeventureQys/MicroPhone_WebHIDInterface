@@ -4,6 +4,10 @@ import { findParam, type ParamSpec } from '../../domain/params';
 import { matchScene, SCENES, type SceneId, type ScenePreset } from '../../domain/scenes';
 import {
   clearSceneOverride,
+  defaultSceneGains,
+  forgetSceneGains,
+  forgetSceneParams,
+  hasSceneOverride,
   loadCustomEq,
   loadSceneOverrides,
   recordSceneGains,
@@ -23,7 +27,7 @@ import {
   type EqPresetId,
 } from '../../domain/quick-controls';
 import type { AppState, AppStore, LocalErrorDetail, ParamChangedDetail } from '../../domain/state';
-import { LOCAL_ERROR_EVENT, PARAM_CHANGED_EVENT } from '../../domain/state';
+import { LOCAL_ERROR_EVENT, PARAM_CHANGED_EVENT, SCENES_CLEARED_EVENT } from '../../domain/state';
 import { formatValue } from '../../domain/values';
 import { computeCurve } from '../../eq/curve';
 import { attachEqInteractions } from '../../eq/interactions';
@@ -35,10 +39,12 @@ import { t } from '../../i18n';
 import {
   card,
   macroSlider,
+  resetControl,
   segmented,
   setSegmentedValue,
   setSwitchChecked,
   switchControl,
+  setResetDisabled,
   type MacroSliderHandle,
 } from '../controls';
 import { icon, type IconName } from '../icons';
@@ -49,6 +55,8 @@ export interface ConsoleApi {
   openDevice: () => void;
   /** `section` 给定时直接滚到高级参数里的那一节（「逐段精调」→ 均衡） */
   openAdvanced: (section?: AdvancedSectionId) => void;
+  /** 场景恢复前的确认；未注入时使用 Electron 原生 confirm。 */
+  confirm?: (message: string) => boolean;
 }
 
 /** 设备摘要的数据源（`DeviceLink`）：工作台只读名字和固件版本，不碰链路 */
@@ -228,13 +236,15 @@ export function createConsoleView(
     sceneRow.append(button);
   }
   // 场景复位（2026-11-22 问题单第 9 条）：只复位当前选中的那个场景，
-  // 清掉它自动保存过的改动，回到 `SCENES` 里的出厂预设
+  // 清掉它自动保存过的改动，回到 `SCENES` 里的出厂预设；复位会覆盖微调，先问一句
   const sceneReset = document.createElement('button');
   sceneReset.type = 'button';
   sceneReset.className = 'scene-reset';
   sceneReset.append(icon('reset', 14), element('span', '', t('console.scene.reset')));
   sceneReset.title = t('console.scene.resetHint');
   sceneReset.setAttribute('aria-label', t('console.scene.resetHint'));
+  sceneReset.disabled = true;
+  sceneReset.setAttribute('aria-disabled', 'true');
   sceneReset.addEventListener('click', () => resetScene());
   sceneRow.append(sceneReset);
   sceneCard.body.append(sceneRow);
@@ -279,20 +289,35 @@ export function createConsoleView(
       format: (value) => `${formatValue(threshold, value)} ${t('common.unit.dB')}`,
       hint,
       onChange: (value) => store.setParam(threshold.id, value),
+      reset: {
+        onClick: () => store.restoreParam(threshold.id),
+        disabled: store.isParamAtSceneTarget(threshold.id),
+      },
       toggle: enable
         ? {
             checked: (state.params[enable.id] ?? 0) === 1,
             label: t(`param.${enable.id}.label`),
             onChange: (checked) => store.setParam(enable.id, checked ? 1 : 0),
+            reset: {
+              onClick: () => store.restoreParam(enable.id),
+              disabled: store.isParamAtSceneTarget(enable.id),
+            },
           }
         : undefined,
     });
     slider.root.dataset.macro = key;
+    const sliderHead = slider.root.querySelector<HTMLElement>('.pfield-head');
+    const sliderReset = Array.from(sliderHead?.children ?? []).find(
+      (child): child is HTMLButtonElement =>
+        child instanceof HTMLButtonElement && child.classList.contains('param-reset'),
+    );
+    sliderReset?.setAttribute('data-reset-param', threshold.id);
     const toggleNode = slider.root.querySelector<HTMLElement>('.macro-toggle');
     if (enable && toggleNode) {
       // 开关也带 data-param / data-enable：探针与验收脚本按参数 id 定位，不靠文案
       toggleNode.dataset.param = enable.id;
       toggleNode.dataset.enable = key;
+      toggleNode.querySelector<HTMLButtonElement>('.param-reset')?.setAttribute('data-reset-param', enable.id);
     }
     thresholdRows.push({ slider, threshold, enableId: enable?.id ?? null });
     tuneGrid.append(slider.root);
@@ -315,6 +340,12 @@ export function createConsoleView(
   const toneHead = document.createElement('div');
   toneHead.className = 'pfield-head';
   toneHead.append(element('span', 'pfield-label', t('console.tone')));
+  const toneReset = resetControl({
+    onClick: () => restoreTone(),
+    disabled: true,
+  });
+  toneReset.dataset.resetParam = 'tone';
+  toneHead.append(toneReset);
   const toneChips = document.createElement('div');
   toneChips.className = 'tone-chips';
   const toneButtons = new Map<EqPresetId, HTMLButtonElement>();
@@ -354,8 +385,13 @@ export function createConsoleView(
       checked: (state.params[id] ?? 0) === 1,
       label: inputSwitchLabel[id] ?? t(`param.${id}.label`),
       onChange: (checked) => store.setParam(id, checked ? 1 : 0),
+      reset: {
+        onClick: () => store.restoreParam(id),
+        disabled: store.isParamAtSceneTarget(id),
+      },
     });
     node.dataset.param = id;
+    node.querySelector<HTMLButtonElement>('.param-reset')?.setAttribute('data-reset-param', id);
     inputSwitchById.set(id, node);
     tuneSwitchGrid.append(node);
   }
@@ -409,9 +445,14 @@ export function createConsoleView(
     checked: (state.params['enc.OnOff'] ?? 0) === 1,
     label: t('console.enc'),
     onChange: (checked) => store.setParam('enc.OnOff', checked ? 1 : 0),
+    reset: {
+      onClick: () => store.restoreParam('enc.OnOff'),
+      disabled: store.isParamAtSceneTarget('enc.OnOff'),
+    },
   });
   // 与三个输入开关一致：带 data-param，探针/验收按参数 id 定位，不靠文案
   encSwitch.dataset.param = 'enc.OnOff';
+  encSwitch.querySelector<HTMLButtonElement>('.param-reset')?.setAttribute('data-reset-param', 'enc.OnOff');
   const encLevel = segmented<number>({
     options: [0, 1, 2, 3].map((value) => ({ value, label: String(value) })),
     value: state.params['enc.Level'] ?? 1,
@@ -420,7 +461,13 @@ export function createConsoleView(
   encLevel.classList.add('segmented--compact');
   const encLevelRow = document.createElement('div');
   encLevelRow.className = 'switch-sub';
-  encLevelRow.append(element('span', 'switch-sub-label', t('console.enc.level')), encLevel);
+  const encLevelLabel = element('span', 'switch-sub-label', t('console.enc.level'));
+  const encLevelReset = resetControl({
+    onClick: () => store.restoreParam('enc.Level'),
+    disabled: store.isParamAtSceneTarget('enc.Level'),
+  });
+  encLevelReset.dataset.resetParam = 'enc.Level';
+  encLevelRow.append(encLevelLabel, encLevel, encLevelReset);
   encGroup.append(encSwitch, encLevelRow);
 
   /**
@@ -555,6 +602,8 @@ export function createConsoleView(
   /** 场景自己正在写 store：这时的 setParam 是"应用预设"，不能被当成用户改动存起来 */
   let applyingScene = false;
   let sceneOverrides: SceneOverrides = loadSceneOverrides();
+  /** 上一次对齐过的频段表：换掉才需要重算「自定义」曲线的场景覆盖值 */
+  let lastBands = store.get().bands;
 
   /**
    * 应用一个场景：写出它保存过的参数与曲线（没改过的项就是出厂预设），
@@ -593,10 +642,22 @@ export function createConsoleView(
     applySceneValues(scene.id);
   }
 
-  /** 场景复位：清掉这个场景自动保存的改动，再按出厂预设应用一遍（问题单第 9 条） */
+  /**
+   * 场景复位（问题单第 9 条）：清掉这个场景自动保存的改动，再按出厂预设应用一遍。
+   *
+   * 会覆盖用户已经做好的微调，因此先问一句；`api.confirm` 没注入时退回浏览器原生
+   * confirm，两者都没有（无弹窗能力的环境）才直接执行，免得按钮点了没反应。
+   */
   function resetScene(): void {
     const id = store.get().activeScene;
-    if (!id) return;
+    if (!id || !hasSceneOverride(sceneOverrides, id)) return;
+    const message = t('console.scene.resetConfirm', { scene: t(`console.scene.${id}`) });
+    const confirmed = api.confirm
+      ? api.confirm(message)
+      : typeof window.confirm === 'function'
+        ? window.confirm(message)
+        : true;
+    if (!confirmed) return;
     sceneOverrides = clearSceneOverride(sceneOverrides, id);
     saveSceneOverrides(sceneOverrides);
     applySceneValues(id, { resetCustomCurve: true });
@@ -620,6 +681,21 @@ export function createConsoleView(
     syncScene(store.get());
   }
 
+  /** 音色恢复：回到当前场景的出厂音色；没有场景上下文时回「原声」 */
+  function restoreTone(): void {
+    const sceneId = store.get().activeScene;
+    const scene = sceneId ? SCENES.find((item) => item.id === sceneId) : undefined;
+    const id: EqPresetId = scene?.tone ?? 'flat';
+    const gains = toneGains(id);
+    store.setTone(id);
+    store.setBands(
+      store.get().bands.map((band, index) =>
+        index < gains.length ? { ...band, gain: gains[index] } : { ...band },
+      ),
+    );
+    syncScene(store.get());
+  }
+
   /**
    * 「均衡器复位」：只允许在「自定义」音色下用（问题单 13），
    * 复位后的频段值按问题单手写的那张表——7 段增益全 0、Q 全 0.7（问题单 12），
@@ -635,40 +711,81 @@ export function createConsoleView(
     persistCustomGains(bands);
   }
 
-  /** 用户拖过的自定义曲线要跨重启保留，并且记到当前场景名下（问题单第 9 条） */
+  /**
+   * 用户拖过的自定义曲线要跨重启保留，并且记到当前场景名下（问题单第 9 条）。
+   *
+   * 改回出厂曲线时反过来把这条记录摘掉，这样「复位」按钮只在这个场景真有改动时可用。
+   */
   function persistCustomGains(bands: readonly EqBand[]): void {
     if (activeTone !== 'custom') return;
     const gains = gainsOf(bands);
+    if (applyingScene) return;
     saveCustomEq(gains);
     const sceneId = store.get().activeScene;
-    if (applyingScene || !sceneId) return;
-    sceneOverrides = recordSceneGains(sceneOverrides, sceneId, gains);
+    if (!sceneId) return;
+    const factory = defaultSceneGains(sceneId);
+    const same =
+      factory.length === gains.length && factory.every((value, index) => value === gains[index]);
+    const next = same
+      ? forgetSceneGains(sceneOverrides, sceneId)
+      : recordSceneGains(sceneOverrides, sceneId, gains);
+    if (next === sceneOverrides) return;
+    sceneOverrides = next;
     saveSceneOverrides(sceneOverrides);
   }
 
-  /** 主界面/高级参数改过的参数都记在当前场景名下：复位一次就全回到出厂预设 */
+  /**
+   * 主界面/高级参数改过的参数都记在当前场景名下：复位一次就全回到出厂预设。
+   * 某一项被「恢复」按钮写回目标值时把它从记录里摘掉，否则复位按钮永远亮着。
+   */
   const onParamChanged = (event: Event): void => {
     const sceneId = store.get().activeScene;
     if (applyingScene || !sceneId) return;
     const detail = (event as CustomEvent<ParamChangedDetail>).detail;
     if (!detail || typeof detail.id !== 'string') return;
-    const next = recordSceneParams(sceneOverrides, sceneId, { [detail.id]: detail.value });
+    const target = store.sceneTargetParam(detail.id);
+    const next =
+      target !== undefined && detail.value === target
+        ? forgetSceneParams(sceneOverrides, sceneId, [detail.id])
+        : recordSceneParams(sceneOverrides, sceneId, { [detail.id]: detail.value });
     if (next === sceneOverrides) return;
     sceneOverrides = next;
     saveSceneOverrides(sceneOverrides);
+    // setParam 先发 'change' 再发 'param-changed'，上面那轮回填看到的还是旧覆盖表，
+    // 这里补一次，场景按钮的 is-dirty / 复位可用态才跟得上。
+    syncScene(store.get());
   };
   store.addEventListener(PARAM_CHANGED_EVENT, onParamChanged);
+
+  /** 设置页「复位全部参数」把场景覆盖表也清了：这里跟着重读，别拿旧值再写回设备 */
+  const onScenesCleared = (): void => {
+    sceneOverrides = loadSceneOverrides();
+    syncScene(store.get());
+  };
+  store.addEventListener(SCENES_CLEARED_EVENT, onScenesCleared);
+
+  function sceneIsDirty(): boolean {
+    const sceneId = store.get().activeScene;
+    return sceneId !== null && hasSceneOverride(sceneOverrides, sceneId);
+  }
 
   function syncScene(stateNow: ReturnType<AppStore['get']>): void {
     // 显式选中的场景优先（它可能已经被微调过，参数不再与出厂值一致）；
     // 没选场景（用户手动换了音色）时才按参数反推
     const active = stateNow.activeScene ?? matchScene(stateNow.params, stateNow.bands, stateNow.customEq, stateNow.tone);
+    const selected = stateNow.activeScene;
+    const dirty = sceneIsDirty();
     for (const [id, button] of sceneButtons) {
+      // 选中场景是稳定的工作上下文；`active` 只用于首次加载时从已有参数推断。
+      // 手调后仍保留按钮高亮，并用 is-dirty 边框说明这个场景已经有保存过的改动。
       const on = id === active;
       button.classList.toggle('is-active', on);
+      button.classList.toggle('is-selected', id === selected);
+      button.classList.toggle('is-dirty', id === selected && dirty);
       button.setAttribute('aria-pressed', String(on));
     }
-    const canReset = stateNow.activeScene !== null;
+    // 没有保存过的改动就没什么可复位的，按钮此时不该亮
+    const canReset = selected !== null && dirty;
     if (sceneReset.disabled !== !canReset) sceneReset.disabled = !canReset;
     sceneReset.setAttribute('aria-disabled', String(!canReset));
   }
@@ -685,6 +802,14 @@ export function createConsoleView(
       button.classList.toggle('is-active', on);
       button.setAttribute('aria-pressed', String(on));
     }
+    // 音色恢复目标 = 当前场景的出厂音色；不在场景里（用户手选了音色）时回「原声」
+    const sceneId = stateNow.activeScene;
+    const scene = sceneId ? SCENES.find((item) => item.id === sceneId) : undefined;
+    const targetTone: EqPresetId = scene?.tone ?? 'flat';
+    const targetGains = targetTone === 'custom' ? stateNow.customEq : EQ_PRESETS[targetTone];
+    const atTarget = active === targetTone && matchesGains(stateNow.bands, targetGains, 7);
+    toneReset.disabled = atTarget;
+    toneReset.setAttribute('aria-disabled', String(atTarget));
     if (eqDesc) {
       eqDesc.textContent = active === 'custom' ? t('console.eq.desc') : t('console.eq.locked');
     }
@@ -896,16 +1021,29 @@ export function createConsoleView(
     }
     for (const row of thresholdRows) {
       row.slider.setValue(next.params[row.threshold.id] ?? row.threshold.default);
-      if (row.enableId) row.slider.setToggle?.((next.params[row.enableId] ?? 0) === 1);
+      setResetDisabled(row.slider.root, store.isParamAtSceneTarget(row.threshold.id), row.threshold.id);
+      if (row.enableId) {
+        row.slider.setToggle?.((next.params[row.enableId] ?? 0) === 1);
+        const toggle = row.slider.root.querySelector<HTMLElement>('.macro-toggle');
+        if (toggle) setResetDisabled(toggle, store.isParamAtSceneTarget(row.enableId), row.enableId);
+      }
     }
     for (const [id, node] of inputSwitchById) {
       setSwitchChecked(node, (next.params[id] ?? 0) === 1);
+      setResetDisabled(node, store.isParamAtSceneTarget(id));
     }
     setSwitchChecked(encSwitch, (next.params['enc.OnOff'] ?? 0) === 1);
     setSegmentedValue(encLevel, next.params['enc.Level'] ?? 1);
     // 灯效与高级参数共用同一参数：两边任改一处，这里都要跟着回填
     setSwitchChecked(lightSwitch, (next.params['rgb.OnOff'] ?? 0) === 1);
     setSegmentedValue(lightMode, next.params['rgb.Mode'] ?? 0);
+    setResetDisabled(encSwitch, store.isParamAtSceneTarget('enc.OnOff'));
+    setResetDisabled(encLevelRow, store.isParamAtSceneTarget('enc.Level'));
+    // 拖曲线 / 单段恢复 / 均衡器复位都会换掉 bands，统一经这里对齐场景覆盖表
+    if (next.bands !== lastBands) {
+      lastBands = next.bands;
+      persistCustomGains(next.bands);
+    }
     syncScene(next);
     syncTone(next);
     syncBands(next);
@@ -928,6 +1066,7 @@ export function createConsoleView(
     clearNoticeTimer();
     store.removeEventListener(LOCAL_ERROR_EVENT, onLocalError);
     store.removeEventListener(PARAM_CHANGED_EVENT, onParamChanged);
+    store.removeEventListener(SCENES_CLEARED_EVENT, onScenesCleared);
     offTransportError();
     offDeviceInfo?.();
     offLevels();

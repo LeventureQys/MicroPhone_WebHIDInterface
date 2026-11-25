@@ -197,6 +197,59 @@ export function clearSceneOverride(overrides: SceneOverrides, id: SceneId): Scen
   return next;
 }
 
+/** 这个场景有没有用户改过的值；工作台据此决定「复位」是否可点 */
+export function hasSceneOverride(overrides: SceneOverrides, id: SceneId): boolean {
+  return id in overrides;
+}
+
+/**
+ * 把参数从场景覆盖表里摘掉（某一项被改回目标值时用）。
+ *
+ * 和 `recordSceneParams` 分开是有意的：判断「这项是否已回到默认」要用视图层的
+ * 恢复目标（场景出厂值 / 寄存器默认值），领域层不替它假设，免得把「场景没覆盖」
+ * 和「恰好等于默认」混成同一件事。
+ */
+export function forgetSceneParams(
+  overrides: SceneOverrides,
+  id: SceneId,
+  ids: readonly string[],
+): SceneOverrides {
+  const current = overrides[id];
+  if (!current?.params) return overrides;
+  const params: Record<string, number> = { ...current.params };
+  let removed = false;
+  for (const paramId of ids) {
+    if (paramId in params) {
+      delete params[paramId];
+      removed = true;
+    }
+  }
+  if (!removed) return overrides;
+  const updated: { params?: Record<string, number>; gains?: readonly number[] } = {};
+  if (Object.keys(params).length > 0) updated.params = params;
+  if (current.gains) updated.gains = current.gains;
+  if (!updated.params && !updated.gains) {
+    const copy = { ...overrides };
+    delete copy[id];
+    return copy;
+  }
+  return { ...overrides, [id]: updated };
+}
+
+/** 曲线改回出厂曲线时摘掉 gains 覆盖，理由同 `forgetSceneParams` */
+export function forgetSceneGains(overrides: SceneOverrides, id: SceneId): SceneOverrides {
+  const current = overrides[id];
+  if (!current?.gains) return overrides;
+  const updated: { params?: Record<string, number> } = {};
+  if (current.params) updated.params = { ...current.params };
+  if (!updated.params) {
+    const copy = { ...overrides };
+    delete copy[id];
+    return copy;
+  }
+  return { ...overrides, [id]: updated };
+}
+
 /** 读用户上次的「自定义」曲线；没有或坏掉时返回 null（调用方退回默认平直曲线） */
 export function loadCustomEq(storage?: StorageReader): number[] | null {
   return normalizeGains(readJson(storage ?? defaultStorage(), CUSTOM_EQ_STORAGE_KEY));

@@ -414,6 +414,40 @@
   color: var(--danger);
 }
 
+/* 每个可编辑参数的独立恢复动作；场景值未变化时由状态层禁用。 */
+.param-reset {
+  flex: none;
+  height: 22px;
+  padding: 0 6px;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 20px;
+  white-space: nowrap;
+  transition: border-color 0.14s ease, background 0.14s ease, color 0.14s ease;
+}
+
+.param-reset:hover:not(:disabled) {
+  border-color: var(--line-2);
+  background: rgba(255, 255, 255, 0.05);
+  color: var(--text);
+}
+
+.param-reset:disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
+}
+
+.pfield-head > .param-reset {
+  margin-left: auto;
+}
+
+.pfield-head > .param-reset + .pfield-value {
+  margin-left: 8px;
+}
+
 .pfield-body {
   display: flex;
   align-items: center;
@@ -827,6 +861,10 @@
   margin-left: 0;
 }
 
+.pfield--toggle .macro-toggle .param-reset {
+  margin-left: 8px;
+}
+
 .pfield--toggle .pfield-value--macro {
   margin-left: auto;
 }
@@ -1019,6 +1057,12 @@
 
 .scene-btn.is-active .scene-desc {
   color: #c9a47f;
+}
+
+/* 选中的场景仍保留上下文；橙色边框表示用户已经手调过它。 */
+.scene-btn.is-dirty {
+  border-color: rgba(242, 193, 78, 0.58);
+  background: rgba(242, 193, 78, 0.08);
 }
 
 /* 场景复位（2026-11-22 问题单第 9 条）：一个场景一套可微调并自动保存的参数，
@@ -1884,7 +1928,7 @@
 .eq-row {
   display: grid;
   /* 数字框封顶 170 px：铺满整张卡时一行 5 个格子会被拉成 300 px 的长条 */
-  grid-template-columns: 34px 124px repeat(3, minmax(80px, 170px));
+  grid-template-columns: 34px 124px repeat(3, minmax(80px, 170px)) 64px;
   align-items: center;
   gap: 8px;
   padding: 4px 8px;

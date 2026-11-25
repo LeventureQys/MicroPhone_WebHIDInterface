@@ -1,7 +1,15 @@
 import { paramsOf } from '../../domain/params';
 import type { AppState, AppStore } from '../../domain/state';
 import { t } from '../../i18n';
-import { card, segmented, setSegmentedValue, setSwitchChecked, switchControl } from '../controls';
+import {
+  card,
+  resetControl,
+  segmented,
+  setResetDisabled,
+  setSegmentedValue,
+  setSwitchChecked,
+  switchControl,
+} from '../controls';
 import { createParamFields } from './param-list';
 
 function hint(text: string): HTMLElement {
@@ -28,10 +36,15 @@ export function createInputView(store: AppStore): HTMLElement {
     checked: (state.params['noisegate.Enable'] ?? 0) === 1,
     label: t('param.noisegate.Enable.label'),
     onChange: (checked) => store.setParam('noisegate.Enable', checked ? 1 : 0),
+    reset: {
+      onClick: () => store.restoreParam('noisegate.Enable'),
+      disabled: store.isParamAtSceneTarget('noisegate.Enable'),
+    },
   });
   gateEnable.classList.add('module-bypass');
   gateEnable.dataset.enable = 'noisegate';
   gateEnable.dataset.param = 'noisegate.Enable';
+  gateEnable.querySelector<HTMLButtonElement>('.param-reset')?.setAttribute('data-reset-param', 'noisegate.Enable');
   const gateFields = createParamFields(
     store,
     paramsOf('noisegate').filter((spec) => spec.id !== 'noisegate.Enable'),
@@ -52,8 +65,13 @@ export function createInputView(store: AppStore): HTMLElement {
     checked: (state.params['enc.OnOff'] ?? 0) === 1,
     label: t('param.enc.OnOff.label'),
     onChange: (checked) => store.setParam('enc.OnOff', checked ? 1 : 0),
+    reset: {
+      onClick: () => store.restoreParam('enc.OnOff'),
+      disabled: store.isParamAtSceneTarget('enc.OnOff'),
+    },
   });
   encSwitch.dataset.param = onOffSpec?.id ?? 'enc.OnOff';
+  encSwitch.querySelector<HTMLButtonElement>('.param-reset')?.setAttribute('data-reset-param', onOffSpec?.id ?? 'enc.OnOff');
   encCard.body.append(encSwitch);
 
   let levelNode: HTMLElement | null = null;
@@ -74,6 +92,12 @@ export function createInputView(store: AppStore): HTMLElement {
       onChange: (value) => store.setParam(levelSpec.id, value),
     });
     levelNode.dataset.param = levelSpec.id;
+    const levelReset = resetControl({
+      onClick: () => store.restoreParam(levelSpec.id),
+      disabled: store.isParamAtSceneTarget(levelSpec.id),
+    });
+    levelReset.dataset.resetParam = levelSpec.id;
+    head.append(levelReset);
     levelLabel.append(levelNode);
     encCard.body.append(levelLabel);
   }
@@ -84,10 +108,13 @@ export function createInputView(store: AppStore): HTMLElement {
   const sync = (next: AppState): void => {
     gateFields.sync(next);
     setSwitchChecked(gateEnable, (next.params['noisegate.Enable'] ?? 0) === 1);
+    setResetDisabled(gateEnable, store.isParamAtSceneTarget('noisegate.Enable'));
 
     setSwitchChecked(encSwitch, (next.params['enc.OnOff'] ?? 0) === 1);
+    setResetDisabled(encSwitch, store.isParamAtSceneTarget('enc.OnOff'));
     if (levelSpec && levelNode) {
       setSegmentedValue(levelNode, next.params[levelSpec.id] ?? 1);
+      setResetDisabled(levelNode.parentElement ?? levelNode, store.isParamAtSceneTarget(levelSpec.id));
       const off = (next.params['enc.OnOff'] ?? 0) !== 1;
       for (const button of levelNode.querySelectorAll<HTMLButtonElement>('.seg-btn')) {
         button.disabled = off;

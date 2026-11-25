@@ -20,6 +20,7 @@ import { EQ_BAND_COUNT } from '../../device/registers';
 import { DEFAULT_BANDS, DEFAULT_PARAMS } from '../../domain/defaults';
 import { PARAMS } from '../../domain/params';
 import { DEFAULT_CUSTOM_GAINS } from '../../domain/quick-controls';
+import { saveSceneOverrides } from '../../domain/scene-presets';
 import { BYPASS_MODULES, type AppStore } from '../../domain/state';
 import { t } from '../../i18n';
 import { card, segmented, switchControl } from '../controls';
@@ -428,6 +429,9 @@ export function createSettingsView(store: AppStore, options?: SettingsViewOption
           if (gap > 0) await sleep(gap);
         }
         store.setCustomEq(DEFAULT_CUSTOM_GAINS);
+        // 场景的自动保存值也要一起清：留着的话再点场景会把复位前的微调写回来
+        saveSceneOverrides({});
+        store.notifySceneOverridesCleared();
       }
       resetButton.textContent = t('settings.resetDone');
     } finally {

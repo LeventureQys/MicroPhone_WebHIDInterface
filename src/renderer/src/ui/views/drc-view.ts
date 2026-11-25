@@ -1,7 +1,14 @@
 import { findParam } from '../../domain/params';
 import type { AppState, AppStore } from '../../domain/state';
 import { t } from '../../i18n';
-import { card, paramSlider, setSliderValue, setSwitchChecked, switchControl } from '../controls';
+import {
+  card,
+  paramSlider,
+  setResetDisabled,
+  setSliderValue,
+  setSwitchChecked,
+  switchControl,
+} from '../controls';
 
 const BANDS = ['low', 'mid', 'high'] as const;
 type DrcBand = (typeof BANDS)[number];
@@ -37,10 +44,15 @@ export function createDrcView(store: AppStore): HTMLElement {
     checked: (state.params['drc3.Enable'] ?? 0) === 1,
     label: t('param.drc3.Enable.label'),
     onChange: (checked) => store.setParam('drc3.Enable', checked ? 1 : 0),
+    reset: {
+      onClick: () => store.restoreParam('drc3.Enable'),
+      disabled: store.isParamAtSceneTarget('drc3.Enable'),
+    },
   });
   enable.classList.add('module-bypass');
   enable.dataset.enable = 'drc3';
   enable.dataset.param = 'drc3.Enable';
+  enable.querySelector<HTMLButtonElement>('.param-reset')?.setAttribute('data-reset-param', 'drc3.Enable');
   const enableHint = document.createElement('p');
   enableHint.className = 'macro-hint module-bypass-note';
   enableHint.textContent = t('module.drc3.bypassHint');
@@ -68,6 +80,10 @@ export function createDrcView(store: AppStore): HTMLElement {
         store.setParam(id, value);
         refreshConditionText();
         refreshConflict();
+      },
+      reset: {
+        onClick: () => store.restoreParam(id),
+        disabled: store.isParamAtSceneTarget(id),
       },
     });
     fieldMap.set(id, node);
@@ -113,6 +129,10 @@ export function createDrcView(store: AppStore): HTMLElement {
       const node = paramSlider(spec, {
         value: readNumber(id),
         onInput: (value) => store.setParam(id, value),
+        reset: {
+          onClick: () => store.restoreParam(id),
+          disabled: store.isParamAtSceneTarget(id),
+        },
       });
       fieldMap.set(id, node);
       bandCard.body.append(node);
@@ -131,8 +151,10 @@ export function createDrcView(store: AppStore): HTMLElement {
       const spec = findParam(id);
       if (!spec) continue;
       setSliderValue(node, spec, next.params[id] ?? spec.default);
+      setResetDisabled(node, store.isParamAtSceneTarget(id));
     }
     setSwitchChecked(enable, (next.params['drc3.Enable'] ?? 0) === 1);
+    setResetDisabled(enable, store.isParamAtSceneTarget('drc3.Enable'));
     refreshConditionText();
     refreshConflict();
   });

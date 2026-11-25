@@ -1,9 +1,10 @@
 import { eqResetBands } from '../../domain/eq-reset';
+import { gainsOf } from '../../domain/quick-controls';
 import type { AppState, AppStore } from '../../domain/state';
 import { EqModel } from '../../eq/model';
 import { EQ_TYPE_LABEL, type EqBand, type EqFilterType } from '../../eq/types';
 import { t } from '../../i18n';
-import { card, setSwitchChecked, switchControl } from '../controls';
+import { card, resetControl, setResetDisabled, setSwitchChecked, switchControl } from '../controls';
 
 const TYPE_VALUES: EqFilterType[] = [0, 1, 2, 3, 4];
 
@@ -23,9 +24,14 @@ export function createEqBandTable(store: AppStore): HTMLElement {
     checked: state.bypass.eq,
     label: t('module.bypass'),
     onChange: (checked) => store.setBypass('eq', checked),
+    reset: {
+      onClick: () => store.setBypass('eq', false),
+      disabled: !state.bypass.eq,
+    },
   });
   bypass.classList.add('module-bypass');
   bypass.dataset.bypass = 'eq';
+  bypass.querySelector<HTMLButtonElement>('.param-reset')?.setAttribute('data-reset-param', 'bypass.eq');
   const reset = document.createElement('button');
   reset.type = 'button';
   reset.className = 'btn btn--ghost btn--small';
@@ -50,7 +56,7 @@ export function createEqBandTable(store: AppStore): HTMLElement {
 
   const header = document.createElement('div');
   header.className = 'eq-row eq-row--head';
-  for (const key of ['index', 'type', 'freq', 'gain', 'q'] as const) {
+  for (const key of ['index', 'type', 'freq', 'gain', 'q', 'reset'] as const) {
     const cell = document.createElement('span');
     cell.textContent = t(`eq.column.${key}`);
     header.append(cell);
@@ -143,7 +149,16 @@ export function createEqBandTable(store: AppStore): HTMLElement {
 
     inputs.set(index, { freq: freqInput, gain: gainInput, q: qInput });
     rows.set(index, row);
-    row.append(num, select, freqInput, gainInput, qInput);
+    const rowReset = resetControl({
+      onClick: () => {
+        store.restoreBand(index);
+        syncRows();
+      },
+      disabled: store.isBandAtSceneTarget(index),
+      label: t('common.restore'),
+    });
+    rowReset.dataset.resetBand = String(index);
+    row.append(num, select, freqInput, gainInput, qInput, rowReset);
     list.append(row);
   }
 
@@ -178,6 +193,7 @@ export function createEqBandTable(store: AppStore): HTMLElement {
       rowInputs.q.value = String(band.q);
       const select = rows.get(index)?.querySelector<HTMLSelectElement>('.eq-select');
       if (select) select.value = String(band.type);
+      setResetDisabled(rows.get(index) ?? rowInputs.freq, store.isBandAtSceneTarget(index));
     }
   }
 
@@ -185,16 +201,21 @@ export function createEqBandTable(store: AppStore): HTMLElement {
     // 手改具体段值后不再属于任何固定音色：主界面按「自定义」显示，且曲线重新可拖
     store.setTone('custom');
     store.setBands(model.allBands());
+    store.setCustomEq(gainsOf(model.allBands()));
     syncRows();
   }
 
   const applyBypass = (bypassed: boolean): void => {
     setSwitchChecked(bypass, bypassed);
+    setResetDisabled(bypass, !bypassed);
     bypassNote.hidden = !bypassed;
     for (const input of list.querySelectorAll<HTMLInputElement | HTMLSelectElement>('input, select')) {
       input.disabled = bypassed;
     }
     reset.disabled = bypassed;
+    for (const row of rows.values()) {
+      setResetDisabled(row, bypassed || store.isBandAtSceneTarget(Number(row.dataset.band ?? -1)));
+    }
     list.classList.toggle('is-bypassed', bypassed);
   };
   applyBypass(state.bypass.eq);

@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { AppStore } from '../../src/renderer/src/domain/state';
 import { setLang } from '../../src/renderer/src/i18n';
-import { createConsoleView } from '../../src/renderer/src/ui/views/console-view';
+import { createConsoleView, type ConsoleApi } from '../../src/renderer/src/ui/views/console-view';
 import { FakeTransport } from './helpers/fake-transport';
 
 class FakeResizeObserver {
@@ -10,9 +10,9 @@ class FakeResizeObserver {
   disconnect(): void {}
 }
 
-const NO_API = { openDevice: () => undefined, openAdvanced: () => undefined };
+const NO_API: ConsoleApi = { openDevice: () => undefined, openAdvanced: () => undefined };
 
-function mount(api: typeof NO_API = NO_API) {
+function mount(api: ConsoleApi = NO_API) {
   const transport = new FakeTransport('mock');
   const store = new AppStore(transport, { lang: 'zh' });
   const view = createConsoleView(store, transport, api);
@@ -98,6 +98,41 @@ describe('console view', () => {
     expect(store.get().params['noisegate.threshold_db']).toBe(-91);
     expect(store.get().params['comp.Threshold']).toBe(-60);
     expect(view.querySelector('.scene-btn[data-scene="custom"]')?.getAttribute('aria-pressed')).toBe('true');
+    destroy?.();
+  });
+
+  it('keeps the selected scene as a restore context and confirms the total restore', () => {
+    const confirm = vi.fn().mockReturnValueOnce(false).mockReturnValueOnce(true);
+    const { store, view, destroy } = mount({ ...NO_API, confirm });
+
+    view.querySelector<HTMLElement>('.scene-btn[data-scene="game"]')?.click();
+    const sceneButton = view.querySelector<HTMLElement>('.scene-btn[data-scene="game"]');
+    const sceneRestore = view.querySelector<HTMLButtonElement>('.scene-reset');
+    expect(sceneButton?.getAttribute('aria-pressed')).toBe('true');
+    expect(sceneRestore?.disabled).toBe(true);
+
+    store.setParam('noisegate.threshold_db', -20);
+    expect(sceneButton?.classList.contains('is-dirty')).toBe(true);
+    expect(sceneRestore?.disabled).toBe(false);
+
+    // 每个参数自己的恢复动作不需要确认，并回到当前场景的出厂值。
+    const fieldRestore = view.querySelector<HTMLButtonElement>(
+      '[data-reset-param="noisegate.threshold_db"]',
+    );
+    expect(fieldRestore?.disabled).toBe(false);
+    fieldRestore?.click();
+    expect(store.get().params['noisegate.threshold_db']).toBe(-41);
+    expect(sceneRestore?.disabled).toBe(true);
+
+    // 总复位先询问；取消不会覆盖用户修改，确认后才清掉这个场景保存的值。
+    store.setParam('noisegate.threshold_db', -20);
+    sceneRestore?.click();
+    expect(confirm).toHaveBeenCalledTimes(1);
+    expect(store.get().params['noisegate.threshold_db']).toBe(-20);
+    sceneRestore?.click();
+    expect(confirm).toHaveBeenCalledTimes(2);
+    expect(store.get().params['noisegate.threshold_db']).toBe(-41);
+    expect(sceneRestore?.disabled).toBe(true);
     destroy?.();
   });
 
