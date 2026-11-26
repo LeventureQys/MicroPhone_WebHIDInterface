@@ -13,6 +13,7 @@ import { DeviceLink } from './device/link';
 import { MockTransport } from './device/mock-transport';
 import { createWebHidSession } from './device/webhid';
 import { createChannelConfigStore, loadChannelConfig } from './domain/channel-config';
+import { migrateSceneStorage } from './domain/scene-presets';
 import { AppStore } from './domain/state';
 import { currentLang } from './i18n';
 import { createAdvancedView } from './ui/views/advanced-view';
@@ -29,6 +30,9 @@ function readBridgeUrl(): string {
 async function boot(): Promise<void> {
   const mount = document.getElementById('app');
   if (!mount) throw new Error('#app not found');
+
+  // 旧版把设备回读写进「自定义」曲线：升级时清一次曲线类记录（见 scene-presets 的迁移注释）
+  migrateSceneStorage();
 
   // 一条参数链路：ChannelTransport 决定现在说话的是 Mock 还是真实设备，
   // AppStore / 各视图只认这一个 Transport，切换通道不重建订阅（任务书 §4.10）

@@ -23,12 +23,18 @@ export function limitEnableValue(enabled: boolean): number {
  */
 export type EqPresetId = 'flat' | 'vocal' | 'warm' | 'bright' | 'custom';
 
-/** 固定音色的 7 段增益（dB）。只动增益，类型/频点/Q 保持不变。 */
+/**
+ * 固定音色的 7 段增益（dB）。只动增益，类型/频点/Q 保持不变。
+ *
+ * 前两格恒为 0：第 1、2 段是 HPF / LPF（2026-11-25 用户反馈「HPF 和 LPF 的点应该在横轴上」），
+ * 高低通没有增益这个自由度，曲线只吃截止频率与 Q。给它们塞 +4 / +3 只会让节点飘离
+ * 横轴、再被 `bandHasGain()` 归零，所以这里直接写 0。
+ */
 export const EQ_PRESETS: Record<Exclude<EqPresetId, 'custom'>, readonly number[]> = Object.freeze({
   flat: [0, 0, 0, 0, 0, 0, 0],
-  vocal: [-3, -2, -1, 1, 3, 2, 0],
-  warm: [4, 3, 2, 0, -1, -2, -3],
-  bright: [-2, -1, 0, 1, 2, 4, 5],
+  vocal: [0, 0, -1, 1, 3, 2, 0],
+  warm: [0, 0, 2, 0, -1, -2, -3],
+  bright: [0, 0, 0, 1, 2, 4, 5],
 });
 
 /** 自定义音色的初始曲线（全平），之后由用户在曲线上拖出来 */

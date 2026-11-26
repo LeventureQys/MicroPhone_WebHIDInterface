@@ -24,6 +24,8 @@ describe('quick controls', () => {
     expect(Object.keys(EQ_PRESETS)).toEqual(['flat', 'vocal', 'warm', 'bright']);
     for (const gains of Object.values(EQ_PRESETS)) {
       expect(gains).toHaveLength(7);
+      // 第 1、2 段是 HPF / LPF，没有增益：预设里必须留 0，否则节点会飘离 0 dB 轴
+      expect([gains[0], gains[1]]).toEqual([0, 0]);
       for (const gain of gains) {
         expect(gain).toBeGreaterThanOrEqual(-32);
         expect(gain).toBeLessThanOrEqual(12);

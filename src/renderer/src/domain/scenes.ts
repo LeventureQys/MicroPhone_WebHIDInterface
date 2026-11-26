@@ -124,6 +124,44 @@ export function scenePatch(scene: ScenePreset, customGains: readonly number[] = 
 }
 
 /**
+ * 场景拥有的协议参数集合（快速调音链 + 环境降噪 + 防爆音使能）。
+ *
+ * 2026-11-25 起「自动保存」只记这些项和音色曲线：麦克风静音 / 监听 / 灯效是
+ * **全局开关**，不应该因为"在哪个场景里动过"就变成某个场景的私有值。
+ * 从所有场景的 `scenePatch` 取并集而不是手抄，避免预设加减字段后这里漏改。
+ */
+function collectSceneParamIds(): string[] {
+  const ids = new Set<string>();
+  for (const scene of SCENES) {
+    for (const id of Object.keys(scenePatch(scene).params)) ids.add(id);
+  }
+  return [...ids];
+}
+
+export const SCENE_PARAM_IDS: readonly string[] = Object.freeze(collectSceneParamIds());
+
+/**
+ * 快速调音面板里展示、但**不属于任何场景预设**的参数。
+ *
+ * - `limit.Threshold`：R-19 明确场景不写它（点一次场景不该悄悄改掉用户调好的限幅阈值）；
+ * - `comp.Enable`：场景只写压缩器阈值，开关一直是全局的。
+ *
+ * 两者都摆在快速调音里，用户改了它们、场景「复位」却不亮，看起来就是按钮坏了
+ * （2026-11-25 反馈）。所以它们参与"调乱了没有"的判定，复位时退回**应用场景时**的基准值，
+ * 但仍不写进场景预设：切场景不会换掉它们。
+ */
+export const SCENE_BASELINE_ONLY_IDS: readonly string[] = Object.freeze([
+  'limit.Threshold',
+  'comp.Enable',
+]);
+
+/** 判断「这个场景被调乱了没有」时要看的参数：场景拥有的 + 上面那几个基准撤销项 */
+export const SCENE_DIRTY_PARAM_IDS: readonly string[] = Object.freeze([
+  ...SCENE_PARAM_IDS,
+  ...SCENE_BASELINE_ONLY_IDS,
+]);
+
+/**
  * 当前参数是否仍然完整匹配某个场景（用于高亮）。
  *
  * 2026-11-22 起场景可以逐项微调并自动保存，因此界面高亮优先用「显式选中的场景」

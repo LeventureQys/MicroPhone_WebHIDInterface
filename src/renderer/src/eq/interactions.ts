@@ -1,4 +1,5 @@
 import type { EqModel } from './model';
+import { bandHasGain } from './types';
 
 /** 坐标映射只需这四个方法，视图可在画布尺寸变化后替换实现。 */
 export interface EqCoordinateMapper {
@@ -47,7 +48,8 @@ export function attachEqInteractions(options: EqInteractionOptions): () => void 
       .map((band) => ({
         band,
         x: mapper.freqToX(band.freq),
-        y: mapper.gainToY(band.gain),
+        // 与 render 同一套规则：高通 / 低通的节点画在 0 dB，命中判定也得按 0 dB 算
+        y: mapper.gainToY(bandHasGain(band.type) ? band.gain : 0),
       }));
 
   const findBand = (x: number, y: number): number | null => {
@@ -63,11 +65,16 @@ export function attachEqInteractions(options: EqInteractionOptions): () => void 
 
   const applyMove = (x: number, y: number, mode: DragState['mode']): void => {
     if (!drag) return;
+    const band = model.bandAt(drag.index);
+    if (!band) return;
     const freq = mapper.xToFreq(x);
     const gain = mapper.yToGain(y);
     const patch: { freq?: number; gain?: number } = {};
     if (mode === 'both' || mode === 'freq') patch.freq = Math.round(freq);
-    if (mode === 'both' || mode === 'gain') patch.gain = Math.round(gain * 10) / 10;
+    // 高通 / 低通没有增益：上下拖不动它，别把无效值写进状态（节点会一直贴在轴上）
+    if ((mode === 'both' || mode === 'gain') && bandHasGain(band.type)) {
+      patch.gain = Math.round(gain * 10) / 10;
+    }
     model.setBand(drag.index, patch);
     onChange();
   };
@@ -162,10 +169,11 @@ export function attachEqInteractions(options: EqInteractionOptions): () => void 
         model.setBand(index, { freq: Math.round(band.freq * 1.02) });
         break;
       case 'ArrowUp':
-        model.setBand(index, { gain: Math.round((band.gain + 0.1) * 10) / 10 });
+        // 高通 / 低通没有增益：上下键对它们无效，左右键 / 滚轮照常
+        if (bandHasGain(band.type)) model.setBand(index, { gain: Math.round((band.gain + 0.1) * 10) / 10 });
         break;
       case 'ArrowDown':
-        model.setBand(index, { gain: Math.round((band.gain - 0.1) * 10) / 10 });
+        if (bandHasGain(band.type)) model.setBand(index, { gain: Math.round((band.gain - 0.1) * 10) / 10 });
         break;
       case 'Delete':
       case 'Backspace':

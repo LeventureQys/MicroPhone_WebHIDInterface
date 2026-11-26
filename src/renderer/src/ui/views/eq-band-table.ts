@@ -2,7 +2,7 @@ import { eqResetBands } from '../../domain/eq-reset';
 import { gainsOf } from '../../domain/quick-controls';
 import type { AppState, AppStore } from '../../domain/state';
 import { EqModel } from '../../eq/model';
-import { EQ_TYPE_LABEL, type EqBand, type EqFilterType } from '../../eq/types';
+import { bandHasGain, EQ_TYPE_LABEL, type EqBand, type EqFilterType } from '../../eq/types';
 import { t } from '../../i18n';
 import { card, resetControl, setResetDisabled, setSwitchChecked, switchControl } from '../controls';
 
@@ -15,6 +15,8 @@ const TYPE_VALUES: EqFilterType[] = [0, 1, 2, 3, 4];
 export function createEqBandTable(store: AppStore): HTMLElement {
   const model = new EqModel(store.get().bands);
   const state = store.get();
+  /** 旁通态跟随 store：高通 / 低通增益框的可用态 = 非旁通 && 有增益 */
+  let eqBypassed = state.bypass.eq;
 
   const built = card({ title: t('eq.bandTitle') });
 
@@ -193,6 +195,11 @@ export function createEqBandTable(store: AppStore): HTMLElement {
       rowInputs.q.value = String(band.q);
       const select = rows.get(index)?.querySelector<HTMLSelectElement>('.eq-select');
       if (select) select.value = String(band.type);
+      // 高通 / 低通没有增益：输入框置灰并说明原因（模型里这一段已经被归零）
+      const gainless = !bandHasGain(band.type);
+      rowInputs.gain.disabled = eqBypassed || gainless;
+      rowInputs.gain.title = gainless ? t('eq.gain.na') : '';
+      rowInputs.gain.setAttribute('aria-label', gainless ? t('eq.gain.na') : t('eq.column.gain'));
       setResetDisabled(rows.get(index) ?? rowInputs.freq, store.isBandAtSceneTarget(index));
     }
   }
@@ -206,6 +213,7 @@ export function createEqBandTable(store: AppStore): HTMLElement {
   }
 
   const applyBypass = (bypassed: boolean): void => {
+    eqBypassed = bypassed;
     setSwitchChecked(bypass, bypassed);
     setResetDisabled(bypass, !bypassed);
     bypassNote.hidden = !bypassed;
@@ -217,6 +225,8 @@ export function createEqBandTable(store: AppStore): HTMLElement {
       setResetDisabled(row, bypassed || store.isBandAtSceneTarget(Number(row.dataset.band ?? -1)));
     }
     list.classList.toggle('is-bypassed', bypassed);
+    // 上面那圈会把所有输入框重新打开：高通 / 低通的增益框要按类型再压回去
+    syncRows();
   };
   applyBypass(state.bypass.eq);
 

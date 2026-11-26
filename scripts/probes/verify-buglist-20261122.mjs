@@ -7,6 +7,12 @@
  * 真机插着时会自动连上（auto-connect），没有真机时退化为 mock 通道；两种通道界面检查都成立。
  * 结束时用「设置 → 复位全部参数」把设备还原成参数表默认值，并留下 result.json 与截图。
  *
+ * 2026-11-25 起界面改了三处，断言跟着改（都是当前实现的既定行为，不是放宽）：
+ *   1. 场景「复位」先弹应用内确认框（`.confirm .btn--primary`），不再直接复位；
+ *   2. 复位后按钮转灰（`disabled=true`）：没有保存过改动就没什么可复位的；
+ *   3. 「复位全部参数」在**设置**抽屉（原先在高级参数抽屉），仍是二次确认的两下点击；
+ *      EQ「恢复默认」的 Q 回产品默认（0.7/0.8/1.5/1/1），不再一律钉 0.7 —— 问题单只要频点。
+ *
  * 覆盖（编号取问题单原文顺序）：
  *   1  三个阈值行的开关贴着左边文字，调参数时开关不跳
  *   2  均衡器默认频率（复位后 3–7 段 = 63/250/1k/4k/12.5k）
@@ -35,10 +41,77 @@ mkdirSync(profile, { recursive: true });
 
 const log = (...args) => console.log(`[verify] ${new Date().toISOString().slice(11, 19)}`, ...args);
 
-const results = { startedAt: new Date().toISOString(), checks: [], measurements: {} };
+const results = { startedAt: new Date().toISOString(), checks: [], measurements: {}, timeline: [] };
 function check(name, ok, detail) {
   results.checks.push({ name, ok: Boolean(ok), detail: detail ?? null });
   log(`${ok ? 'PASS' : 'FAIL'} ${name}${detail !== undefined ? ` — ${detail}` : ''}`);
+}
+
+/** 顶栏链路胶囊：真机写完落盘要几百毫秒到几秒，断言前得先等到 ready */
+const linkReady = async (cdp) => {
+  const snap = await cdp.json(CONSOLE_SNAPSHOT);
+  return { ready: /state-pill--ready/.test(snap.syncClass ?? ''), syncClass: snap.syncClass, notice: snap.notice };
+};
+
+async function waitLinkReady(cdp, timeoutMs = 8000) {
+  const deadline = Date.now() + timeoutMs;
+  let last = await linkReady(cdp);
+  while (!last.ready && Date.now() < deadline) {
+    await wait(300);
+    last = await linkReady(cdp);
+  }
+  return last;
+}
+
+/**
+ * 链路时间线：200 ms 采一次顶栏胶囊与提示条，控制台里也抄一份。
+ *
+ * 真机写多了会被固件压住（写入超时 → 同步失败），一旦发生，后面的界面断言全会跟着错。
+ * 所以每个阶段结束都记一条，链路一掉就把时间线写进 result.json 并中止——失败点要能
+ * 落到具体动作上，而不是只看最后一条断言。
+ */
+const INSTALL_WATCH = `(() => {
+  window.__watch = { started: Date.now(), samples: [], console: [] };
+  const pill = () => document.querySelector('#sync-pill')?.className ?? '';
+  const notice = () => {
+    const bar = document.querySelector('.console-notice');
+    if (!bar || bar.hidden || getComputedStyle(bar).display === 'none') return '';
+    return (bar.textContent ?? '').replace(/\\s+/g, ' ').trim();
+  };
+  window.__watchTimer = setInterval(() => {
+    window.__watch.samples.push({ t: Date.now() - window.__watch.started, pill: pill(), notice: notice() });
+  }, 200);
+  for (const level of ['error', 'warn']) {
+    const original = console[level].bind(console);
+    console[level] = (...args) => {
+      try {
+        window.__watch.console.push({
+          t: Date.now() - window.__watch.started,
+          level,
+          text: args.map((item) => (typeof item === 'string' ? item : String(item))).join(' ').slice(0, 300),
+        });
+      } catch {
+        // 抄日志失败不影响页面
+      }
+      original(...args);
+    };
+  }
+  return true;
+})()`;
+
+async function mark(cdp, label) {
+  const snap = await cdp.json(CONSOLE_SNAPSHOT);
+  const ready = /state-pill--ready/.test(snap.syncClass ?? '');
+  results.timeline.push({ label, at: new Date().toISOString(), ready, notice: snap.notice });
+  log(`MARK ${label} link=${ready ? 'ready' : 'LOST'}${snap.notice ? ` notice=${snap.notice}` : ''}`);
+  if (!ready) {
+    results.watch = await cdp
+      .evaluate(`JSON.stringify(window.__watch ?? null)`)
+      .then((raw) => (raw ? JSON.parse(raw) : null))
+      .catch(() => null);
+    throw new Error(`链路在「${label}」之后掉了：${snap.syncClass ?? ''} ${snap.notice ?? ''}`.trim());
+  }
+  return snap;
 }
 
 const CONSOLE_SNAPSHOT = `(() => {
@@ -94,6 +167,11 @@ const CONSOLE_SNAPSHOT = `(() => {
     gainLabels: Array.from(document.querySelectorAll('.console-gain-label > span:first-child')).map(clean),
     gainValues: Array.from(document.querySelectorAll('.console-gain-value')).map(clean),
     syncClass: document.querySelector('#sync-pill')?.className ?? null,
+    notice: (() => {
+      const bar = document.querySelector('.console-notice');
+      if (!bar || bar.hidden || getComputedStyle(bar).display === 'none') return '';
+      return clean(bar);
+    })(),
     toneChips: Array.from(document.querySelectorAll('.tone-chip')).map(clean),
   });
 })()`;
@@ -138,6 +216,17 @@ async function openAdvanced(cdp, until = 'comp.Enable') {
   return false;
 }
 
+/** 打开任意抽屉（advanced / settings / device / firmware），等某个元素出现 */
+async function openPanel(cdp, panel, until, timeoutMs = 8000) {
+  await cdp.evaluate(`window.__micstudioGo?.('${panel}'); true`);
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (await cdp.evaluate(`!!document.querySelector('${until.replaceAll("'", "\\'")}')`)) return true;
+    await wait(200);
+  }
+  return false;
+}
+
 async function closePanel(cdp) {
   await cdp.evaluate(`document.querySelector('.modal-close')?.click(); true`);
   await wait(400);
@@ -153,6 +242,11 @@ async function main() {
     await cdp.send('Page.bringToFront', {}, 5_000).catch(() => undefined);
     if (!(await waitReady(cdp))) throw new Error('renderer not ready');
     await wait(2200);
+    await cdp.evaluate(INSTALL_WATCH);
+    // 自动连接 + 参数回读要一会儿；链路没 ready 就谈不上后面的断言
+    const bootLink = await waitLinkReady(cdp, 15_000);
+    results.measurements.bootLink = bootLink;
+    await mark(cdp, '启动（自动连接 + 同步）');
 
     // ---- 启动态：默认「自定义」模式（问题 8） --------------------------------
     const boot = await cdp.json(CONSOLE_SNAPSHOT);
@@ -231,6 +325,7 @@ async function main() {
       lightBack.lighting.toggle?.checked === !advancedLight.enable.rgb,
       `高级 ${advancedLight.enable.rgb} → 主界面 ${lightBack.lighting.toggle?.checked}`,
     );
+    await mark(cdp, '灯效双向联动');
 
     // ---- 灯效数据上报（问题 4：固件侧） --------------------------------------
     await openAdvanced(cdp);
@@ -270,15 +365,21 @@ async function main() {
     const afterEqReset = await cdp.json(ADVANCED_SNAPSHOT);
     await cdp.shot(path.join(shotDir, '02-eq-after-reset.png'));
     const expectedFreqs = ['50', '20000', '63', '250', '1000', '4000', '12500'];
-    const actualFreqs = afterEqReset.eqRows.slice(0, 7).map((row) => String(row.freq));
-    results.measurements.eqReset = actualFreqs;
+    const resetRows = afterEqReset.eqRows.slice(0, 7);
+    const actualFreqs = resetRows.map((row) => String(row.freq));
+    const actualQ = resetRows.map((row) => String(row.q));
+    results.measurements.eqReset = {
+      freqs: actualFreqs,
+      q: actualQ,
+      gains: resetRows.map((row) => String(row.gain)),
+    };
     check(
-      '问题2/3：均衡器复位后 3–7 段频点 = 63 / 250 / 1k / 4k / 12.5k，增益 0、Q 0.7',
-      actualFreqs.join(',') === expectedFreqs.join(',') &&
-        afterEqReset.eqRows.slice(0, 7).every((row) => row.gain === '0' && row.q === '0.7'),
-      `频点=${actualFreqs.join(' / ')}`,
+      '问题2/3：均衡器复位后 3–7 段频点 = 63 / 250 / 1k / 4k / 12.5k（增益回 0，Q 取产品默认）',
+      actualFreqs.join(',') === expectedFreqs.join(',') && resetRows.every((row) => String(row.gain) === '0'),
+      `频点=${actualFreqs.join(' / ')} 增益=${resetRows.map((row) => row.gain).join('/')} Q=${actualQ.join('/')}`,
     );
     await closePanel(cdp);
+    await mark(cdp, '均衡器复位');
 
     // ---- 三分频动态默认关闭（问题 6） ---------------------------------------
     // 设备自己的上电预设由固件按参数表 G 列加载（0x2075 = 1），上位机不做"连上就改设备"，
@@ -294,19 +395,31 @@ async function main() {
     await closePanel(cdp);
 
     // ---- 场景参数可单独调 + 自动保存 + 复位（问题 9） ------------------------
+    // 自动保存挂在 PARAM_CHANGED 上，而 `setParam` 在 sync 没 ready 时只改本地值、
+    // 不派发 param-changed（state.ts C4 门控）——所以先等到 ready 再动参数
+    const linkBeforeScene = await waitLinkReady(cdp);
+    results.measurements.linkBeforeScene = linkBeforeScene;
     await cdp.evaluate(`document.querySelector('.scene-btn[data-scene="podcast"]')?.click(); true`);
-    await wait(900);
+    await wait(1400);
     const podcast = await cdp.json(CONSOLE_SNAPSHOT);
     await cdp.evaluate(setMacro('denoise', -48));
-    await wait(700);
+    await wait(1200);
     const tweaked = await cdp.json(CONSOLE_SNAPSHOT);
     await cdp.evaluate(`document.querySelector('.scene-btn[data-scene="sing"]')?.click(); true`);
-    await wait(900);
+    await wait(1400);
     const sing = await cdp.json(CONSOLE_SNAPSHOT);
     await cdp.evaluate(`document.querySelector('.scene-btn[data-scene="podcast"]')?.click(); true`);
-    await wait(900);
+    await wait(1400);
     const back = await cdp.json(CONSOLE_SNAPSHOT);
     await cdp.shot(path.join(shotDir, '03-scene-autosave.png'));
+    results.measurements.sceneAutosave = {
+      podcast: podcast.macroOrder.denoise?.value,
+      tweaked: tweaked.macroOrder.denoise?.value,
+      sing: sing.macroOrder.denoise?.value,
+      back: back.macroOrder.denoise?.value,
+      linkBeforeScene,
+      linkAfter: await linkReady(cdp),
+    };
     check(
       '问题9：每个场景的参数可单独调，切走再切回改动还在',
       podcast.macroOrder.denoise?.value === '-59 dB' &&
@@ -315,14 +428,54 @@ async function main() {
         back.macroOrder.denoise?.value === '-48 dB',
       `播客 ${podcast.macroOrder.denoise?.value} → 改 ${tweaked.macroOrder.denoise?.value} → 唱歌 ${sing.macroOrder.denoise?.value} → 回播客 ${back.macroOrder.denoise?.value}`,
     );
-    await cdp.evaluate(`document.querySelector('.scene-reset')?.click(); true`);
-    await wait(1000);
-    const afterSceneReset = await cdp.json(CONSOLE_SNAPSHOT);
-    check(
-      '问题9：场景「复位」把当前场景恢复成默认值（其它场景不受影响）',
-      afterSceneReset.macroOrder.denoise?.value === '-59 dB' && afterSceneReset.sceneReset?.disabled === false,
-      `复位后 播客噪声门=${afterSceneReset.macroOrder.denoise?.value} 复位按钮 disabled=${afterSceneReset.sceneReset?.disabled}`,
+    await mark(cdp, '场景自动保存');
+
+    // 防爆音阈值不写进场景预设（R-19），但它就在快速调音第三行：只改它，场景复位也要亮
+    const limiterBefore = back.macroOrder.limiter?.value ?? '';
+    const limiterNumber = Number.parseFloat(limiterBefore);
+    const limiterTarget = Number.isFinite(limiterNumber) ? limiterNumber - 6 : -8;
+    await cdp.evaluate(setMacro('limiter', String(limiterTarget)));
+    await wait(900);
+    const limiterEdited = await cdp.json(CONSOLE_SNAPSHOT);
+    const limiterRowReset = await cdp.evaluate(
+      `document.querySelector('[data-macro="limiter"] .param-reset')?.disabled ?? null`,
     );
+    results.measurements.limiterEdit = {
+      before: limiterBefore,
+      after: limiterEdited.macroOrder.limiter?.value,
+      sceneResetDisabled: limiterEdited.sceneReset?.disabled,
+      rowResetDisabled: limiterRowReset,
+    };
+    check(
+      '问题9：只改防爆音阈值也会点亮场景「复位」（该阈值不属场景，行内恢复同样可用）',
+      limiterEdited.sceneReset?.disabled === false && limiterRowReset === false,
+      `防爆音 ${limiterBefore} → ${limiterEdited.macroOrder.limiter?.value} 场景复位 disabled=${limiterEdited.sceneReset?.disabled} 行内恢复 disabled=${limiterRowReset}`,
+    );
+
+    // 复位先弹应用内确认框（2026-11-25）：不点确定什么都不该发生
+    await cdp.evaluate(`document.querySelector('.scene-reset')?.click(); true`);
+    await wait(400);
+    const confirmTitle = await cdp.evaluate(`document.querySelector('.confirm .confirm-title')?.textContent ?? null`);
+    await cdp.evaluate(`document.querySelector('.confirm .btn--primary')?.click(); true`);
+    await wait(2000);
+    const afterSceneReset = await cdp.json(CONSOLE_SNAPSHOT);
+    results.measurements.sceneReset = {
+      confirmTitle,
+      denoise: afterSceneReset.macroOrder.denoise?.value,
+      limiter: afterSceneReset.macroOrder.limiter?.value,
+      limiterBefore,
+      disabled: afterSceneReset.sceneReset?.disabled,
+      link: await linkReady(cdp),
+    };
+    check(
+      '问题9：场景「复位」确认后把当前场景恢复成默认值（含防爆音阈值），按钮随之转灰',
+      confirmTitle !== null &&
+        afterSceneReset.macroOrder.denoise?.value === '-59 dB' &&
+        afterSceneReset.macroOrder.limiter?.value === limiterBefore &&
+        afterSceneReset.sceneReset?.disabled === true,
+      `确认框=${confirmTitle ?? '没弹出'} 复位后 播客噪声门=${afterSceneReset.macroOrder.denoise?.value} 防爆音=${afterSceneReset.macroOrder.limiter?.value}（原 ${limiterBefore}）复位按钮 disabled=${afterSceneReset.sceneReset?.disabled}`,
+    );
+    await mark(cdp, '场景复位');
 
     // ---- 10. 耳机音量回读（固件侧，只记录） --------------------------------
     check(
@@ -332,27 +485,42 @@ async function main() {
     );
 
     // ---- 收尾：恢复参数表默认值 --------------------------------------------
-    await openAdvanced(cdp);
+    // 2026-11-25 起这个按钮在「设置」抽屉（高级参数抽屉里只剩逐项恢复），仍是二次确认：
+    // 第一下把文案改成「再点一次确认」，第二下才开始按 6 项 / 320 ms 分批写
+    await openPanel(cdp, 'settings', '.modal-body .btn--danger');
     const resetInfo = await cdp.json(`(async () => {
       const button = document.querySelector('.modal-body .btn--danger');
       if (!button) return JSON.stringify({ error: 'no reset button' });
+      const label = button.textContent.trim();
       button.click();
       await new Promise((resolve) => setTimeout(resolve, 350));
       const armed = button.textContent.trim();
       button.click();
-      await new Promise((resolve) => setTimeout(resolve, 1600));
-      return JSON.stringify({ armed, done: button.textContent.trim() });
+      await new Promise((resolve) => setTimeout(resolve, 800));
+      return JSON.stringify({ label, armed, running: button.textContent.trim() });
     })()`);
     results.measurements.restore = resetInfo;
-    await wait(5000);
-    const restored = await cdp.json(CONSOLE_SNAPSHOT);
+    // 分批写 + 落 Flash：真机整轮约 5 s；按钮跑完会自己回到初始文案并解锁
+    let restoreState = { text: '', disabled: true };
+    const restoreDeadline = Date.now() + 30_000;
+    while (Date.now() < restoreDeadline) {
+      restoreState = await cdp.json(`(() => {
+        const button = document.querySelector('.modal-body .btn--danger');
+        return JSON.stringify({ text: button?.textContent?.trim() ?? '', disabled: button?.disabled ?? true });
+      })()`);
+      if (restoreState.text === resetInfo.label && restoreState.disabled === false) break;
+      await wait(400);
+    }
+    results.measurements.restoreDone = restoreState;
+    const restored = await waitLinkReady(cdp, 10_000);
     await closePanel(cdp);
     await cdp.shot(path.join(shotDir, '04-console-restored.png'));
     check(
       '收尾：恢复默认后链路仍 ready（本轮写入没有把设备搞掉）',
-      /state-pill--ready/.test(restored.syncClass ?? ''),
-      `sync=${restored.syncClass} tone=${restored.toneActive}`,
+      restored.ready,
+      `sync=${restored.syncClass} 按钮=${restoreState.text || '—'}`,
     );
+    await mark(cdp, '复位全部参数');
 
     // 恢复默认值以后再读一次三分频：按上位机默认值写下去就是关的
     await openAdvanced(cdp);
@@ -364,6 +532,10 @@ async function main() {
       `drc3.Enable=${afterRestore.enable.drc3}`,
     );
 
+    results.watch = await cdp
+      .evaluate(`JSON.stringify(window.__watch ?? null)`)
+      .then((raw) => (raw ? JSON.parse(raw) : null))
+      .catch(() => null);
     results.finishedAt = new Date().toISOString();
     results.summary = {
       total: results.checks.length,
@@ -376,6 +548,12 @@ async function main() {
     if (results.summary.failed > 0) process.exitCode = 1;
   } catch (error) {
     results.error = String(error?.stack ?? error);
+    if (cdp && !results.watch) {
+      results.watch = await cdp
+        .evaluate(`JSON.stringify(window.__watch ?? null)`)
+        .then((raw) => (raw ? JSON.parse(raw) : null))
+        .catch(() => null);
+    }
     writeFileSync(path.join(shotDir, 'result.json'), JSON.stringify(results, null, 2));
     log(`ERROR ${error?.message ?? error}`);
     process.exitCode = 1;

@@ -68,8 +68,36 @@ describe('eq render', () => {
     expect(calls.arc.every(([, , r]) => r === DEFAULT_EQ_THEME.bandRadius)).toBe(true);
   });
 
-  it('never emits NaN coordinates even when the mapper misbehaves', () => {
+  it('pins HPF / LPF handles to the 0 dB axis (buglist 2026-11-25)', () => {
     const { ctx, calls } = createMockContext();
+    // 音色预设曾给前两段塞过增益（warm 是 +4 / +3）：节点不能跟着飘起来
+    const bands = DEFAULT_BANDS.map((band, index) => ({
+      ...band,
+      gain: index === 0 ? 4 : index === 1 ? 3 : band.gain,
+    }));
+    drawEq(ctx, {
+      width: 900,
+      height: 380,
+      freqTicks: FreqMapper.freqTicks(20, 20000),
+      gainTicks: FreqMapper.gainTicks(-24, 12, 6),
+      bands,
+      visibleCount: 7,
+      focusedIndex: -1,
+      curve: [],
+      freqToX: (f) => mapper.freqToX(f),
+      gainToY: (g) => mapper.gainToY(g),
+      xToFreq: (x) => mapper.xToFreq(x),
+      yToGain: (y) => mapper.yToGain(y),
+    });
+    const zeroY = mapper.gainToY(0);
+    expect(calls.arc[0][1]).toBe(zeroY);
+    expect(calls.arc[1][1]).toBe(zeroY);
+    // 其它段照旧按自己的增益画
+    expect(calls.arc[2][1]).toBe(mapper.gainToY(bands[2].gain));
+    expect(calls.arc[2][1]).not.toBe(zeroY);
+  });
+
+  it('never emits NaN coordinates even when the mapper misbehaves', () => {    const { ctx, calls } = createMockContext();
     drawEq(ctx, {
       width: 900,
       height: 380,

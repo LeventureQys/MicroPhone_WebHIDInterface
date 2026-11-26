@@ -1,5 +1,5 @@
 import type { CurvePoint, EqBand, Viewport } from './types';
-import { EQ_TYPE_LABEL } from './types';
+import { bandHasGain, EQ_TYPE_LABEL } from './types';
 
 export interface EqTheme {
   gridColor: string;
@@ -226,7 +226,8 @@ export function drawEq(ctx: CanvasRenderingContext2D, options: DrawOptions): voi
   for (const band of options.bands) {
     if (band.index >= options.visibleCount) continue;
     const x = safeX(band.freq);
-    const y = safeY(band.gain);
+    // 高通 / 低通没有增益：节点钉在 0 dB 横轴上，不跟着（无效的）gain 飘
+    const y = safeY(bandHasGain(band.type) ? band.gain : 0);
     const focused = band.index === options.focusedIndex;
     if (focused) focusedBand = band;
 

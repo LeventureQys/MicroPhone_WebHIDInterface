@@ -1,5 +1,12 @@
 import { describe, expect, it } from 'vitest';
-import { EQ_RESET_GAIN_DB, EQ_RESET_Q, eqResetBands, withEqReset } from '../../src/renderer/src/domain/eq-reset';
+import {
+  EQ_RESET_GAIN_DB,
+  EQ_RESET_Q,
+  defaultEqBands,
+  eqResetBands,
+  withEqDefaults,
+  withEqReset,
+} from '../../src/renderer/src/domain/eq-reset';
 import { DEFAULT_BANDS } from '../../src/renderer/src/domain/defaults';
 import { EQ_BAND_EDITABLE, EQ_BAND_TOTAL, EQ_TYPE_LABEL } from '../../src/renderer/src/eq/types';
 
@@ -64,5 +71,28 @@ describe('eq reset preset (buglist 2026-11-21 #12 + 2026-11-22 #2/#3)', () => {
     // 不改原数组
     expect(current[0].gain).toBe(0);
     expect(current[1].gain).toBe(0.5);
+  });
+
+  it('restores the current tone default (not flat) with product Q/frequencies', () => {
+    // 旧预设给前两格也塞过增益（-3 / -2）：第 1、2 段是 HPF / LPF，必须落成 0
+    const gains = [-3, -2, -1, 1, 3, 2, 0];
+    const expected = [0, 0, -1, 1, 3, 2, 0];
+    const bands = defaultEqBands(gains);
+    expect(bands.map((band) => band.gain)).toEqual(expected);
+    // Q / 频点取产品默认，不是旧的 Q=0.7 平坦复位
+    expect(bands.map((band) => band.q)).toEqual([0.7, 0.7, 0.8, 1.5, 1, 1, 0.7]);
+    expect(bands.map((band) => band.freq)).toEqual([50, 20000, 63, 250, 1000, 4000, 12500]);
+
+    const current = DEFAULT_BANDS.map((band, index) => ({
+      ...band,
+      gain: 9,
+      q: 3,
+      freq: index < EQ_BAND_EDITABLE ? 123 : band.freq,
+    }));
+    const next = withEqDefaults(current, gains);
+    expect(next.slice(0, EQ_BAND_EDITABLE).map((band) => band.gain)).toEqual(expected);
+    for (let index = EQ_BAND_EDITABLE; index < EQ_BAND_TOTAL; index += 1) {
+      expect(next[index]).toEqual(current[index]);
+    }
   });
 });

@@ -1,21 +1,32 @@
 import type { DeviceSnapshot, LevelFrame, Transport } from '../../device/transport';
-import { withEqReset } from '../../domain/eq-reset';
+import { withEqDefaults } from '../../domain/eq-reset';
 import { findParam, type ParamSpec } from '../../domain/params';
-import { matchScene, SCENES, type SceneId, type ScenePreset } from '../../domain/scenes';
+import {
+  matchScene,
+  SCENE_BASELINE_ONLY_IDS,
+  SCENE_DIRTY_PARAM_IDS,
+  SCENE_PARAM_IDS,
+  SCENES,
+  type SceneId,
+  type ScenePreset,
+} from '../../domain/scenes';
 import {
   clearSceneOverride,
-  defaultSceneGains,
+  defaultSceneParams,
   forgetSceneGains,
   forgetSceneParams,
+  forgetSceneTone,
   hasSceneOverride,
   loadCustomEq,
   loadSceneOverrides,
   recordSceneGains,
   recordSceneParams,
+  recordSceneTone,
   saveCustomEq,
   saveSceneOverrides,
   sceneGains,
   sceneParams,
+  sceneTone,
   type SceneOverrides,
 } from '../../domain/scene-presets';
 import {
@@ -36,6 +47,7 @@ import { EqModel } from '../../eq/model';
 import { drawEq } from '../../eq/render';
 import type { EqBand, Viewport } from '../../eq/types';
 import { t } from '../../i18n';
+import { confirmDialog } from '../confirm-dialog';
 import {
   card,
   macroSlider,
@@ -66,6 +78,11 @@ export interface ConsoleDeviceInfo {
 }
 
 const TONES: EqPresetId[] = ['flat', 'vocal', 'warm', 'bright', 'custom'];
+/**
+ * 上次存的「自定义」曲线只在进程内第一次构造工作台时套到 7 段上。
+ * 语言切换会重建工作台（`app/shell.ts`），重建时再套会在 `sync=ready` 下把设备 EQ 改写掉。
+ */
+let bootCustomEqApplied = false;
 /** 映射器与 drawEq 必须用同一套边距，否则网格和曲线会错开 */
 const EQ_MARGIN = { top: 26, right: 32, bottom: 28, left: 40 };
 const SCENE_ICON: Record<SceneId, IconName> = {
@@ -134,14 +151,29 @@ export function createConsoleView(
   const storedCustomEq = loadCustomEq();
   if (storedCustomEq) {
     store.setCustomEq(storedCustomEq);
-    const base = store.get().bands;
-    store.setBands(
-      base.map((band, index) =>
-        index < storedCustomEq.length ? { ...band, gain: storedCustomEq[index] } : { ...band },
-      ),
-    );
+    // 只在首次构造时把上次的曲线套到 7 段上。语言切换会重建工作台（app/shell.ts），
+    // 那时再套一次会在 sync=ready 下经 diffBands 把设备 EQ 改写成自定义曲线
+    // （当前是固定音色时等于把「温暖」拉平）——这是既有缺陷，2026-11-25 收口。
+    if (!bootCustomEqApplied) {
+      bootCustomEqApplied = true;
+      const base = store.get().bands;
+      store.setBands(
+        base.map((band, index) =>
+          index < storedCustomEq.length ? { ...band, gain: storedCustomEq[index] } : { ...band },
+        ),
+      );
+    }
   }
   const state = store.get();
+  /**
+   * 启动时先把当前值记成基准：标题栏里的「自定义」场景只是编辑上下文，
+   * 不代表这些值由场景预设写入（真机还会先回读设备）。不先对齐基准，
+   * 一打开所有「恢复」都会因为"设备值 != 场景出厂值"而亮着。
+   *
+   * 只在没有基准时记：基准属于会话（存在 store 里），语言切换重建工作台不该把它
+   * 挪到"当前值"，否则限幅阈值这类不进覆盖表的改动会连撤销目标一起丢。
+   */
+  if (!store.sceneBaseline()) store.setSceneBaseline(state.activeScene, false);
 
   const root = document.createElement('div');
   root.className = 'console';
@@ -245,7 +277,7 @@ export function createConsoleView(
   sceneReset.setAttribute('aria-label', t('console.scene.resetHint'));
   sceneReset.disabled = true;
   sceneReset.setAttribute('aria-disabled', 'true');
-  sceneReset.addEventListener('click', () => resetScene());
+  sceneReset.addEventListener('click', () => void resetScene());
   sceneRow.append(sceneReset);
   sceneCard.body.append(sceneRow);
 
@@ -270,6 +302,11 @@ export function createConsoleView(
   }
   const thresholdRows: ThresholdRow[] = [];
 
+  /**
+   * 一行是一个模块（阈值 + 使能位）：恢复动作也只该有一个。
+   * 2026-11-25 之前开关和阈值各挂一个「恢复」，同一行并排两个同名按钮，
+   * 用户分不清哪个恢复哪个；现在合并成行尾一个，两个值都回基准。
+   */
   const thresholdRow = (
     key: string,
     label: string,
@@ -280,6 +317,9 @@ export function createConsoleView(
     const threshold = findParam(thresholdId);
     if (!threshold) return;
     const enable = enableId ? findParam(enableId) : undefined;
+    const atTarget = (): boolean =>
+      store.isParamAtSceneTarget(threshold.id) &&
+      (enable === undefined || store.isParamAtSceneTarget(enable.id));
     const slider = macroSlider({
       label,
       value: state.params[threshold.id] ?? threshold.default,
@@ -290,34 +330,28 @@ export function createConsoleView(
       hint,
       onChange: (value) => store.setParam(threshold.id, value),
       reset: {
-        onClick: () => store.restoreParam(threshold.id),
-        disabled: store.isParamAtSceneTarget(threshold.id),
+        onClick: () => {
+          store.restoreParam(threshold.id);
+          if (enable) store.restoreParam(enable.id);
+        },
+        disabled: atTarget(),
       },
+      // 开关不再单独挂恢复：整行的恢复在 slider 标题行右侧（见上）
       toggle: enable
         ? {
             checked: (state.params[enable.id] ?? 0) === 1,
             label: t(`param.${enable.id}.label`),
             onChange: (checked) => store.setParam(enable.id, checked ? 1 : 0),
-            reset: {
-              onClick: () => store.restoreParam(enable.id),
-              disabled: store.isParamAtSceneTarget(enable.id),
-            },
           }
         : undefined,
     });
     slider.root.dataset.macro = key;
-    const sliderHead = slider.root.querySelector<HTMLElement>('.pfield-head');
-    const sliderReset = Array.from(sliderHead?.children ?? []).find(
-      (child): child is HTMLButtonElement =>
-        child instanceof HTMLButtonElement && child.classList.contains('param-reset'),
-    );
-    sliderReset?.setAttribute('data-reset-param', threshold.id);
+    slider.root.querySelector<HTMLButtonElement>('.param-reset')?.setAttribute('data-reset-param', threshold.id);
     const toggleNode = slider.root.querySelector<HTMLElement>('.macro-toggle');
     if (enable && toggleNode) {
       // 开关也带 data-param / data-enable：探针与验收脚本按参数 id 定位，不靠文案
       toggleNode.dataset.param = enable.id;
       toggleNode.dataset.enable = key;
-      toggleNode.querySelector<HTMLButtonElement>('.param-reset')?.setAttribute('data-reset-param', enable.id);
     }
     thresholdRows.push({ slider, threshold, enableId: enable?.id ?? null });
     tuneGrid.append(slider.root);
@@ -412,8 +446,8 @@ export function createConsoleView(
   eqCanvas.className = 'eq-canvas console-eq-canvas';
   canvasWrap.append(eqCanvas);
 
-  // 卡头右侧两个动作：「复位」只在自定义音色下可用（问题单 13）、
-  // 「逐段精调」直接跳到高级参数的均衡一节，不再落到抽屉最上面（问题单 5）
+  // 卡头右侧只留「恢复默认」：EQ 不再锁在「自定义」音色下，逐段精调按钮已移除
+  // （2026-11-25 需求：曲线就在主界面拖，不再跳到高级参数）
   const eqActions = document.createElement('div');
   eqActions.className = 'console-eq-actions';
   const eqReset = document.createElement('button');
@@ -421,14 +455,8 @@ export function createConsoleView(
   eqReset.className = 'console-link console-link--plain console-eq-reset';
   eqReset.textContent = t('console.eq.reset');
   eqReset.title = t('console.eq.resetHint');
-  eqReset.disabled = true;
   eqReset.addEventListener('click', () => resetEq());
-  const advancedLink = document.createElement('button');
-  advancedLink.type = 'button';
-  advancedLink.className = 'console-link';
-  advancedLink.append(element('span', '', t('console.eq.advanced')), icon('chevronRight', 14));
-  advancedLink.addEventListener('click', () => api.openAdvanced('eq'));
-  eqActions.append(eqReset, advancedLink);
+  eqActions.append(eqReset);
   eqCard.root.querySelector('.card-head')?.append(eqActions);
   eqCard.body.append(canvasWrap);
 
@@ -441,13 +469,19 @@ export function createConsoleView(
 
   const encGroup = document.createElement('div');
   encGroup.className = 'switch-item';
+  const encAtTarget = (): boolean =>
+    store.isParamAtSceneTarget('enc.OnOff') && store.isParamAtSceneTarget('enc.Level');
   const encSwitch = switchControl({
     checked: (state.params['enc.OnOff'] ?? 0) === 1,
     label: t('console.enc'),
     onChange: (checked) => store.setParam('enc.OnOff', checked ? 1 : 0),
+    // 开关 + 档位是一组：只留一个恢复，点一下两个值都回基准
     reset: {
-      onClick: () => store.restoreParam('enc.OnOff'),
-      disabled: store.isParamAtSceneTarget('enc.OnOff'),
+      onClick: () => {
+        store.restoreParam('enc.OnOff');
+        store.restoreParam('enc.Level');
+      },
+      disabled: encAtTarget(),
     },
   });
   // 与三个输入开关一致：带 data-param，探针/验收按参数 id 定位，不靠文案
@@ -462,12 +496,7 @@ export function createConsoleView(
   const encLevelRow = document.createElement('div');
   encLevelRow.className = 'switch-sub';
   const encLevelLabel = element('span', 'switch-sub-label', t('console.enc.level'));
-  const encLevelReset = resetControl({
-    onClick: () => store.restoreParam('enc.Level'),
-    disabled: store.isParamAtSceneTarget('enc.Level'),
-  });
-  encLevelReset.dataset.resetParam = 'enc.Level';
-  encLevelRow.append(encLevelLabel, encLevel, encLevelReset);
+  encLevelRow.append(encLevelLabel, encLevel);
   encGroup.append(encSwitch, encLevelRow);
 
   /**
@@ -479,12 +508,22 @@ export function createConsoleView(
    */
   const lightGroup = document.createElement('div');
   lightGroup.className = 'switch-item switch-item--light';
+  const lightAtTarget = (): boolean =>
+    store.isParamAtSceneTarget('rgb.OnOff') && store.isParamAtSceneTarget('rgb.Mode');
   const lightSwitch = switchControl({
     checked: (state.params['rgb.OnOff'] ?? 0) === 1,
     label: t('console.lighting'),
     onChange: (checked) => store.setParam('rgb.OnOff', checked ? 1 : 0),
+    reset: {
+      onClick: () => {
+        store.restoreParam('rgb.OnOff');
+        store.restoreParam('rgb.Mode');
+      },
+      disabled: lightAtTarget(),
+    },
   });
   lightSwitch.dataset.param = 'rgb.OnOff';
+  lightSwitch.querySelector<HTMLButtonElement>('.param-reset')?.setAttribute('data-reset-param', 'rgb.OnOff');
   const lightMode = segmented<number>({
     options: Array.from({ length: 8 }, (_, value) => ({ value, label: String(value) })),
     value: state.params['rgb.Mode'] ?? 0,
@@ -601,9 +640,16 @@ export function createConsoleView(
   let activeTone: EqPresetId | null = null;
   /** 场景自己正在写 store：这时的 setParam 是"应用预设"，不能被当成用户改动存起来 */
   let applyingScene = false;
+  /**
+   * 用户在本次基准之后动过东西。设备回读 / 主动上报要据此决定「能不能把基准挪到当前值」：
+   * 没有用户改动时设备值就是新的起点（按钮保持灰色）；已经动过就不能拿回读覆盖用户的编辑。
+   */
+  let editedSinceBaseline = false;
   let sceneOverrides: SceneOverrides = loadSceneOverrides();
-  /** 上一次对齐过的频段表：换掉才需要重算「自定义」曲线的场景覆盖值 */
-  let lastBands = store.get().bands;
+  /** 上一次对齐过的 7 段增益（内容签名，不是数组引用）：换掉才需要重算场景覆盖值 */
+  let lastGainSignature = gainsOf(store.get().bands).join(',');
+  /** 链路 ready 之后把回读值对齐成基准（回读走 applyEcho/applyBands 时也会边走边对齐） */
+  let baselineReady = state.sync === 'ready';
 
   /**
    * 应用一个场景：写出它保存过的参数与曲线（没改过的项就是出厂预设），
@@ -621,8 +667,9 @@ export function createConsoleView(
         saveCustomEq(DEFAULT_CUSTOM_GAINS);
       }
       const params = sceneParams(id, sceneOverrides);
+      const tone = sceneTone(id, sceneOverrides);
       const gains = sceneGains(id, sceneOverrides, store.get().customEq);
-      store.setTone(scene.tone);
+      store.setTone(tone);
       for (const [paramId, value] of Object.entries(params)) store.setParam(paramId, value);
       const bands = store.get().bands;
       store.setBands(
@@ -630,11 +677,14 @@ export function createConsoleView(
           index < gains.length ? { ...band, gain: gains[index] } : { ...band },
         ),
       );
-      if (scene.tone === 'custom') store.setCustomEq(gains);
+      if (tone === 'custom') store.setCustomEq(gains);
     } finally {
       applyingScene = false;
     }
     store.setActiveScene(id);
+    // 刚应用完的值就是这一轮的恢复基准：此时所有「恢复」都该是灰的
+    editedSinceBaseline = false;
+    store.setSceneBaseline(id);
     syncScene(store.get());
   }
 
@@ -645,21 +695,41 @@ export function createConsoleView(
   /**
    * 场景复位（问题单第 9 条）：清掉这个场景自动保存的改动，再按出厂预设应用一遍。
    *
-   * 会覆盖用户已经做好的微调，因此先问一句；`api.confirm` 没注入时退回浏览器原生
-   * confirm，两者都没有（无弹窗能力的环境）才直接执行，免得按钮点了没反应。
+   * 会覆盖用户已经做好的微调，因此先弹应用内确认框；`api.confirm` 是给单测/探针注入的
+   * 同步替身，没有注入时走 `confirmDialog`（深色居中弹窗，替代系统 window.confirm）。
    */
-  function resetScene(): void {
+  async function resetScene(): Promise<void> {
     const id = store.get().activeScene;
-    if (!id || !hasSceneOverride(sceneOverrides, id)) return;
-    const message = t('console.scene.resetConfirm', { scene: t(`console.scene.${id}`) });
+    if (!id) return;
+    if (!hasSceneOverride(sceneOverrides, id) && store.isAtSceneBaseline(SCENE_DIRTY_PARAM_IDS)) return;
+    const sceneName = t(`console.scene.${id}`);
     const confirmed = api.confirm
-      ? api.confirm(message)
-      : typeof window.confirm === 'function'
-        ? window.confirm(message)
-        : true;
+      ? api.confirm(t('console.scene.resetConfirm', { scene: sceneName }))
+      : await confirmDialog({
+          title: t('console.scene.resetTitle', { scene: sceneName }),
+          message: t('console.scene.resetBody'),
+          confirmLabel: t('console.scene.resetAction'),
+          tone: 'warn',
+        });
     if (!confirmed) return;
+    // 快速调音里有几个参数不写进场景预设（防爆音阈值 R-19、压缩器开关）：复位只把它们
+    // 退回到「应用这个场景时」的值，不能回参数表默认（用户可能在应用场景前就调过）。
+    // 先撤再应用，基准快照才带上它们。
+    const keepTargets: Array<{ id: string; value: number }> = [];
+    for (const paramId of SCENE_BASELINE_ONLY_IDS) {
+      const target = store.sceneTargetParam(paramId);
+      if (target !== undefined) keepTargets.push({ id: paramId, value: target });
+    }
     sceneOverrides = clearSceneOverride(sceneOverrides, id);
     saveSceneOverrides(sceneOverrides);
+    applyingScene = true;
+    try {
+      for (const item of keepTargets) {
+        if (store.get().params[item.id] !== item.value) store.setParam(item.id, item.value);
+      }
+    } finally {
+      applyingScene = false;
+    }
     applySceneValues(id, { resetCustomCurve: true });
   }
 
@@ -668,10 +738,23 @@ export function createConsoleView(
   }
 
   function applyTone(id: EqPresetId): void {
-    // 手动换音色就是离开场景：场景的曲线由场景自己管，这里不再往场景里记
-    store.setActiveScene(null);
+    // 已经就是这个音色且曲线没偏差：点一下不该把场景标成「改过」
+    const targetGains = toneGains(id);
+    if (store.get().tone === id && matchesGains(store.get().bands, targetGains, 7)) return;
+    // 换音色是场景内的一次微调：留在当前场景里，别让后续改动静默失去自动保存。
+    // 换回本场景的**出厂音色**时要摘掉覆盖（和 restoreTone 对称），否则场景会一直算"脏"，
+    // 复位点下去却看不到任何变化。
+    editedSinceBaseline = true;
+    const sceneId = store.get().activeScene;
+    if (sceneId) {
+      const factoryTone = SCENES.find((item) => item.id === sceneId)?.tone;
+      sceneOverrides = id === factoryTone
+        ? forgetSceneTone(sceneOverrides, sceneId)
+        : recordSceneTone(sceneOverrides, sceneId, id);
+      saveSceneOverrides(sceneOverrides);
+    }
     store.setTone(id);
-    const gains = toneGains(id);
+    const gains = targetGains;
     const bands = store.get().bands;
     store.setBands(
       bands.map((band, index) =>
@@ -681,12 +764,21 @@ export function createConsoleView(
     syncScene(store.get());
   }
 
-  /** 音色恢复：回到当前场景的出厂音色；没有场景上下文时回「原声」 */
+  /** 音色恢复：回到场景基准里的音色与曲线（撤销本次换音色） */
   function restoreTone(): void {
+    const baseline = store.sceneBaseline();
     const sceneId = store.get().activeScene;
     const scene = sceneId ? SCENES.find((item) => item.id === sceneId) : undefined;
-    const id: EqPresetId = scene?.tone ?? 'flat';
-    const gains = toneGains(id);
+    const id: EqPresetId = baseline?.tone ?? scene?.tone ?? 'flat';
+    const gains = baseline ? gainsOf(baseline.bands) : toneGains(id);
+    if (sceneId) {
+      const factoryTone = scene?.tone ?? 'flat';
+      sceneOverrides =
+        id === factoryTone
+          ? forgetSceneTone(sceneOverrides, sceneId)
+          : recordSceneTone(sceneOverrides, sceneId, id);
+      saveSceneOverrides(sceneOverrides);
+    }
     store.setTone(id);
     store.setBands(
       store.get().bands.map((band, index) =>
@@ -697,37 +789,54 @@ export function createConsoleView(
   }
 
   /**
-   * 「均衡器复位」：只允许在「自定义」音色下用（问题单 13），
-   * 复位后的频段值按问题单手写的那张表——7 段增益全 0、Q 全 0.7（问题单 12），
-   * 频点取产品默认（2026-11-22 问题单第 2、3 条：3–7 段 63/250/1k/4k/12.5k）。
-   * 曲线/段值的刷新走 `store` → `syncBands`，这里不直接动 model。
+   * 「均衡器恢复默认」：任何音色下都可用。
+   *
+   * 默认值 = 产品默认频段（`DEFAULT_BANDS` 的频点 / Q / 类型）+ 当前音色的默认增益；
+   * 「自定义」的默认增益是 0（平坦）。不再是旧的"一律 Q=0.7 的平坦曲线"。
    */
   function resetEq(): void {
-    if (activeTone !== 'custom') return;
-    const bands = withEqReset(store.get().bands);
-    store.setTone('custom');
+    const tone = activeTone ?? store.get().tone ?? 'flat';
+    const gains = tone === 'custom' ? DEFAULT_CUSTOM_GAINS : EQ_PRESETS[tone];
+    const bands = withEqDefaults(store.get().bands, gains);
     store.setBands(bands);
-    store.setCustomEq(gainsOf(bands));
-    persistCustomGains(bands);
+    if (tone === 'custom') store.setCustomEq(gainsOf(bands));
+    persistGains(bands);
   }
 
   /**
-   * 用户拖过的自定义曲线要跨重启保留，并且记到当前场景名下（问题单第 9 条）。
+   * 用户拖过 / 高级参数里改过的曲线要跨重启保留，并记到当前场景名下。
    *
-   * 改回出厂曲线时反过来把这条记录摘掉，这样「复位」按钮只在这个场景真有改动时可用。
+   * 设备回读 / 主动上报也会走这里（`applyBands` → change），但那不是用户改的曲线：
+   * 回读值不能存进 `micstudio.customEq`，也不能把场景标成「改过」——之前正是
+   * 这里把设备预设写成了用户曲线，导致一打开「复位」就亮着。
+   *
+   * 2026-11-25 起任何音色都允许改 EQ：固定音色的曲线改动也记进场景的 `gains`
+   * 覆盖（音色选择不变），只有「自定义」才同时更新 `micstudio.customEq`。
    */
-  function persistCustomGains(bands: readonly EqBand[]): void {
-    if (activeTone !== 'custom') return;
-    const gains = gainsOf(bands);
+  function persistGains(bands: readonly EqBand[]): void {
     if (applyingScene) return;
-    saveCustomEq(gains);
+    if (store.isApplyingEcho()) {
+      // 用户还没动过：设备回读就是新的起点，把基准挪过去，恢复按钮保持灰色
+      if (!editedSinceBaseline) store.setSceneBaseline(store.get().activeScene, false);
+      return;
+    }
+    editedSinceBaseline = true;
+    const gains = gainsOf(bands);
+    if (activeTone === 'custom') saveCustomEq(gains);
     const sceneId = store.get().activeScene;
     if (!sceneId) return;
-    const factory = defaultSceneGains(sceneId);
-    const same =
-      factory.length === gains.length && factory.every((value, index) => value === gains[index]);
-    const next = same
-      ? forgetSceneGains(sceneOverrides, sceneId)
+    const baseline = store.sceneBaseline();
+    const baselineGains = baseline ? gainsOf(baseline.bands) : gains;
+    // 当前音色的默认曲线（不是场景出厂音色：用户可以在场景里换过音色）
+    const tone = sceneTone(sceneId, sceneOverrides);
+    const factory = tone === 'custom' ? [...DEFAULT_CUSTOM_GAINS] : [...EQ_PRESETS[tone]];
+    const same = (a: readonly number[], b: readonly number[]): boolean =>
+      a.length === b.length && a.every((value, index) => value === b[index]);
+    // 回到基准值时：基准本身等于默认值就摘掉覆盖，否则保留基准值（场景仍然是定制的）
+    const next = same(gains, baselineGains)
+      ? same(gains, factory)
+        ? forgetSceneGains(sceneOverrides, sceneId)
+        : recordSceneGains(sceneOverrides, sceneId, gains)
       : recordSceneGains(sceneOverrides, sceneId, gains);
     if (next === sceneOverrides) return;
     sceneOverrides = next;
@@ -736,16 +845,23 @@ export function createConsoleView(
 
   /**
    * 主界面/高级参数改过的参数都记在当前场景名下：复位一次就全回到出厂预设。
-   * 某一项被「恢复」按钮写回目标值时把它从记录里摘掉，否则复位按钮永远亮着。
+   * 改回基准值、且基准值就是出厂值时把这项从记录里摘掉，否则复位按钮会一直亮着。
    */
   const onParamChanged = (event: Event): void => {
-    const sceneId = store.get().activeScene;
-    if (applyingScene || !sceneId) return;
     const detail = (event as CustomEvent<ParamChangedDetail>).detail;
     if (!detail || typeof detail.id !== 'string') return;
+    if (applyingScene) return;
+    // 用户动过就冻结基准：连全局开关（静音 / 监听 / 灯效）的改动也算，
+    // 免得一次设备回读把「应用场景时」的基准挪到用户改过的值上
+    editedSinceBaseline = true;
+    // 全局开关（静音 / 监听 / 灯效）与防爆音阈值不属于场景：不记进覆盖表、也不写进预设
+    if (!SCENE_PARAM_IDS.includes(detail.id)) return;
+    const sceneId = store.get().activeScene;
+    if (!sceneId) return;
     const target = store.sceneTargetParam(detail.id);
+    const factory = defaultSceneParams(sceneId)[detail.id] ?? findParam(detail.id)?.default;
     const next =
-      target !== undefined && detail.value === target
+      target !== undefined && detail.value === target && target === factory
         ? forgetSceneParams(sceneOverrides, sceneId, [detail.id])
         : recordSceneParams(sceneOverrides, sceneId, { [detail.id]: detail.value });
     if (next === sceneOverrides) return;
@@ -760,13 +876,24 @@ export function createConsoleView(
   /** 设置页「复位全部参数」把场景覆盖表也清了：这里跟着重读，别拿旧值再写回设备 */
   const onScenesCleared = (): void => {
     sceneOverrides = loadSceneOverrides();
+    editedSinceBaseline = false;
     syncScene(store.get());
   };
   store.addEventListener(SCENES_CLEARED_EVENT, onScenesCleared);
 
+  /**
+   * 场景有东西可复位：存过覆盖值（上次会话的定制），或本次会话偏离了基准。
+   * 「偏离基准」让按钮在用户刚改一项时就亮；「覆盖值」让上次存过的定制也能复位。
+   *
+   * 看的是 `SCENE_DIRTY_PARAM_IDS`：场景自己的 7 项 + 防爆音阈值。防爆音阈值不写进
+   * 场景预设（R-19），但它就摆在快速调音第三行，改了不亮会像是按钮坏了。
+   */
   function sceneIsDirty(): boolean {
     const sceneId = store.get().activeScene;
-    return sceneId !== null && hasSceneOverride(sceneOverrides, sceneId);
+    if (sceneId === null) return false;
+    return (
+      hasSceneOverride(sceneOverrides, sceneId) || !store.isAtSceneBaseline(SCENE_DIRTY_PARAM_IDS)
+    );
   }
 
   function syncScene(stateNow: ReturnType<AppStore['get']>): void {
@@ -802,22 +929,21 @@ export function createConsoleView(
       button.classList.toggle('is-active', on);
       button.setAttribute('aria-pressed', String(on));
     }
-    // 音色恢复目标 = 当前场景的出厂音色；不在场景里（用户手选了音色）时回「原声」
+    // 音色恢复目标 = 场景基准里的音色与曲线；没有基准时才按场景出厂音色 / 原声
+    const baseline = store.sceneBaseline();
     const sceneId = stateNow.activeScene;
     const scene = sceneId ? SCENES.find((item) => item.id === sceneId) : undefined;
-    const targetTone: EqPresetId = scene?.tone ?? 'flat';
-    const targetGains = targetTone === 'custom' ? stateNow.customEq : EQ_PRESETS[targetTone];
+    const targetTone: EqPresetId = baseline?.tone ?? scene?.tone ?? 'flat';
+    const targetGains = baseline
+      ? gainsOf(baseline.bands)
+      : targetTone === 'custom'
+        ? stateNow.customEq
+        : EQ_PRESETS[targetTone];
     const atTarget = active === targetTone && matchesGains(stateNow.bands, targetGains, 7);
     toneReset.disabled = atTarget;
     toneReset.setAttribute('aria-disabled', String(atTarget));
-    if (eqDesc) {
-      eqDesc.textContent = active === 'custom' ? t('console.eq.desc') : t('console.eq.locked');
-    }
-    // 复位按钮只在自定义音色下可用（问题单 13）：其它音色的曲线由音色表决定，复位没有意义
-    const customOn = active === 'custom';
-    if (eqReset.disabled === customOn) eqReset.disabled = !customOn;
-    eqReset.setAttribute('aria-disabled', String(!customOn));
-    if (active !== 'custom') eqCanvas.dataset.cursor = 'default';
+    // 任何音色都可以直接拖曲线：说明文案固定，不再分「自定义 / 其它音色」两套
+    if (eqDesc) eqDesc.textContent = t('console.eq.desc');
   }
 
   function syncBands(stateNow: ReturnType<AppStore['get']>): void {
@@ -898,16 +1024,13 @@ export function createConsoleView(
     canvas: eqCanvas,
     model,
     mapper: mapperProxy,
-    // 只有「自定义」音色允许直接改曲线；其它音色只展示，细调走高级参数（2026-11-13）
-    enabled: () => activeTone === 'custom',
+    // 任何音色都可以直接拖曲线（2026-11-25 需求）；音色选择不变，改动记进场景
     onChange: () => {
       renderCanvas();
       const bands = model.allBands();
       store.setBands(bands);
-      if (activeTone === 'custom') {
-        store.setCustomEq(gainsOf(bands));
-        persistCustomGains(bands);
-      }
+      if (activeTone === 'custom') store.setCustomEq(gainsOf(bands));
+      persistGains(bands);
     },
   });
   const observer = new ResizeObserver(() => renderCanvas());
@@ -1016,17 +1139,25 @@ export function createConsoleView(
 
   // ---- 状态回填 ------------------------------------------------------------
   const unsubscribe = store.onChange((next) => {
+    // 设备回读 / 主动上报不是用户改动：还没人动过就把基准挪到回读值，
+    // 这样连接后所有「恢复」仍然是灰的（用户改过则保留原基准，别被回读冲掉）。
+    if (store.isApplyingEcho() && !editedSinceBaseline) {
+      store.setSceneBaseline(next.activeScene, false);
+    }
+    if (!baselineReady && next.sync === 'ready') {
+      baselineReady = true;
+      if (!editedSinceBaseline) store.setSceneBaseline(next.activeScene, false);
+    }
     for (const [id, entry] of gainValues) {
       entry.node.textContent = formatValue(entry.spec, next.params[id] ?? entry.spec.default);
     }
     for (const row of thresholdRows) {
       row.slider.setValue(next.params[row.threshold.id] ?? row.threshold.default);
-      setResetDisabled(row.slider.root, store.isParamAtSceneTarget(row.threshold.id), row.threshold.id);
-      if (row.enableId) {
-        row.slider.setToggle?.((next.params[row.enableId] ?? 0) === 1);
-        const toggle = row.slider.root.querySelector<HTMLElement>('.macro-toggle');
-        if (toggle) setResetDisabled(toggle, store.isParamAtSceneTarget(row.enableId), row.enableId);
-      }
+      const atTarget =
+        store.isParamAtSceneTarget(row.threshold.id) &&
+        (row.enableId === null || store.isParamAtSceneTarget(row.enableId));
+      setResetDisabled(row.slider.root, atTarget, row.threshold.id);
+      if (row.enableId) row.slider.setToggle?.((next.params[row.enableId] ?? 0) === 1);
     }
     for (const [id, node] of inputSwitchById) {
       setSwitchChecked(node, (next.params[id] ?? 0) === 1);
@@ -1037,12 +1168,22 @@ export function createConsoleView(
     // 灯效与高级参数共用同一参数：两边任改一处，这里都要跟着回填
     setSwitchChecked(lightSwitch, (next.params['rgb.OnOff'] ?? 0) === 1);
     setSegmentedValue(lightMode, next.params['rgb.Mode'] ?? 0);
-    setResetDisabled(encSwitch, store.isParamAtSceneTarget('enc.OnOff'));
-    setResetDisabled(encLevelRow, store.isParamAtSceneTarget('enc.Level'));
-    // 拖曲线 / 单段恢复 / 均衡器复位都会换掉 bands，统一经这里对齐场景覆盖表
-    if (next.bands !== lastBands) {
-      lastBands = next.bands;
-      persistCustomGains(next.bands);
+    setResetDisabled(
+      encSwitch,
+      store.isParamAtSceneTarget('enc.OnOff') && store.isParamAtSceneTarget('enc.Level'),
+      'enc.OnOff',
+    );
+    setResetDisabled(
+      lightSwitch,
+      store.isParamAtSceneTarget('rgb.OnOff') && store.isParamAtSceneTarget('rgb.Mode'),
+      'rgb.OnOff',
+    );
+    // 拖曲线 / 单段恢复 / 均衡器复位都会换掉 bands。按内容比较而不是数组引用：
+    // store 每次快照都会克隆 bands，引用永远不同，按引用比较会把每次状态刷新都当成"曲线变了"。
+    const gainSignature = gainsOf(next.bands).join(',');
+    if (gainSignature !== lastGainSignature) {
+      lastGainSignature = gainSignature;
+      persistGains(next.bands);
     }
     syncScene(next);
     syncTone(next);

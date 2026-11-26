@@ -432,6 +432,8 @@ export function createSettingsView(store: AppStore, options?: SettingsViewOption
         // 场景的自动保存值也要一起清：留着的话再点场景会把复位前的微调写回来
         saveSceneOverrides({});
         store.notifySceneOverridesCleared();
+        // 复位后的值就是新的场景基准：否则工作台上每个「恢复」都会亮着
+        store.setSceneBaseline(store.get().activeScene);
       }
       resetButton.textContent = t('settings.resetDone');
     } finally {

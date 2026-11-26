@@ -414,7 +414,8 @@
   color: var(--danger);
 }
 
-/* 每个可编辑参数的独立恢复动作；场景值未变化时由状态层禁用。 */
+/* 每个可编辑参数的独立恢复动作；场景值未变化时由状态层禁用。
+   灰色 = 没改过；亮橙色 = 这一项偏离了场景基准，点一下能撤销。 */
 .param-reset {
   flex: none;
   height: 22px;
@@ -429,14 +430,22 @@
   transition: border-color 0.14s ease, background 0.14s ease, color 0.14s ease;
 }
 
+.param-reset:not(:disabled) {
+  border-color: rgba(243, 164, 92, 0.3);
+  background: rgba(243, 164, 92, 0.08);
+  color: var(--accent);
+}
+
 .param-reset:hover:not(:disabled) {
-  border-color: var(--line-2);
-  background: rgba(255, 255, 255, 0.05);
-  color: var(--text);
+  border-color: var(--accent-line);
+  background: rgba(243, 164, 92, 0.16);
+  color: var(--accent-strong);
 }
 
 .param-reset:disabled {
-  opacity: 0.35;
+  border-color: transparent;
+  background: transparent;
+  opacity: 0.38;
   cursor: not-allowed;
 }
 
@@ -603,6 +612,15 @@
   border-color: var(--accent-line);
   outline: none;
   box-shadow: 0 0 0 3px var(--accent-soft);
+}
+
+/* 禁用态（HPF / LPF 的增益、旁通整片）：自定义背景会盖掉 UA 的 disabled 外观，必须显式压暗 */
+.eq-input:disabled,
+.eq-select:disabled {
+  color: var(--text-dim);
+  border-color: var(--line-1);
+  background: rgba(255, 255, 255, 0.02);
+  cursor: not-allowed;
 }
 
 .pfield-number::-webkit-inner-spin-button,
@@ -1085,9 +1103,16 @@
 }
 
 .scene-reset:hover:not(:disabled) {
-  border-color: var(--line-3);
-  background: rgba(255, 255, 255, 0.04);
-  color: var(--text);
+  border-color: var(--accent-line);
+  background: rgba(243, 164, 92, 0.16);
+  color: var(--accent-strong);
+}
+
+/* 有东西可复位时亮橙色；没有保存过的改动时保持灰色（没改就别亮） */
+.scene-reset:not(:disabled) {
+  border-color: var(--accent-line);
+  background: var(--accent-soft);
+  color: var(--accent);
 }
 
 .scene-reset:disabled {
@@ -1386,8 +1411,34 @@
 
 .tune-switch-grid {
   display: grid;
+  /* 三列，但每格改成「标签一行 + 开关/恢复一行」：三列时每个标签只有 109 px，
+     和开关 + 「恢复」挤在同一行会把「麦克风静音」压成一个字（2026-11-25 反馈）。 */
   grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 4px 10px;
+  gap: 6px 10px;
+}
+
+.tune-switch-grid .switch-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-areas:
+    'label label'
+    'switch reset';
+  align-items: center;
+  gap: 3px 8px;
+}
+
+.tune-switch-grid .switch-label {
+  grid-area: label;
+}
+
+.tune-switch-grid .switch {
+  grid-area: switch;
+  justify-self: start;
+}
+
+.tune-switch-grid .param-reset {
+  grid-area: reset;
+  justify-self: end;
 }
 
 .tune-switch-grid .switch-row {
@@ -1813,6 +1864,103 @@
   .modal-overlay,
   .modal,
   .status-chip .dot {
+    animation: none;
+  }
+}
+
+/* ================= 确认弹窗（居中，不是右侧抽屉） ================= */
+.confirm-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: rgba(4, 5, 8, 0.66);
+  animation: overlay-in 0.16s ease both;
+}
+
+.confirm {
+  width: min(430px, 100%);
+  padding: 22px 22px 18px;
+  border: 1px solid var(--line-2);
+  border-radius: 14px;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.035), rgba(255, 255, 255, 0) 120px),
+    #12151b;
+  box-shadow: 0 24px 70px rgba(0, 0, 0, 0.55), 0 0 0 1px rgba(0, 0, 0, 0.28);
+  animation: confirm-in 0.18s var(--ease) both;
+}
+
+.confirm-head {
+  display: flex;
+  align-items: flex-start;
+  gap: 14px;
+}
+
+.confirm-icon {
+  display: grid;
+  flex: none;
+  place-items: center;
+  width: 38px;
+  height: 38px;
+  border: 1px solid rgba(242, 193, 78, 0.28);
+  border-radius: 11px;
+  background: var(--warn-soft);
+  color: var(--warn);
+}
+
+.confirm-icon--accent {
+  border-color: var(--accent-line);
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+.confirm-icon--danger {
+  border-color: rgba(255, 112, 112, 0.36);
+  background: var(--danger-soft);
+  color: var(--danger);
+}
+
+.confirm-copy {
+  min-width: 0;
+}
+
+.confirm-title {
+  color: var(--text);
+  font-size: 15px;
+  font-weight: 600;
+  line-height: 1.45;
+}
+
+.confirm-message {
+  margin-top: 6px;
+  color: var(--text-dim);
+  font-size: 12.5px;
+  line-height: 1.65;
+}
+
+.confirm-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 20px;
+}
+
+.confirm-actions .btn {
+  min-width: 78px;
+}
+
+@keyframes confirm-in {
+  from {
+    opacity: 0;
+    transform: translateY(8px) scale(0.985);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .confirm-overlay,
+  .confirm {
     animation: none;
   }
 }

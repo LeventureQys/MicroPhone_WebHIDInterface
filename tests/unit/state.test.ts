@@ -144,16 +144,35 @@ describe('AppStore', () => {
     transport.emitSync('ready');
 
     const bands = store.get().bands.map((band) => ({ ...band }));
-    bands[0] = { ...bands[0], gain: 3.44, q: 1.23 };
+    bands[2] = { ...bands[2], gain: 3.44, q: 1.23 };
     store.setBands(bands);
 
     // gain 步进 0.1 → 3.4；Q 步进 0.1 → 1.2
     expect(transport.bandWrites[0]).toEqual([
-      { band: 1, field: 'gain', value: 3.4 },
-      { band: 1, field: 'q', value: 1.2 },
+      { band: 3, field: 'gain', value: 3.4 },
+      { band: 3, field: 'q', value: 1.2 },
     ]);
-    expect(store.get().bands[0].gain).toBe(3.4);
-    expect(store.get().bands[0].q).toBe(1.2);
+    expect(store.get().bands[2].gain).toBe(3.4);
+    expect(store.get().bands[2].q).toBe(1.2);
+  });
+
+  it('drops the gain of HPF / LPF bands instead of writing it (buglist 2026-11-25)', () => {
+    const transport = new FakeTransport('webhid');
+    const store = new AppStore(transport, { lang: 'zh' });
+    transport.emitSync('ready');
+
+    const bands = store.get().bands.map((band) => ({ ...band }));
+    // 第 1 段是 HPF、第 2 段是 LPF：给它们塞增益要落成 0，且不出 gain 写；
+    // 第 3 段是 PEAK，照常写。
+    bands[0] = { ...bands[0], gain: 6 };
+    bands[1] = { ...bands[1], gain: -6 };
+    bands[2] = { ...bands[2], gain: 4 };
+    store.setBands(bands);
+
+    expect(store.get().bands[0].gain).toBe(0);
+    expect(store.get().bands[1].gain).toBe(0);
+    expect(store.get().bands[2].gain).toBe(4);
+    expect(transport.bandWrites.flat()).toEqual([{ band: 3, field: 'gain', value: 4 }]);
   });
 
   it('holds EQ writes back while the webhid channel is not synced', () => {
@@ -243,13 +262,13 @@ describe('AppStore', () => {
   it('copies bands and skips structurally identical updates', () => {
     const { store, events } = setup();
     const bands: EqBand[] = store.get().bands.map((band) => ({ ...band }));
-    bands[0] = { ...bands[0], gain: 6 };
+    bands[2] = { ...bands[2], gain: 6 };
     store.setBands(bands);
-    expect(store.get().bands[0].gain).toBe(6);
+    expect(store.get().bands[2].gain).toBe(6);
     expect(events()).toBe(1);
 
-    bands[0].gain = 9;
-    expect(store.get().bands[0].gain).toBe(6);
+    bands[2].gain = 9;
+    expect(store.get().bands[2].gain).toBe(6);
 
     store.setBands(store.get().bands.map((band) => ({ ...band })));
     expect(events()).toBe(1);

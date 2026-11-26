@@ -2,12 +2,13 @@ import type { MockScene } from '../device/mock-transport';
 import { EQ_BAND_COUNT, eqBandAddr, findRegister, fromRaw, toRaw } from '../device/registers';
 import type { EqBandField, EqBandWrite, SyncPhase, Transport, TransportState } from '../device/transport';
 import type { EqBand } from '../eq/types';
+import { bandHasGain } from '../eq/types';
 import type { Lang } from '../i18n';
 import { currentLang, setLang as setI18nLang } from '../i18n';
 import { DEFAULT_BANDS, DEFAULT_PARAMS } from './defaults';
 import { findParam } from './params';
 import { DEFAULT_CUSTOM_GAINS, DEFAULT_TONE, type EqPresetId } from './quick-controls';
-import { defaultSceneGains, defaultSceneParams } from './scene-presets';
+import { defaultSceneParams } from './scene-presets';
 import type { SceneId } from './scenes';
 import { quantize } from './values';
 
@@ -70,6 +71,20 @@ export interface ParamChangedDetail {
   value: number;
 }
 
+/**
+ * 场景基准：最近一次「应用场景 / 启动对齐」时的完整快照。
+ *
+ * 恢复按钮的语义是「撤销到场景刚应用时的值」，不是「回到寄存器默认值」：
+ * 设备回读、上一次会话保存的微调都可能不是默认值，拿默认值当目标会让按钮
+ * 一打开就亮着。场景「复位」仍然回出厂预设，两者是不同的动作。
+ */
+export interface SceneBaseline {
+  readonly scene: SceneId | null;
+  readonly params: Readonly<Record<string, number>>;
+  readonly bands: readonly EqBand[];
+  readonly tone: EqPresetId | null;
+}
+
 function copyBands(bands: readonly EqBand[]): EqBand[] {
   return bands.map((band) => ({ ...band }));
 }
@@ -107,11 +122,14 @@ function quantizeBandField(bandIndex: number, field: EqBandField, value: number)
 
 function normalizeBand(band: EqBand): EqBand {
   if (!isEditableBand(band.index)) return { ...band };
+  const type = quantizeBandField(band.index, 'type', band.type) as EqBand['type'];
   return {
     index: band.index,
-    type: quantizeBandField(band.index, 'type', band.type) as EqBand['type'],
+    type,
     freq: quantizeBandField(band.index, 'freq', band.freq),
-    gain: quantizeBandField(band.index, 'gain', band.gain),
+    // 高通 / 低通没有增益：音色预设 / 旧场景覆盖里带进来的值在这里就地归零，
+    // 否则它会写进 `bandN.gain` 寄存器、却对曲线毫无影响（2026-11-25 用户反馈）
+    gain: bandHasGain(type) ? quantizeBandField(band.index, 'gain', band.gain) : 0,
     q: quantizeBandField(band.index, 'q', band.q),
   };
 }
@@ -151,6 +169,9 @@ export class AppStore extends EventTarget {
   private readonly _transport: Transport;
   private _state: AppState;
   private _snapshot: AppState;
+  private _baseline: SceneBaseline | null = null;
+  /** 设备回读 / 主动上报正在写 store：视图层据此区分「设备改的」和「用户改的」 */
+  private _echoing = false;
 
   constructor(transport: Transport, initial?: Partial<AppState>) {
     super();
@@ -182,6 +203,48 @@ export class AppStore extends EventTarget {
 
   get(): AppState {
     return this._snapshot;
+  }
+
+  /** 最近一次「应用场景 / 启动对齐」的完整快照；恢复按钮以它为基准 */
+  sceneBaseline(): SceneBaseline | null {
+    return this._baseline;
+  }
+
+  /**
+   * 记录场景基准。`dispatch=false` 用于设备回读期间的就地对齐：
+   * 此时正在派发 change，再派发一次会重入同一个监听器。
+   */
+  setSceneBaseline(scene: SceneId | null = this._state.activeScene, dispatch = true): void {
+    this._baseline = {
+      scene,
+      params: { ...this._state.params },
+      bands: this._state.bands.map((band) => ({ ...band })),
+      tone: this._state.tone,
+    };
+    if (dispatch) this._commit();
+  }
+
+  /**
+   * 场景作用域内的值是否还等于基准（不看保存的覆盖值，覆盖值决定「复位」是否可点）。
+   * `paramIds` 给定时只比这些参数——全局开关（静音 / 监听 / 灯效）不属于场景。
+   * 频段只比 7 段增益：场景只覆盖增益，频点 / Q 的编辑不该点亮场景复位。
+   */
+  isAtSceneBaseline(paramIds?: readonly string[]): boolean {
+    const baseline = this._baseline;
+    if (!baseline) return true;
+    const ids = paramIds ?? Object.keys(baseline.params);
+    for (const id of ids) {
+      if (this._state.params[id] !== baseline.params[id]) return false;
+    }
+    for (let index = 0; index < EQ_BAND_COUNT; index += 1) {
+      if (this._state.bands[index]?.gain !== baseline.bands[index]?.gain) return false;
+    }
+    return this._state.tone === baseline.tone;
+  }
+
+  /** 设备回读 / 主动上报正在写 store：不要把它当成用户改动记进场景 */
+  isApplyingEcho(): boolean {
+    return this._echoing;
   }
 
   /** 当前通道类型：顶栏据此区分"演示数据"与"已连接"（AppState 里不冗余存一份） */
@@ -230,7 +293,12 @@ export class AppStore extends EventTarget {
     const next = quantize(spec, value);
     if (next === this._state.params[id]) return;
     this._state = { ...this._state, params: { ...this._state.params, [id]: next } };
-    this._commit();
+    this._echoing = true;
+    try {
+      this._commit();
+    } finally {
+      this._echoing = false;
+    }
   }
 
   /**
@@ -245,7 +313,12 @@ export class AppStore extends EventTarget {
     const next = bands.map((band) => normalizeBand(band));
     if (sameBands(next, this._state.bands)) return;
     this._state = { ...this._state, bands: next };
-    this._commit();
+    this._echoing = true;
+    try {
+      this._commit();
+    } finally {
+      this._echoing = false;
+    }
   }
 
   /**
@@ -303,13 +376,14 @@ export class AppStore extends EventTarget {
   }
 
   /**
-   * 单项「恢复」的目标值：优先取当前场景的出厂值，场景没覆盖的项回到寄存器默认值。
+   * 单项「恢复」的目标值：场景基准里这一项的值（撤销到场景刚应用时的状态）。
    *
-   * 目标刻意是**出厂值**而不是场景里自动保存的当前值：2026-11-22 起每项改动都会
-   * 立即存进场景，拿保存值当目标等于什么都不做。所以这个按钮的语义是「这一项回默认」。
-   * 离开场景（`activeScene === null`）后目标仍是同一个默认值，按钮照常可用。
+   * 不是寄存器默认值：设备回读 / 上次会话的微调都可能不等于默认值，拿默认值当目标
+   * 会让按钮一打开就亮着。没有基准（还没应用过场景）时才退回场景出厂值 / 寄存器默认值。
    */
   sceneTargetParam(id: string): number | undefined {
+    const baseline = this._baseline?.params[id];
+    if (baseline !== undefined) return baseline;
     const scene = this._state.activeScene;
     const factory = scene ? defaultSceneParams(scene)[id] : undefined;
     return factory ?? findParam(id)?.default;
@@ -326,14 +400,12 @@ export class AppStore extends EventTarget {
     this.setParam(id, target);
   }
 
-  /** EQ 单段恢复目标：出厂频段（频点 / Q / 类型）配当前场景的出厂增益 */
+  /** EQ 单段恢复目标：场景基准里的频段（频点 / Q / 类型 / 增益） */
   sceneTargetBand(index: number): EqBand | undefined {
+    const baseline = this._baseline?.bands[index];
+    if (baseline) return { ...baseline };
     const factory = DEFAULT_BANDS[index];
-    if (!factory) return undefined;
-    const scene = this._state.activeScene;
-    if (!scene) return { ...factory };
-    const gain = defaultSceneGains(scene)[index];
-    return gain === undefined ? { ...factory } : { ...factory, gain };
+    return factory ? { ...factory } : undefined;
   }
 
   isBandAtSceneTarget(index: number): boolean {

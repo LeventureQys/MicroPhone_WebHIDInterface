@@ -241,44 +241,46 @@ describe('console view', () => {
     destroy?.();
   });
 
-  it('jumps straight to the equalizer section from fine-tune (buglist 2026-11-21 #5)', () => {
-    const openAdvanced = vi.fn();
-    const { view, destroy } = mount({ openDevice: () => undefined, openAdvanced });
-    const link = view.querySelector<HTMLElement>('.console-eq-actions .console-link:not(.console-link--plain)');
-    expect(text(link)).toContain('逐段精调');
-    link?.click();
-    expect(openAdvanced).toHaveBeenCalledWith('eq');
+  it('keeps the EQ on the main screen without a fine-tune jump button', () => {
+    const { view, destroy } = mount();
+    expect(view.querySelector('.console-eq-actions .console-link:not(.console-link--plain)')).toBeNull();
+    expect(text(view.querySelector('.console-eq-actions'))).not.toContain('逐段精调');
     destroy?.();
   });
 
-  it('offers the equalizer reset only for the custom tone (buglist 2026-11-21 #12/#13)', () => {
+  it('resets the equalizer to the current tone default for every tone', () => {
     const { store, view, destroy } = mount();
     const reset = view.querySelector<HTMLButtonElement>('.console-eq-reset');
     expect(reset).not.toBeNull();
-    // 软件打开默认就是「自定义」（2026-11-22 问题单第 8 条），因此一进来就可用
+    // 任何音色都可编辑 / 可恢复，不再只在「自定义」下可用
     expect(reset?.disabled).toBe(false);
-    expect(reset?.getAttribute('aria-disabled')).toBe('false');
 
+    // 原声：默认增益全 0，Q 回产品默认（不再统一 0.7）
     view.querySelector<HTMLElement>('.tone-chip[data-tone="flat"]')?.click();
-    expect(reset?.disabled).toBe(true);
-
-    view.querySelector<HTMLElement>('.tone-chip[data-tone="custom"]')?.click();
-    expect(reset?.disabled).toBe(false);
-    expect(reset?.getAttribute('aria-disabled')).toBe('false');
-
-    // 先把曲线拖脏，再复位：频段按问题单那张表回来
-    store.setBands(store.get().bands.map((band, index) => ({ ...band, gain: index === 2 ? 6 : band.gain, q: 2 })));
-    expect(store.get().bands[2].gain).toBe(6);
+    store.setBands(
+      store.get().bands.map((band, index) => ({ ...band, gain: index === 2 ? 6 : band.gain, q: 2 })),
+    );
     reset?.click();
-    const bands = store.get().bands;
-    for (let index = 0; index < 7; index += 1) {
-      expect(bands[index].gain).toBe(0);
-      expect(bands[index].q).toBe(0.7);
-    }
-    // 频点取产品默认（2026-11-22 问题单第 2、3 条）
-    expect(bands.map((band) => band.freq).slice(0, 7)).toEqual([50, 20000, 63, 250, 1000, 4000, 12500]);
-    expect(store.get().tone).toBe('custom');
-    // 自定义曲线也一起被复位，下一次点「自定义」不会把脏曲线带回来
+    let bands = store.get().bands;
+    expect(bands.slice(0, 7).map((band) => band.gain)).toEqual([0, 0, 0, 0, 0, 0, 0]);
+    expect(bands.slice(0, 7).map((band) => band.q)).toEqual([0.7, 0.7, 0.8, 1.5, 1, 1, 0.7]);
+    expect(bands.slice(0, 7).map((band) => band.freq)).toEqual([50, 20000, 63, 250, 1000, 4000, 12500]);
+
+    // 人声增强：默认曲线是音色表那条，不是平坦；前两段是 HPF / LPF，没有增益恒为 0
+    view.querySelector<HTMLElement>('.tone-chip[data-tone="vocal"]')?.click();
+    store.setBands(store.get().bands.map((band, index) => ({ ...band, gain: index === 2 ? 6 : band.gain })));
+    reset?.click();
+    bands = store.get().bands;
+    expect(bands.slice(0, 7).map((band) => band.gain)).toEqual([0, 0, -1, 1, 3, 2, 0]);
+
+    // 自定义：默认是平坦，并且自定义曲线一起复位
+    view.querySelector<HTMLElement>('.tone-chip[data-tone="custom"]')?.click();
+    store.setBands(
+      store.get().bands.map((band, index) => ({ ...band, gain: index === 2 ? 6 : band.gain, q: 2 })),
+    );
+    reset?.click();
+    bands = store.get().bands;
+    expect(bands.slice(0, 7).map((band) => band.gain)).toEqual([0, 0, 0, 0, 0, 0, 0]);
     expect(store.get().customEq).toEqual([0, 0, 0, 0, 0, 0, 0]);
     destroy?.();
   });
@@ -291,7 +293,7 @@ describe('console view', () => {
   });
 
   it('saves per-scene tweaks and resets only the selected scene (buglist 2026-11-22 #9)', () => {
-    const { store, view, destroy } = mount();
+    const { store, view, destroy } = mount({ ...NO_API, confirm: () => true });
     const scene = (id: string): HTMLElement | null => view.querySelector<HTMLElement>(`.scene-btn[data-scene="${id}"]`);
 
     scene('game')?.click();
@@ -319,6 +321,102 @@ describe('console view', () => {
     destroy?.();
   });
 
+  it('lights the scene reset when only the limiter threshold changed (2026-11-25)', () => {
+    const { store, view, destroy } = mount({ ...NO_API, confirm: () => true });
+    view.querySelector<HTMLElement>('.scene-btn[data-scene="podcast"]')?.click();
+    const baseline = store.get().params['limit.Threshold'];
+    const reset = view.querySelector<HTMLButtonElement>('.scene-reset');
+    const rowReset = view.querySelector<HTMLButtonElement>('[data-macro="limiter"] .param-reset');
+    expect(reset?.disabled).toBe(true);
+
+    // 防爆音阈值不在场景预设里（R-19），但它就在快速调音第三行：只改它也要点亮场景复位
+    const range = view.querySelector<HTMLInputElement>('[data-macro="limiter"] input[type="range"]');
+    range!.value = String(baseline - 6);
+    range!.dispatchEvent(new Event('input', { bubbles: true }));
+    expect(store.get().params['limit.Threshold']).toBe(baseline - 6);
+    expect(reset?.disabled).toBe(false);
+    expect(rowReset?.disabled).toBe(false);
+
+    // 复位：防爆音阈值退回「应用场景时」的值（不是参数表默认），按钮转灰
+    reset?.click();
+    expect(store.get().params['limit.Threshold']).toBe(baseline);
+    expect(reset?.disabled).toBe(true);
+    expect(rowReset?.disabled).toBe(true);
+    destroy?.();
+  });
+
+  it('keeps the limiter threshold across scene switches (R-19)', () => {
+    const { store, view, destroy } = mount();
+    view.querySelector<HTMLElement>('.scene-btn[data-scene="podcast"]')?.click();
+    const baseline = store.get().params['limit.Threshold'];
+    const range = view.querySelector<HTMLInputElement>('[data-macro="limiter"] input[type="range"]');
+    range!.value = String(baseline - 6);
+    range!.dispatchEvent(new Event('input', { bubbles: true }));
+    // 场景不写 limit.Threshold：切场景不该悄悄换掉用户调好的阈值
+    view.querySelector<HTMLElement>('.scene-btn[data-scene="quiet"]')?.click();
+    expect(store.get().params['limit.Threshold']).toBe(baseline - 6);
+    destroy?.();
+  });
+
+  it('lights the scene reset when only the compressor switch changed (2026-11-25)', () => {
+    const { store, view, destroy } = mount({ ...NO_API, confirm: () => true });
+    view.querySelector<HTMLElement>('.scene-btn[data-scene="podcast"]')?.click();
+    const baseline = store.get().params['comp.Enable'];
+    const reset = view.querySelector<HTMLButtonElement>('.scene-reset');
+    expect(reset?.disabled).toBe(true);
+
+    // 压缩器开关不在场景预设里（场景只写阈值），但它在快速调音第二行：只拨它也要点亮复位
+    const toggle = view.querySelector<HTMLInputElement>('[data-macro="evenness"] .macro-toggle input');
+    toggle!.click();
+    expect(store.get().params['comp.Enable']).toBe(baseline === 1 ? 0 : 1);
+    expect(reset?.disabled).toBe(false);
+
+    // 复位：开关退回「应用场景时」的值
+    reset?.click();
+    expect(store.get().params['comp.Enable']).toBe(baseline);
+    expect(reset?.disabled).toBe(true);
+    destroy?.();
+  });
+
+  it('drops the dirty flag when the factory tone of the scene is chosen again (2026-11-25)', () => {
+    const { view, destroy } = mount();
+    // 游戏场景的出厂音色是「人声增强」
+    view.querySelector<HTMLElement>('.scene-btn[data-scene="game"]')?.click();
+    const reset = view.querySelector<HTMLButtonElement>('.scene-reset');
+    expect(reset?.disabled).toBe(true);
+
+    view.querySelector<HTMLElement>('.tone-chip[data-tone="bright"]')?.click();
+    expect(reset?.disabled).toBe(false);
+
+    // 换回出厂音色：参数、曲线、音色都回到基准，不该再算「脏」
+    view.querySelector<HTMLElement>('.tone-chip[data-tone="vocal"]')?.click();
+    expect(reset?.disabled).toBe(true);
+    destroy?.();
+  });
+
+  it('keeps the scene baseline when the workbench is rebuilt (language switch, 2026-11-25)', () => {
+    const transport = new FakeTransport('mock');
+    const store = new AppStore(transport, { lang: 'zh' });
+    const first = createConsoleView(store, transport, { ...NO_API, confirm: () => true });
+    document.body.append(first);
+    first.querySelector<HTMLElement>('.scene-btn[data-scene="podcast"]')?.click();
+    const baseline = store.get().params['limit.Threshold'];
+    const range = first.querySelector<HTMLInputElement>('[data-macro="limiter"] input[type="range"]');
+    range!.value = String(baseline - 6);
+    range!.dispatchEvent(new Event('input', { bubbles: true }));
+    expect(first.querySelector<HTMLButtonElement>('.scene-reset')?.disabled).toBe(false);
+
+    // 语言切换 = 销毁工作台后用同一个 store 重建：基准属于会话，不能被挪到当前值
+    (first as HTMLElement & { destroy?: () => void }).destroy?.();
+    document.body.innerHTML = '';
+    const second = createConsoleView(store, transport, { ...NO_API, confirm: () => true });
+    document.body.append(second);
+    expect(second.querySelector<HTMLButtonElement>('.scene-reset')?.disabled).toBe(false);
+    second.querySelector<HTMLButtonElement>('.scene-reset')?.click();
+    expect(store.get().params['limit.Threshold']).toBe(baseline);
+    (second as HTMLElement & { destroy?: () => void }).destroy?.();
+  });
+
   it('remembers per-scene tweaks across a remount', () => {
     const first = mount();
     first.view.querySelector<HTMLElement>('.scene-btn[data-scene="sing"]')?.click();
@@ -335,15 +433,109 @@ describe('console view', () => {
     second.destroy?.();
   });
 
-  it('drops the scene highlight when the tone is changed by hand', () => {
+  it('keeps the scene selected when the tone is changed and remembers it', () => {
     const { store, view, destroy } = mount();
     view.querySelector<HTMLElement>('.scene-btn[data-scene="quiet"]')?.click();
     expect(view.querySelector('.scene-btn[data-scene="quiet"]')?.getAttribute('aria-pressed')).toBe('true');
     view.querySelector<HTMLElement>('.tone-chip[data-tone="bright"]')?.click();
     expect(store.get().tone).toBe('bright');
-    expect(view.querySelector('.scene-btn[data-scene="quiet"]')?.getAttribute('aria-pressed')).toBe('false');
-    // 没有场景就不给复位（复位的是"当前场景"）
+    // 换音色是场景内的微调：场景仍然选中，并且标记为改动过
+    expect(view.querySelector('.scene-btn[data-scene="quiet"]')?.getAttribute('aria-pressed')).toBe('true');
+    expect(view.querySelector('.scene-btn[data-scene="quiet"]')?.classList.contains('is-dirty')).toBe(true);
+    // 切走再切回：场景记住了换过的音色
+    view.querySelector<HTMLElement>('.scene-btn[data-scene="game"]')?.click();
+    view.querySelector<HTMLElement>('.scene-btn[data-scene="quiet"]')?.click();
+    expect(store.get().tone).toBe('bright');
+    destroy?.();
+  });
+
+  it('starts with every restore grey and no scene marked dirty', () => {
+    const { view, destroy } = mount();
     expect(view.querySelector<HTMLButtonElement>('.scene-reset')?.disabled).toBe(true);
+    expect(view.querySelectorAll('.scene-btn.is-dirty')).toHaveLength(0);
+    // 一行一个恢复，且开局都应该是灰的（当前值就是基准值）
+    for (const button of view.querySelectorAll<HTMLButtonElement>('.param-reset')) {
+      expect(button.disabled).toBe(true);
+    }
+    destroy?.();
+  });
+
+  it('keeps one restore per module row and restores both values', () => {
+    const { store, view, destroy } = mount();
+    for (const key of ['denoise', 'evenness', 'limiter']) {
+      expect(view.querySelectorAll(`[data-macro="${key}"] .param-reset`)).toHaveLength(1);
+    }
+    const baseline = store.sceneBaseline();
+    const gateBefore = baseline?.params['noisegate.threshold_db'];
+    const enableBefore = baseline?.params['noisegate.Enable'];
+
+    store.setParam('noisegate.threshold_db', -70);
+    view.querySelector<HTMLInputElement>('[data-param="noisegate.Enable"] input')?.click();
+    const reset = view.querySelector<HTMLButtonElement>('[data-macro="denoise"] .param-reset');
+    expect(reset?.disabled).toBe(false);
+
+    reset?.click();
+    expect(store.get().params['noisegate.threshold_db']).toBe(gateBefore);
+    expect(store.get().params['noisegate.Enable']).toBe(enableBefore);
+    expect(reset?.disabled).toBe(true);
+    destroy?.();
+  });
+
+  it('does not treat a device readback as a scene edit', () => {
+    const { store, view, destroy } = mount();
+    const customBefore = [...store.get().customEq];
+    const bands = store.get().bands.map((band, index) =>
+      index === 2 ? { ...band, gain: 6 } : { ...band },
+    );
+    // 设备回读 / 主动上报：不是用户拖的曲线
+    store.applyBands(bands);
+    expect(store.get().customEq).toEqual(customBefore);
+    expect(view.querySelector<HTMLButtonElement>('.scene-reset')?.disabled).toBe(true);
+    expect(view.querySelectorAll('.scene-btn.is-dirty')).toHaveLength(0);
+    destroy?.();
+  });
+
+  it('does not mark the scene dirty when clicking the already-active tone', () => {
+    const { store, view, destroy } = mount();
+    view.querySelector<HTMLElement>('.scene-btn[data-scene="game"]')?.click();
+    expect(store.get().tone).toBe('vocal');
+    view.querySelector<HTMLElement>('.tone-chip[data-tone="vocal"]')?.click();
+    expect(store.get().tone).toBe('vocal');
+    expect(view.querySelectorAll('.scene-btn.is-dirty')).toHaveLength(0);
+    expect(view.querySelector<HTMLButtonElement>('.scene-reset')?.disabled).toBe(true);
+    destroy?.();
+  });
+
+  it('keeps global switches out of the scene scope', () => {
+    const { store, view, destroy } = mount();
+    view.querySelector<HTMLElement>('.scene-btn[data-scene="game"]')?.click();
+    store.setParam('mic.mute', 1);
+    // 全局开关不记进场景，也不该让场景复位亮起来
+    expect(view.querySelector<HTMLButtonElement>('.scene-reset')?.disabled).toBe(true);
+    expect(view.querySelectorAll('.scene-btn.is-dirty')).toHaveLength(0);
+    // 切到别的场景再切回来：全局开关保持自己的值，不被场景改回去
+    view.querySelector<HTMLElement>('.scene-btn[data-scene="podcast"]')?.click();
+    expect(store.get().params['mic.mute']).toBe(1);
+    view.querySelector<HTMLElement>('.scene-btn[data-scene="game"]')?.click();
+    expect(store.get().params['mic.mute']).toBe(1);
+    destroy?.();
+  });
+
+  it('restores a field to the applied scene value, not the factory value', () => {
+    const { store, view, destroy } = mount();
+    view.querySelector<HTMLElement>('.scene-btn[data-scene="game"]')?.click();
+    store.setParam('comp.Threshold', -30);
+    // 切走再切回：场景保存的 -30 被重新应用，恢复基准也应该是 -30
+    view.querySelector<HTMLElement>('.scene-btn[data-scene="podcast"]')?.click();
+    view.querySelector<HTMLElement>('.scene-btn[data-scene="game"]')?.click();
+    expect(store.get().params['comp.Threshold']).toBe(-30);
+
+    store.setParam('comp.Threshold', -20);
+    const reset = view.querySelector<HTMLButtonElement>('[data-reset-param="comp.Threshold"]');
+    expect(reset?.disabled).toBe(false);
+    reset?.click();
+    expect(store.get().params['comp.Threshold']).toBe(-30);
+    expect(reset?.disabled).toBe(true);
     destroy?.();
   });
 });

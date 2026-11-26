@@ -547,7 +547,9 @@ async function main() {
       check('问题3：连续拖拽写帧测量', false, throttle.error);
     }
 
-    // ---- 9. 自定义曲线：只有自定义音色可拖 ----------------------------------
+    // ---- 9. 任何音色都能拖曲线（2026-11-25 起不再锁在「自定义」） ------------
+    // 11-13 问题单当年要求「非自定义音色锁定曲线」；2026-11-25 起主界面在任何音色下都能拖，
+    // 固定音色的曲线改动记进场景 gains 覆盖（音色选择不变）。这里改成验证"能拖"。
     await cdp.evaluate(`document.querySelector('.modal-close')?.click(); true`);
     await wait(600);
     await cdp.evaluate(`document.querySelector('.tone-chip[data-tone="bright"]')?.click(); true`);
@@ -565,9 +567,9 @@ async function main() {
       return JSON.stringify({ hit, cursor: canvas.dataset.cursor, desc: document.querySelector('.console-eq .card-desc')?.textContent?.trim() ?? null });
     })()`);
     check(
-      '非「自定义」音色时曲线锁定（找不到可拖节点、卡片给提示）',
-      locked.hit === null,
-      `cursor=${locked.cursor} desc=${locked.desc}`,
+      '固定音色（明亮）下曲线同样可拖（11-25 起不再锁定）',
+      locked.hit !== null,
+      `命中的可拖节点=${locked.hit ? `${Math.round(locked.hit.x)},${Math.round(locked.hit.y)}` : '无'} desc=${locked.desc}`,
     );
 
     await cdp.evaluate(`document.querySelector('.tone-chip[data-tone="custom"]')?.click(); true`);
@@ -655,9 +657,12 @@ async function main() {
     // ---- 10. 自定义场景 -----------------------------------------------------
     // 2026-11-22 起场景参数会「自动保存」：本探针前面改过噪声门/压缩器，那些改动已经记进
     // 当前场景名下，所以先点场景「复位」把它清回出厂预设，再验证"自定义 = 中性处理 + 自定义曲线"
+    // 2026-11-25 起复位会先弹应用内确认框，必须点掉确认才会真的复位
     await cdp.evaluate(`document.querySelector('.scene-btn[data-scene="custom"]')?.click(); true`);
     await wait(900);
     await cdp.evaluate(`document.querySelector('.scene-reset')?.click(); true`);
+    await wait(400);
+    await cdp.evaluate(`document.querySelector('.confirm .btn--primary')?.click(); true`);
     await wait(1500);
     const customScene = await cdp.json(CONSOLE_SNAPSHOT);
     await cdp.shot('06-custom-scene.png');

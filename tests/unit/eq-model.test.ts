@@ -38,10 +38,25 @@ describe('eq model', () => {
 
   it('clamps gain to the parameter ceiling', () => {
     const model = new EqModel();
-    model.setBand(0, { gain: 100 });
-    expect(requireBand(model, 0).gain).toBe(12);
-    model.setBand(0, { gain: -100 });
-    expect(requireBand(model, 0).gain).toBe(-32);
+    model.setBand(2, { gain: 100 });
+    expect(requireBand(model, 2).gain).toBe(12);
+    model.setBand(2, { gain: -100 });
+    expect(requireBand(model, 2).gain).toBe(-32);
+  });
+
+  it('pins the gain of HPF / LPF bands to 0 (buglist 2026-11-25)', () => {
+    const model = new EqModel();
+    // 第 1 段默认就是 HPF：给 +6 必须落成 0，别让无效值在模型里漂流
+    expect(requireBand(model, 0).type).toBe(4);
+    model.setBand(0, { gain: 6 });
+    expect(requireBand(model, 0).gain).toBe(0);
+    // 切成 PEAK 之后增益才有意义
+    model.setBand(0, { type: 0 });
+    model.setBand(0, { gain: 6 });
+    expect(requireBand(model, 0).gain).toBe(6);
+    // 再切回 LPF：增益连带归零
+    model.setBand(0, { type: 3 });
+    expect(requireBand(model, 0).gain).toBe(0);
   });
 
   it('quantizes every field to its step', () => {
@@ -50,13 +65,14 @@ describe('eq model', () => {
       freq: 1234.5678,
       gain: 3.14159,
       q: 0.3333,
-      type: 9.7 as EqBand['type'],
+      // LS 有增益，顺便验类型也按 1 步进量化（0.4 → 0 是 PEAK，这里用 1.4 → 1）
+      type: 1.4 as EqBand['type'],
     });
     const band = requireBand(model, 1);
     expect(band.freq).toBe(1235);
     expect(band.gain).toBe(3.1);
     expect(band.q).toBe(0.3);
-    expect(band.type).toBe(4);
+    expect(band.type).toBe(1);
   });
 
   it('ignores an out-of-range index without throwing', () => {
@@ -71,14 +87,14 @@ describe('eq model', () => {
   it('emits one band-changed per effective change', () => {
     const model = new EqModel();
     const events = listenBand(model);
-    model.setBand(0, { gain: 3 });
+    model.setBand(2, { gain: 3 });
     expect(events).toHaveLength(1);
-    expect(events[0].index).toBe(0);
+    expect(events[0].index).toBe(2);
     expect(events[0].band.gain).toBe(3);
     // detail 里必须是副本，调用方改动不能回写模型
     events[0].band.gain = 9;
-    expect(requireBand(model, 0).gain).toBe(3);
-    model.setBand(0, { gain: 3 });
+    expect(requireBand(model, 2).gain).toBe(3);
+    model.setBand(2, { gain: 3 });
     expect(events).toHaveLength(1);
   });
 

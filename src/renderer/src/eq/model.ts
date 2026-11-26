@@ -6,7 +6,7 @@
  */
 
 import type { EqBand, EqFilterType } from './types';
-import { EQ_BAND_EDITABLE, EQ_BAND_TOTAL } from './types';
+import { bandHasGain, EQ_BAND_EDITABLE, EQ_BAND_TOTAL } from './types';
 import { DEFAULT_BANDS } from '../domain/defaults';
 
 export interface BandChangeDetail {
@@ -65,11 +65,13 @@ function resolveIndex(band: EqBand, position: number): number {
 }
 
 function normalizeBand(band: EqBand, position: number): EqBand {
+  const type = snap(band.type, TYPE_MIN, TYPE_MAX, TYPE_STEP) as EqFilterType;
   return {
     index: resolveIndex(band, position),
-    type: snap(band.type, TYPE_MIN, TYPE_MAX, TYPE_STEP) as EqFilterType,
+    type,
     freq: snap(band.freq, FREQ_MIN, FREQ_MAX, FREQ_STEP),
-    gain: snap(band.gain, GAIN_MIN, GAIN_MAX, GAIN_STEP),
+    // 高通 / 低通没有增益自由度，模型里就存 0，别让无效值在状态里漂流
+    gain: bandHasGain(type) ? snap(band.gain, GAIN_MIN, GAIN_MAX, GAIN_STEP) : DEFAULT_GAIN,
     q: snap(band.q, Q_MIN, Q_MAX, Q_STEP),
   };
 }
@@ -112,6 +114,8 @@ export class EqModel extends EventTarget {
     if (gain !== null) next.gain = gain;
     const q = snapOptional(patch?.q, Q_MIN, Q_MAX, Q_STEP);
     if (q !== null) next.q = q;
+    // 类型切成高通 / 低通（或本来就是）时增益没有意义：连带归零，避免"看不到却写出去"
+    if (!bandHasGain(next.type)) next.gain = DEFAULT_GAIN;
     // 量化后无变化则静默返回，避免渲染层因同值事件空转
     if (
       next.type === current.type

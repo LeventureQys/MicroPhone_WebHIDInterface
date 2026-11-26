@@ -402,11 +402,12 @@ describe('DeviceLink', () => {
     expect(store.get().params['enc.Level']).toBe(3);
 
     // 协议 1026 §4：设备→主机的 0x10 上报，上位机只更新本地镜像、不回 ACK、不发帧
+    // 第 2 段是 LPF（没有增益），增益回填断言放第 3 段（PEAK）
     transport.emitEcho({ kind: 'param', id: 'enc.Level', value: 1 });
-    transport.emitEcho({ kind: 'band', band: 2, field: 'gain', value: 4.5 });
+    transport.emitEcho({ kind: 'band', band: 3, field: 'gain', value: 4.5 });
 
     expect(store.get().params['enc.Level']).toBe(1);
-    expect(store.get().bands[1].gain).toBe(4.5);
+    expect(store.get().bands[2].gain).toBe(4.5);
     // 回填走 applyEcho / applyBands，绝不能反过来触发写帧（否则设备上报会变成写环）
     expect(transport.writes).toHaveLength(0);
     expect(transport.bandWrites).toHaveLength(0);

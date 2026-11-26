@@ -1,6 +1,6 @@
 import { findParam } from './params';
 import { DEFAULT_CUSTOM_GAINS, EQ_PRESETS, type EqPresetId } from './quick-controls';
-import { SCENES, scenePatch, type SceneId, type ScenePreset } from './scenes';
+import { SCENES, SCENE_PARAM_IDS, scenePatch, type SceneId, type ScenePreset } from './scenes';
 import { quantize } from './values';
 
 /**
@@ -19,6 +19,8 @@ import { quantize } from './values';
 export interface SceneOverride {
   /** 用户改过的参数（id → 工程量），只存差异 */
   readonly params?: Readonly<Record<string, number>>;
+  /** 用户在场景里手动换过的音色；换音色不退出场景，改动照样自动保存 */
+  readonly tone?: EqPresetId;
   /** 用户改过的 7 段增益；只对「自定义」音色有意义 */
   readonly gains?: readonly number[];
 }
@@ -29,10 +31,14 @@ export type SceneOverrides = Readonly<Partial<Record<SceneId, SceneOverride>>>;
 export const SCENES_STORAGE_KEY = 'micstudio.scenes';
 /** 「自定义」音色的曲线：软件重开后还要是用户上次拖出来的那条 */
 export const CUSTOM_EQ_STORAGE_KEY = 'micstudio.customEq';
+/** 存储迁移标记：每个版本只跑一次 */
+export const STORAGE_MIGRATION_KEY = 'micstudio.storageMigration';
+const STORAGE_VERSION = 1;
 
 const EDITABLE_GAIN_MIN = -32;
 const EDITABLE_GAIN_MAX = 12;
 const EDITABLE_GAIN_COUNT = 7;
+const SCENE_TONES: readonly EqPresetId[] = ['flat', 'vocal', 'warm', 'bright', 'custom'];
 
 type StorageReader = Pick<Storage, 'getItem'>;
 type StorageWriter = Pick<Storage, 'setItem'>;
@@ -115,14 +121,22 @@ function normalizeParams(raw: unknown): Record<string, number> | null {
   return params;
 }
 
+function normalizeTone(raw: unknown): EqPresetId | null {
+  return typeof raw === 'string' && (SCENE_TONES as readonly string[]).includes(raw)
+    ? (raw as EqPresetId)
+    : null;
+}
+
 function normalizeOverride(raw: unknown): SceneOverride | null {
   if (typeof raw !== 'object' || raw === null) return null;
-  const source = raw as { params?: unknown; gains?: unknown };
+  const source = raw as { params?: unknown; tone?: unknown; gains?: unknown };
   const params = normalizeParams(source.params);
+  const tone = normalizeTone(source.tone);
   const gains = normalizeGains(source.gains);
-  if (!params && !gains) return null;
-  const override: { params?: Record<string, number>; gains?: number[] } = {};
+  if (!params && !tone && !gains) return null;
+  const override: { params?: Record<string, number>; tone?: EqPresetId; gains?: number[] } = {};
   if (params && Object.keys(params).length > 0) override.params = params;
+  if (tone) override.tone = tone;
   if (gains) override.gains = gains;
   return Object.keys(override).length > 0 ? override : null;
 }
@@ -144,19 +158,72 @@ export function saveSceneOverrides(overrides: SceneOverrides, storage?: StorageW
   writeJson(storage ?? defaultStorage(), SCENES_STORAGE_KEY, overrides);
 }
 
+type StorageAccess = StorageReader & StorageWriter;
+
+/**
+ * 一次性数据迁移（2026-11-25）。
+ *
+ * 旧版 `console-view` 的 `persistCustomGains` 把设备回读的 EQ 当成用户拖的曲线，
+ * 每次启动都写进 `micstudio.customEq` 和场景的 `gains` 覆盖，导致：
+ *   1. 一打开「自定义」场景就是「改过」状态，复位按钮亮着；
+ *   2. 自定义曲线被设备预设覆盖。
+ *
+ * 回读数据无法和用户曲线可靠区分，所以只清**场景里的 gains 覆盖**（造成 dirty 的那份
+ * 冗余），保留 `micstudio.customEq`：它可能是用户真正拖过的那条，宁可保守也不误删。
+ * 同时把旧版误记进场景的全局开关（静音 / 监听 / 灯效）去掉，参数覆盖只留场景作用域内的项。
+ */
+export function migrateSceneStorage(storage?: StorageAccess): void {
+  const store = storage ?? (defaultStorage() as StorageAccess | null);
+  if (!store) return;
+  if (readJson(store, STORAGE_MIGRATION_KEY) === STORAGE_VERSION) return;
+  try {
+    const overrides = loadSceneOverrides(store);
+    const cleaned: { [key in SceneId]?: SceneOverride } = {};
+    for (const scene of SCENES) {
+      const source = overrides[scene.id];
+      if (!source) continue;
+      const scoped: Record<string, number> = {};
+      for (const [id, value] of Object.entries(source.params ?? {})) {
+        // 旧版把全局开关（静音 / 监听 / 灯效）也记进了场景；新作用域只留场景参数
+        if (SCENE_PARAM_IDS.includes(id)) scoped[id] = value;
+      }
+      // 旧版启动时把设备回读写进 activeScene='custom' 的 gains；这条覆盖是造成
+      // 「自定义一打开就 dirty」的元凶，清掉。曲线本身仍在 micstudio.customEq 里。
+      // 其它场景的 gains 更可能是用户真拖出来的，保留。
+      const gains = scene.id === 'custom' ? undefined : source.gains;
+      const updated: { params?: Record<string, number>; gains?: readonly number[] } = {};
+      if (Object.keys(scoped).length > 0) updated.params = scoped;
+      if (gains) updated.gains = gains;
+      if (updated.params || updated.gains) cleaned[scene.id] = updated;
+    }
+    writeJson(store, SCENES_STORAGE_KEY, cleaned);
+    writeJson(store, STORAGE_MIGRATION_KEY, STORAGE_VERSION);
+  } catch {
+    // 隐私模式 / 配额满：下次启动再试，不影响本次打开
+  }
+}
+
 /** 场景完整参数 = 出厂值 + 用户改过的项（后者优先） */
 export function sceneParams(id: SceneId, overrides: SceneOverrides = {}): Record<string, number> {
   return { ...defaultSceneParams(id), ...(overrides[id]?.params ?? {}) };
 }
 
-/** 场景曲线 = 用户改过的那条，没有就用出厂曲线（「自定义」用当前用户曲线） */
+/** 场景当前音色 = 用户换过的音色，没有就用出厂音色 */
+export function sceneTone(id: SceneId, overrides: SceneOverrides = {}): EqPresetId {
+  return overrides[id]?.tone ?? findScene(id)?.tone ?? 'flat';
+}
+
+/** 场景曲线 = 用户改过的那条；没有就按场景当前音色取表（「自定义」用当前用户曲线） */
 export function sceneGains(
   id: SceneId,
   overrides: SceneOverrides = {},
   customGains: readonly number[] = DEFAULT_CUSTOM_GAINS,
 ): number[] {
   const saved = overrides[id]?.gains;
-  return saved ? [...saved] : defaultSceneGains(id, customGains);
+  if (saved) return [...saved];
+  const tone = sceneTone(id, overrides);
+  if (tone === 'custom') return normalizeGains(customGains) ?? [...DEFAULT_CUSTOM_GAINS];
+  return [...EQ_PRESETS[tone]];
 }
 
 /** 记下用户在本场景改的参数（返回新表，调用方负责落盘） */
@@ -187,6 +254,23 @@ export function recordSceneGains(
   if (!clean) return overrides;
   const current = overrides[id] ?? {};
   return { ...overrides, [id]: { ...current, gains: clean } };
+}
+
+/**
+ * 记下用户在本场景换过的音色。
+ *
+ * 换音色是场景内的一次正常微调，不该把人踢出场景（否则后续改动不再自动保存）。
+ * 换音色后旧的曲线覆盖作废：固定音色用音色表，自定义音色用当前 `customEq`。
+ */
+export function recordSceneTone(
+  overrides: SceneOverrides,
+  id: SceneId,
+  tone: EqPresetId,
+): SceneOverrides {
+  const current = overrides[id] ?? {};
+  const updated: { params?: Readonly<Record<string, number>>; tone: EqPresetId } = { tone };
+  if (current.params) updated.params = current.params;
+  return { ...overrides, [id]: updated };
 }
 
 /** 复位：删掉这个场景的全部覆盖值，下次应用就回到出厂预设 */
@@ -225,10 +309,11 @@ export function forgetSceneParams(
     }
   }
   if (!removed) return overrides;
-  const updated: { params?: Record<string, number>; gains?: readonly number[] } = {};
+  const updated: { params?: Record<string, number>; tone?: EqPresetId; gains?: readonly number[] } = {};
   if (Object.keys(params).length > 0) updated.params = params;
+  if (current.tone) updated.tone = current.tone;
   if (current.gains) updated.gains = current.gains;
-  if (!updated.params && !updated.gains) {
+  if (!updated.params && !updated.tone && !updated.gains) {
     const copy = { ...overrides };
     delete copy[id];
     return copy;
@@ -240,6 +325,24 @@ export function forgetSceneParams(
 export function forgetSceneGains(overrides: SceneOverrides, id: SceneId): SceneOverrides {
   const current = overrides[id];
   if (!current?.gains) return overrides;
+  const updated: { params?: Record<string, number>; tone?: EqPresetId } = {};
+  if (current.params) updated.params = { ...current.params };
+  if (current.tone) updated.tone = current.tone;
+  if (!updated.params && !updated.tone) {
+    const copy = { ...overrides };
+    delete copy[id];
+    return copy;
+  }
+  return { ...overrides, [id]: updated };
+}
+
+/**
+ * 音色回到出厂音色时摘掉 tone 覆盖，同时清掉曲线覆盖：
+ * 音色回出厂了，曲线也必须跟回出厂，不能留着旧音色拖出来的那条。
+ */
+export function forgetSceneTone(overrides: SceneOverrides, id: SceneId): SceneOverrides {
+  const current = overrides[id];
+  if (!current?.tone && !current?.gains) return overrides;
   const updated: { params?: Record<string, number> } = {};
   if (current.params) updated.params = { ...current.params };
   if (!updated.params) {

@@ -1,19 +1,23 @@
 import { beforeEach, describe, expect, it } from 'vitest';
-import { DEFAULT_CUSTOM_GAINS } from '../../src/renderer/src/domain/quick-controls';
+import { DEFAULT_CUSTOM_GAINS, EQ_PRESETS } from '../../src/renderer/src/domain/quick-controls';
 import {
   CUSTOM_EQ_STORAGE_KEY,
   SCENES_STORAGE_KEY,
   clearSceneOverride,
   defaultSceneGains,
   defaultSceneParams,
+  forgetSceneTone,
   loadCustomEq,
   loadSceneOverrides,
+  migrateSceneStorage,
   recordSceneGains,
   recordSceneParams,
+  recordSceneTone,
   saveCustomEq,
   saveSceneOverrides,
   sceneGains,
   sceneParams,
+  sceneTone,
 } from '../../src/renderer/src/domain/scene-presets';
 import { SCENES } from '../../src/renderer/src/domain/scenes';
 
@@ -113,6 +117,25 @@ describe('per-scene saved values (buglist 2026-11-22 #9)', () => {
     expect(sceneGains('quiet', overrides)).toEqual([1, 1, 1, 1, 1, 1, 1]);
   });
 
+  it('remembers a tone change inside the scene and drops stale curve overrides', () => {
+    let overrides = recordSceneTone({}, 'quiet', 'bright');
+    expect(sceneTone('quiet', overrides)).toBe('bright');
+    expect(sceneGains('quiet', overrides)).toEqual([...EQ_PRESETS.bright]);
+
+    // 换音色后旧曲线覆盖作废：固定音色的曲线由音色表决定
+    overrides = recordSceneGains(overrides, 'quiet', [1, 1, 1, 1, 1, 1, 1]);
+    expect(sceneGains('quiet', overrides)).toEqual([1, 1, 1, 1, 1, 1, 1]);
+    overrides = recordSceneTone(overrides, 'quiet', 'warm');
+    expect(sceneGains('quiet', overrides)).toEqual([...EQ_PRESETS.warm]);
+
+    // 音色回出厂时 tone / gains 一起摘掉，参数覆盖保留
+    overrides = recordSceneParams(overrides, 'quiet', { 'comp.Threshold': -30 });
+    overrides = forgetSceneTone(overrides, 'quiet');
+    expect(sceneTone('quiet', overrides)).toBe('flat');
+    expect(sceneGains('quiet', overrides)).toEqual([...EQ_PRESETS.flat]);
+    expect(sceneParams('quiet', overrides)['comp.Threshold']).toBe(-30);
+  });
+
   it('persists the custom curve and tolerates a broken file', () => {
     expect(loadCustomEq()).toBeNull();
     saveCustomEq([1.04, -2.06, 99, -99, 0, 0, 0]);
@@ -135,5 +158,41 @@ describe('per-scene saved values (buglist 2026-11-22 #9)', () => {
     expect(loadCustomEq(broken)).toBeNull();
     expect(() => saveSceneOverrides(recordSceneParams({}, 'quiet', { 'comp.Threshold': -1 }), broken)).not.toThrow();
     expect(() => saveCustomEq([0, 0, 0, 0, 0, 0, 0], broken)).not.toThrow();
+  });
+
+  it('migrates scene overrides without touching the user curve', () => {
+    const curve = [-3, -2, -1, 1, 3, 2, 0];
+    localStorage.setItem(
+      SCENES_STORAGE_KEY,
+      JSON.stringify({
+        custom: {
+          gains: curve,
+          params: { 'comp.Threshold': -30, 'mic.mute': 1 },
+        },
+        game: {
+          gains: [1, 2, 3, 4, 5, 6, 7],
+          params: { 'noisegate.threshold_db': -50 },
+        },
+      }),
+    );
+    localStorage.setItem(CUSTOM_EQ_STORAGE_KEY, JSON.stringify(curve));
+
+    migrateSceneStorage();
+    // 曲线可能是用户真拖过的：迁移不能误删
+    expect(loadCustomEq()).toEqual(curve);
+    const migrated = loadSceneOverrides();
+    // 场景里的冗余 gains 覆盖要清掉（它让自定义场景一打开就是 dirty）
+    expect(migrated.custom?.gains).toBeUndefined();
+    // 旧版误记的全局开关也要丢掉（新作用域里它不属于场景）
+    expect(migrated.custom?.params).toEqual({ 'comp.Threshold': -30 });
+    expect(migrated.game?.params).toEqual({ 'noisegate.threshold_db': -50 });
+    // 非 custom 场景的曲线覆盖更可能是用户真拖的，迁移保留
+    expect(migrated.game?.gains).toEqual([1, 2, 3, 4, 5, 6, 7]);
+
+    // 迁移只跑一次：之后场景里新存的曲线覆盖不能被清
+    const withGains = recordSceneGains(migrated, 'custom', [1, 2, 3, 4, 5, 6, 7]);
+    saveSceneOverrides(withGains);
+    migrateSceneStorage();
+    expect(loadSceneOverrides().custom?.gains).toEqual([1, 2, 3, 4, 5, 6, 7]);
   });
 });

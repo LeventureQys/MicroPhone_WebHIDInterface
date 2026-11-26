@@ -3,7 +3,6 @@ import type { AppState, AppStore } from '../../domain/state';
 import { t } from '../../i18n';
 import {
   card,
-  resetControl,
   segmented,
   setResetDisabled,
   setSegmentedValue,
@@ -65,9 +64,15 @@ export function createInputView(store: AppStore): HTMLElement {
     checked: (state.params['enc.OnOff'] ?? 0) === 1,
     label: t('param.enc.OnOff.label'),
     onChange: (checked) => store.setParam('enc.OnOff', checked ? 1 : 0),
+    // 开关 + 档位是一组：只留一个恢复，两个值都回基准
     reset: {
-      onClick: () => store.restoreParam('enc.OnOff'),
-      disabled: store.isParamAtSceneTarget('enc.OnOff'),
+      onClick: () => {
+        store.restoreParam('enc.OnOff');
+        if (levelSpec) store.restoreParam(levelSpec.id);
+      },
+      disabled:
+        store.isParamAtSceneTarget('enc.OnOff') &&
+        (levelSpec === undefined || store.isParamAtSceneTarget(levelSpec.id)),
     },
   });
   encSwitch.dataset.param = onOffSpec?.id ?? 'enc.OnOff';
@@ -92,12 +97,6 @@ export function createInputView(store: AppStore): HTMLElement {
       onChange: (value) => store.setParam(levelSpec.id, value),
     });
     levelNode.dataset.param = levelSpec.id;
-    const levelReset = resetControl({
-      onClick: () => store.restoreParam(levelSpec.id),
-      disabled: store.isParamAtSceneTarget(levelSpec.id),
-    });
-    levelReset.dataset.resetParam = levelSpec.id;
-    head.append(levelReset);
     levelLabel.append(levelNode);
     encCard.body.append(levelLabel);
   }
@@ -111,10 +110,14 @@ export function createInputView(store: AppStore): HTMLElement {
     setResetDisabled(gateEnable, store.isParamAtSceneTarget('noisegate.Enable'));
 
     setSwitchChecked(encSwitch, (next.params['enc.OnOff'] ?? 0) === 1);
-    setResetDisabled(encSwitch, store.isParamAtSceneTarget('enc.OnOff'));
+    setResetDisabled(
+      encSwitch,
+      store.isParamAtSceneTarget('enc.OnOff') &&
+        (levelSpec === undefined || store.isParamAtSceneTarget(levelSpec.id)),
+      'enc.OnOff',
+    );
     if (levelSpec && levelNode) {
       setSegmentedValue(levelNode, next.params[levelSpec.id] ?? 1);
-      setResetDisabled(levelNode.parentElement ?? levelNode, store.isParamAtSceneTarget(levelSpec.id));
       const off = (next.params['enc.OnOff'] ?? 0) !== 1;
       for (const button of levelNode.querySelectorAll<HTMLButtonElement>('.seg-btn')) {
         button.disabled = off;
