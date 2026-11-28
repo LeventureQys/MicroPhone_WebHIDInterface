@@ -633,6 +633,22 @@ describe('DeviceLink', () => {
     });
   }
 
+  it('uses the specific microphone endpoint when native DFU reconnects', async () => {
+    const audio = new FakeAudio();
+    const { link } = setupReal({ audio });
+    link.awaitReenumeration = async () => undefined;
+    try {
+      await link.attach('vdevice');
+      await link.suspendForDfu();
+      expect(audio.healthy()).toBe(false);
+      expect(await link.resumeAfterDfu()).toBe(true);
+      expect(audio.strictCalls.at(-1)).toBe(true);
+    } finally {
+      await link.detach();
+      link.dispose();
+    }
+  });
+
   it('recovers the parameter channel after a failed upgrade instead of staying suspended', async () => {
     const { link, store, transport, session } = setupReal();
     await link.attach('vdevice');
@@ -654,7 +670,10 @@ describe('DeviceLink', () => {
     await link.attach('vdevice');
     await link.suspendForDfu();
 
-    // 升级失败后用户回设备页点「打开」：以前 open() 直接返回，回读必然超时
+    // 刷写期间保留独占；失败后可以在设备页重新打开。
+    await link.attach('vdevice');
+    expect(link.getState().status).toBe('dfu');
+    await link.recoverAfterDfuFailure(false);
     await link.attach('vdevice');
 
     expect(link.getState().status).toBe('ready');

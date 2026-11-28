@@ -214,6 +214,7 @@ export class DeviceLink extends EventTarget {
    * 由 `attach()` 自己决定是彻底失败还是保留句柄给 DFU（设备可能停在 Bootloader）。
    */
   private _attaching = false;
+  private _factoryReset: Promise<void> | null = null;
 
   // ---- 音频电平自愈：设备还在系统里就重开音频输入，不退回恒 0 的 0x2057 ----------
   /** 音频输入自检 / 重试定时器（只排一个，到点前有更早的请求会重排） */
@@ -287,7 +288,7 @@ export class DeviceLink extends EventTarget {
    * 固件升级还要用它），参数链路按 error 降级，不向调用方抛出。
    */
   async attach(deviceId: string): Promise<void> {
-    if (this._state.status === 'connecting') return;
+    if (this._state.status === 'connecting' || this._state.status === 'dfu' || this._factoryReset !== null) return;
     this._attaching = true;
     // 重连期间先把旧的电平采集停掉：不然拔插后会同时开着两路麦克风
     this._stopAudioLevels();
@@ -387,6 +388,31 @@ export class DeviceLink extends EventTarget {
     return transport instanceof WebHidTransport ? transport : null;
   }
 
+  async factoryReset(): Promise<void> {
+    const transport = this._transport;
+    if (
+      this._state.status !== 'ready' ||
+      !(transport instanceof WebHidTransport) ||
+      this._factoryReset !== null
+    ) {
+      throw new Error('设备参数通道尚未就绪');
+    }
+    this._factoryReset = transport.factoryReset().then((result) => {
+      if (this._transport !== transport || this._state.status !== 'ready') {
+        throw new Error('设备已断开');
+      }
+      this._gainFilter.reset();
+      this._applyReadback(result);
+      this._store.applyBypass('eq', false);
+      this._patch({ device: result.device, warning: this._mismatchWarning(result.device) });
+    });
+    try {
+      await this._factoryReset;
+    } finally {
+      this._factoryReset = null;
+    }
+  }
+
   /** 断开设备并回到演示数据；`store.sync` 回 idle，顶栏随即显示"演示数据" */
   async detach(): Promise<void> {
     const deviceId = this._state.deviceId;
@@ -432,8 +458,13 @@ export class DeviceLink extends EventTarget {
 
   /** DFU 前：停轮询、停写队列；状态置 dfu，参数卡据此提示"升级中" */
   async suspendForDfu(): Promise<void> {
+    if (this._factoryReset !== null) {
+      await this._factoryReset.catch(() => undefined);
+      if (this._transport === null) throw new Error('设备已断开');
+    }
     this._firmwareBeforeDfu = this._state.device?.firmware ?? null;
     this._patch({ status: 'dfu' });
+    this._stopAudioLevels();
     const transport = this._transport;
     if (transport instanceof WebHidTransport) await transport.suspend();
   }
@@ -509,8 +540,8 @@ export class DeviceLink extends EventTarget {
         device: result.device ?? this._state.device,
         warning: unchanged ? { key: 'fw.warn.versionUnchanged' } : null,
       });
-      // 升级完设备重新枚举成 App 模式，音频输入也跟着回来：重新采一路
-      void this._startAudioLevels();
+      // 音频端点比 HID 晚枚举，先等真机端点回来，避免接到系统默认麦克风。
+      void this._startAudioLevels({ strict: this._state.mode === 'native' });
       return true;
     } catch {
       this._fail('device');
@@ -530,10 +561,10 @@ export class DeviceLink extends EventTarget {
    * 能重新同步就回 ready；不能（设备在 Bootloader / 已拔出）就保留裸通道并给出
    * `device.warn.bootloader`，让固件抽屉接着刷、用户知道下一步该干什么。
    */
-  async recoverAfterDfuFailure(): Promise<void> {
+  async recoverAfterDfuFailure(resync = true): Promise<void> {
     this._firmwareBeforeDfu = null;
     const transport = this._transport;
-    if (transport instanceof WebHidTransport) {
+    if (resync && transport instanceof WebHidTransport) {
       await transport.resume();
       if (transport.state() === 'ready') {
         try {

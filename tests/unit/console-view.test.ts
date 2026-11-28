@@ -226,7 +226,7 @@ describe('console view', () => {
     const lightSwitch = view.querySelector<HTMLElement>('.switch-item--light [data-param="rgb.OnOff"]');
     expect(text(lightSwitch?.querySelector('.switch-label') ?? null)).toBe('灯效');
     const mode = view.querySelectorAll<HTMLElement>('.switch-item--light [data-param="rgb.Mode"] .seg-btn');
-    expect(Array.from(mode).map((node) => node.dataset.value)).toEqual(['0', '1', '2', '3', '4', '5', '6', '7']);
+    expect(Array.from(mode).map((node) => node.dataset.value)).toEqual(['0', '1', '2', '3', '4', '5', '6']);
 
     // 与高级参数里的灯效是同一个参数 id：主界面改 → store 变 → 高级参数回填
     lightSwitch?.querySelector<HTMLInputElement>('input')?.click();
@@ -263,7 +263,7 @@ describe('console view', () => {
     reset?.click();
     let bands = store.get().bands;
     expect(bands.slice(0, 7).map((band) => band.gain)).toEqual([0, 0, 0, 0, 0, 0, 0]);
-    expect(bands.slice(0, 7).map((band) => band.q)).toEqual([0.7, 0.7, 0.8, 1.5, 1, 1, 0.7]);
+    expect(bands.slice(0, 7).map((band) => band.q)).toEqual(Array(7).fill(0.7));
     expect(bands.slice(0, 7).map((band) => band.freq)).toEqual([50, 20000, 63, 250, 1000, 4000, 12500]);
 
     // 人声增强：默认曲线是音色表那条，不是平坦；前两段是 HPF / LPF，没有增益恒为 0

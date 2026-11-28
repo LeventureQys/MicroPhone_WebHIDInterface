@@ -23,6 +23,7 @@ export const ACK_DATA_ERR = 0x0005;
 export const LEVEL_ADDR = 0x2057;
 /** 写 1 进 DFU（P10） */
 export const ENTER_DFU_ADDR = 0x1008;
+const FACTORY_RESET_ADDR = 0x100a;
 export const PRESET_START = 0x2000;
 /** 参数表 V0.3 起预设区 118 项（止于 0x2075，含 RGB 与两个模块使能位） */
 export const PRESET_END = 0x2075;
@@ -95,7 +96,7 @@ function configRows() {
     spec('config', 0x1007, 'comErrAck', 1, 5, ACCESS_READ, 'scalar', 0),
     spec('config', 0x1008, 'enterDfu', 0, WORD_MAX, ACCESS_RW, 'scalar', 0),
     spec('config', 0x1009, 'reinit', 0, WORD_MAX, ACCESS_NONE, 'scalar', 0),
-    spec('config', 0x100a, 'factoryReset', 0, WORD_MAX, ACCESS_NONE, 'scalar', 0),
+    spec('config', FACTORY_RESET_ADDR, 'factoryReset', 0, 1, ACCESS_RW, 'scalar', 0),
     spec('config', 0x100b, 'syncFlag', 0, 1, ACCESS_NONE, 'scalar', 0),
     spec('config', 0x100c, 'sysErr1', 0, WORD_MAX, ACCESS_READ, 'scalar', 0),
     spec('config', 0x100d, 'sysErr2', 0, WORD_MAX, ACCESS_READ, 'scalar', 0),
@@ -105,15 +106,15 @@ function configRows() {
 const EQ_BAND_DEFAULTS = [
   { type: 4, freq: 50, q: 7 },
   { type: 3, freq: 20000, q: 7 },
-  { type: 0, freq: 215, q: 8 },
-  { type: 0, freq: 1000, q: 15 },
-  { type: 0, freq: 2000, q: 10 },
-  { type: 0, freq: 5000, q: 10 },
-  { type: 0, freq: 10000, q: 7 },
+  { type: 0, freq: 63, gain: 285, q: 7 },
+  { type: 0, freq: 250, q: 7 },
+  { type: 0, freq: 1000, q: 7 },
+  { type: 0, freq: 4000, q: 7 },
+  { type: 0, freq: 12500, q: 7 },
 ];
 
 /**
- * 当前预设 0x2000–0x2075（118 项，参数表 V0.3）。
+ * 当前预设 0x2000–0x2075（118 项，参数表 V0.4）。
  * rawMin/rawMax 是原始值边界：需求附录 B.3 给的是工程量范围，这里按 A.5 标定式反算后取整。
  */
 function presetRows() {
@@ -129,7 +130,7 @@ function presetRows() {
     spec('preset', 0x2023, 'micGain', 0, 100, ACCESS_READ, 'scalar', 100),
     spec('preset', 0x2024, 'encOnOff', 0, 1, ACCESS_RW, 'scalar', 0),
     spec('preset', 0x2025, 'encLevel', 0, 3, ACCESS_RW, 'scalar', 0),
-    spec('preset', 0x2026, 'eqMode', 0, 5, ACCESS_RW, 'scalar', 1),
+    spec('preset', 0x2026, 'eqMode', 0, 5, ACCESS_RW, 'scalar', 5),
   );
   EQ_BAND_DEFAULTS.forEach((band, index) => {
     const base = 0x2027 + index * 5;
@@ -137,7 +138,7 @@ function presetRows() {
       spec('preset', base, `band${index + 1}.enable`, 0, 1, ACCESS_RW, 'scalar', 1),
       spec('preset', base + 1, `band${index + 1}.type`, 0, 4, ACCESS_RW, 'scalar', band.type),
       spec('preset', base + 2, `band${index + 1}.freq`, 20, 20000, ACCESS_RW, 'scalar', band.freq),
-      spec('preset', base + 3, `band${index + 1}.gain`, 0, 440, ACCESS_RW, 'scalar', 320),
+      spec('preset', base + 3, `band${index + 1}.gain`, 0, 440, ACCESS_RW, 'scalar', band.gain ?? 320),
       spec('preset', base + 4, `band${index + 1}.q`, 1, 120, ACCESS_RW, 'scalar', band.q),
     );
   });
@@ -185,9 +186,9 @@ function presetRows() {
   // 参数表 V0.3 新增：RGB 灯效与两个模块使能位
   rows.push(
     spec('preset', 0x2072, 'rgbOnOff', 0, 1, ACCESS_RW, 'scalar', 1),
-    spec('preset', 0x2073, 'rgbMode', 0, 7, ACCESS_RW, 'scalar', 0),
+    spec('preset', 0x2073, 'rgbMode', 0, 6, ACCESS_RW, 'scalar', 0),
     spec('preset', 0x2074, 'noisegateEnable', 0, 1, ACCESS_RW, 'scalar', 1),
-    spec('preset', 0x2075, 'drc3Enable', 0, 1, ACCESS_RW, 'scalar', 1),
+    spec('preset', 0x2075, 'drc3Enable', 0, 1, ACCESS_RW, 'scalar', 0),
   );
   return rows;
 }
@@ -568,6 +569,11 @@ export class ParamStack {
       writes.push(item);
     }
     for (const item of writes) this.#registers.set(item.addr, item.raw);
+    if (writes.some((item) => item.addr === FACTORY_RESET_ADDR && item.raw === 1)) {
+      for (const entry of SPECS) {
+        if (entry.region !== 'info') this.#registers.set(entry.addr, entry.defaultRaw);
+      }
+    }
     const dfuHit = writes.some((item) => item.addr === ENTER_DFU_ADDR && item.raw === 1);
     this.#pushAck(replies, ACK_NO_ERR);
     if (dfuHit) this.#dfuRequested = true;

@@ -16,7 +16,6 @@ import {
   type ChannelConfigStore,
   type ChannelKind,
 } from '../../domain/channel-config';
-import { EQ_BAND_COUNT } from '../../device/registers';
 import { DEFAULT_BANDS, DEFAULT_PARAMS } from '../../domain/defaults';
 import { PARAMS } from '../../domain/params';
 import { DEFAULT_CUSTOM_GAINS } from '../../domain/quick-controls';
@@ -27,6 +26,7 @@ import { card, segmented, switchControl } from '../controls';
 
 export interface SettingsViewOptions {
   readonly configStore?: ChannelConfigStore;
+  readonly resetDevice?: () => Promise<void>;
 }
 
 interface ChannelCardHandle {
@@ -366,14 +366,13 @@ export function createSettingsView(store: AppStore, options?: SettingsViewOption
   resetButton.className = 'btn btn--ghost btn--danger btn--block';
   resetButton.textContent = t('settings.resetAll');
 
-  // 复位会一次性覆盖 36 个参数与 14 段 EQ，加一道二次确认，避免误触
-  let armed = false;
+  let armedChannel: ReturnType<AppStore['channelKind']> | null = null;
   let armedTimer: number | null = null;
   let doneTimer: number | null = null;
   let resetting = false;
 
   const disarm = (): void => {
-    armed = false;
+    armedChannel = null;
     if (armedTimer !== null) window.clearTimeout(armedTimer);
     armedTimer = null;
     resetButton.classList.remove('is-armed');
@@ -383,59 +382,30 @@ export function createSettingsView(store: AppStore, options?: SettingsViewOption
     }
   };
 
-  const sleep = (ms: number): Promise<void> =>
-    new Promise((resolve) => {
-      window.setTimeout(resolve, ms);
-    });
-
-  /**
-   * 分批写默认值（2026-11-22 真机实测）：真机每写一项都可能落 Flash，
-   * 46 项挤在一帧里发出去会把固件压住——整帧跨两个 USB 报告，设备还来不及 ACK 下一条。
-   * 因此按 `RESET_BATCH` 项一批、批间隔大于写合并窗口，让每批单独成一帧；
-   * 7 段 EQ 同样一段一次。模拟通道没有真实设备，不做等待（保持原来的瞬时复位）。
-   */
-  const RESET_BATCH = 6;
-  const RESET_BATCH_GAP_MS = 320;
-
-  const runReset = async (): Promise<void> => {
+  const runReset = async (channel: ReturnType<AppStore['channelKind']>): Promise<void> => {
     resetting = true;
     resetButton.disabled = true;
     resetButton.textContent = t('settings.resetRunning');
-    const gap = store.channelKind() === 'webhid' ? RESET_BATCH_GAP_MS : 0;
     try {
-      // 先取消旁通：旁通模块的参数要按快照恢复，若放在复位之后会把刚写回的默认值覆盖掉
-      for (const module of BYPASS_MODULES) store.setBypass(module, false);
-      const writable = PARAMS.filter((spec) => !spec.readonly);
-      for (let index = 0; index < writable.length; index += RESET_BATCH) {
-        for (const spec of writable.slice(index, index + RESET_BATCH)) {
-          const value = DEFAULT_PARAMS[spec.id];
-          if (value === undefined) {
-            console.warn('[settings] missing default for', spec.id);
-            continue;
-          }
-          store.setParam(spec.id, value);
+      if (channel === 'webhid') {
+        if (!options?.resetDevice) throw new Error('设备复位未接入');
+        await options.resetDevice();
+      } else {
+        for (const module of BYPASS_MODULES) store.setBypass(module, false);
+        for (const spec of PARAMS) {
+          if (!spec.readonly) store.setParam(spec.id, DEFAULT_PARAMS[spec.id]);
         }
-        // 设备已经不应答时别继续压：再发只会把链路彻底打成 error
-        if (store.get().sync === 'error') break;
-        if (gap > 0) await sleep(gap);
+        store.setBands(DEFAULT_BANDS);
       }
-      if (store.get().sync !== 'error') {
-        for (let band = 0; band < EQ_BAND_COUNT; band += 1) {
-          const target = DEFAULT_BANDS[band];
-          if (!target) continue;
-          store.setBands(
-            store.get().bands.map((item, index) => (index === band ? { ...target } : { ...item })),
-          );
-          if (gap > 0) await sleep(gap);
-        }
-        store.setCustomEq(DEFAULT_CUSTOM_GAINS);
-        // 场景的自动保存值也要一起清：留着的话再点场景会把复位前的微调写回来
-        saveSceneOverrides({});
-        store.notifySceneOverridesCleared();
-        // 复位后的值就是新的场景基准：否则工作台上每个「恢复」都会亮着
-        store.setSceneBaseline(store.get().activeScene);
-      }
+      store.setCustomEq(DEFAULT_CUSTOM_GAINS);
+      // 场景覆盖值留着的话，再点场景会把复位前的微调写回来。
+      saveSceneOverrides({});
+      store.setSceneBaseline(store.get().activeScene);
+      store.notifySceneOverridesCleared();
       resetButton.textContent = t('settings.resetDone');
+    } catch (error) {
+      console.warn('[settings] factory reset failed', error);
+      resetButton.textContent = t('settings.resetFailed');
     } finally {
       resetting = false;
       doneTimer = window.setTimeout(() => {
@@ -447,15 +417,17 @@ export function createSettingsView(store: AppStore, options?: SettingsViewOption
 
   resetButton.addEventListener('click', () => {
     if (resetting) return;
-    if (!armed) {
-      armed = true;
+    const channel = store.channelKind();
+    if (armedChannel !== channel) {
+      disarm();
+      armedChannel = channel;
       resetButton.classList.add('is-armed');
-      resetButton.textContent = t('settings.resetConfirm');
+      resetButton.textContent = t(channel === 'webhid' ? 'settings.resetConfirm' : 'settings.resetDemoConfirm');
       armedTimer = window.setTimeout(disarm, 4000);
       return;
     }
     disarm();
-    void runReset();
+    void runReset(channel);
   });
 
   dataCard.body.append(resetButton);

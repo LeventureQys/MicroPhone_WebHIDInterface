@@ -7,7 +7,7 @@ import { createParamFields } from './param-list';
 /**
  * 灯效（参数表 V0.3 新增 `0x2072` RGB 开关 / `0x2073` RGB 模式）。
  *
- * 两项都直接读写协议位：开关出开关控件，模式（0–7）出滑杆，
+ * 两项都直接读写协议位：开关出开关控件，模式出滑杆，
  * 由 `createParamFields` 按寄存器范围决定控件形态，这里不做本地派生。
  */
 export function createLightingView(store: AppStore): HTMLElement {

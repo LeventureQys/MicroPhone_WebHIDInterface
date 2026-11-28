@@ -19,7 +19,7 @@ export interface ParamSpec {
   readonly default: number;
   /** true = 只读展示，不提供控件 */
   readonly readonly: boolean;
-  /** 寄存器地址（真值源：M001参数表V0.3.xlsx） */
+  /** 寄存器地址（真值源：M001参数表V0.4.xlsx） */
   readonly addr: number;
   /** 工程量 ↔ 寄存器原始值的标定式 */
   readonly scale: RegisterScale;

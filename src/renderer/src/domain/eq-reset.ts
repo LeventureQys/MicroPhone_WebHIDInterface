@@ -5,14 +5,7 @@ import { bandHasGain, EQ_BAND_EDITABLE } from '../eq/types';
 /**
  * 「均衡器复位」的落点（2026-11-21 问题单第 12 条）。
  *
- * 注意这里**不是**参数表的出厂默认值：参数表 G 列给的是设备出厂预设
- * （Band-3 增益 285 = −3.5 dB、各段 Q = 0.8/1.5/1.0/1.0/0.7），用户要的是
- * "复位成一条平直的曲线"——7 段增益全 0、Q 全 0.7（问题单里手写的那张频段列表）。
- * 两者的差别只在增益与 Q：类型（HPF / LPF / PEAK）与频点沿用寄存器表，
- * 所以复位后的曲线与界面截图逐格一致。
- *
- * 引用关系：`DEFAULT_BANDS` 的取值来自 `device/registers.ts`（真值表），
- * 这里只覆盖增益与 Q，不复制任何地址或范围。
+ * 平直曲线要求 7 段增益全 0、Q 全 0.7。类型与频点沿用 `DEFAULT_BANDS`。
  */
 export const EQ_RESET_GAIN_DB = 0;
 export const EQ_RESET_Q = 0.7;
@@ -41,8 +34,7 @@ export function withEqReset(bands: readonly EqBand[]): EqBand[] {
  * 产品默认频段（不是"平坦"）：类型 / 频点 / Q 取 `DEFAULT_BANDS`，增益由当前音色覆盖。
  *
  * 2026-11-25 起主界面在任何音色下都可编辑 EQ，「恢复默认」应该回到当前音色的默认
- * 曲线（人声增强 / 温暖 / 明亮各自那条），而不是一律拉平；只有「自定义」的默认
- * 增益才是 0。Q 也回产品默认（0.7 / 0.8 / 1.5 …），不再统一钉成 0.7。
+ * 曲线（人声增强 / 温暖 / 明亮各自那条）。Q 使用参数表的默认值。
  */
 export function defaultEqBands(gains: readonly number[] = []): EqBand[] {
   const bands: EqBand[] = [];

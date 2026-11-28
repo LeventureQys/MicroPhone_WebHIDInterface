@@ -28,11 +28,11 @@ const resetButton = (view: HTMLElement): HTMLButtonElement => {
 
 const text = (node: Element): string => node.textContent?.replace(/\s+/g, ' ').trim() ?? '';
 
-function mount(channel: 'mock' | 'webhid') {
+function mount(channel: 'mock' | 'webhid', resetDevice?: () => Promise<void>) {
   const transport = new FakeTransport(channel);
   const store = new AppStore(transport, { lang: 'zh' });
   if (channel === 'webhid') transport.emitSync('ready');
-  const view = createSettingsView(store, { configStore: fakeConfigStore() });
+  const view = createSettingsView(store, { configStore: fakeConfigStore(), resetDevice });
   document.body.append(view);
   return { store, transport, view };
 }
@@ -42,7 +42,7 @@ function armAndConfirm(view: HTMLElement): void {
   resetButton(view).click();
 }
 
-describe('settings view — 复位全部参数', () => {
+describe('settings view — 恢复出厂设置', () => {
   beforeEach(() => {
     setLang('zh');
     document.body.innerHTML = '';
@@ -74,25 +74,46 @@ describe('settings view — 复位全部参数', () => {
     expect(resetButton(view).disabled).toBe(true);
   });
 
-  it('paces the writes in small batches on the real channel', async () => {
+  it('waits for the confirmed device reset without writing individual defaults', async () => {
     vi.useFakeTimers();
-    const { store, transport, view } = mount('webhid');
-    store.setParam('mic.mute', 1);
-    store.setParam('rgb.Mode', 5);
-    const writesBefore = transport.writes.length;
+    let finishReset!: () => void;
+    const resetDevice = vi.fn(() => new Promise<void>((resolve) => { finishReset = resolve; }));
+    const { store, transport, view } = mount('webhid', resetDevice);
+    store.applyEcho('rgb.Mode', 5);
 
-    armAndConfirm(view);
-    // 第一批（6 项）已经写出去，后面的批次要等间隔，避免把设备一口气压住
-    expect(transport.writes.length - writesBefore).toBeGreaterThan(0);
-    expect(store.get().params['mic.mute']).toBe(0);
+    resetButton(view).click();
+    expect(resetDevice).not.toHaveBeenCalled();
+    resetButton(view).click();
+    expect(resetDevice).toHaveBeenCalledTimes(1);
     expect(store.get().params['rgb.Mode']).toBe(5);
     expect(text(resetButton(view))).toBe('正在复位…');
 
-    await vi.advanceTimersByTimeAsync(8000);
+    store.applyEcho('rgb.Mode', 2);
+    finishReset();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(text(resetButton(view))).toBe('已复位');
+    expect(store.get().params['rgb.Mode']).toBe(2);
+    expect(transport.writes).toHaveLength(0);
+    expect(transport.bandWrites).toHaveLength(0);
 
-    expect(store.get().params['rgb.Mode']).toBe(0);
-    expect(store.get().bands.map((band) => band.gain)).toEqual(DEFAULT_BANDS.map((band) => band.gain));
-    expect(text(resetButton(view))).toBe('复位全部参数');
+    await vi.advanceTimersByTimeAsync(1500);
+    expect(text(resetButton(view))).toBe('恢复出厂设置');
     expect(resetButton(view).disabled).toBe(false);
+  });
+
+  it('keeps local settings and reports failure when the device reset rejects', async () => {
+    vi.useFakeTimers();
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    try {
+      const { store, transport, view } = mount('webhid', async () => { throw new Error('no ACK'); });
+      store.setCustomEq([1, 2, 3, 4, 5, 6, 7]);
+      armAndConfirm(view);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(text(resetButton(view))).toBe('未能确认复位结果');
+      expect(store.get().customEq).toEqual([1, 2, 3, 4, 5, 6, 7]);
+      expect(transport.writes).toHaveLength(0);
+    } finally {
+      warn.mockRestore();
+    }
   });
 });

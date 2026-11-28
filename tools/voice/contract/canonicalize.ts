@@ -12,7 +12,7 @@
  *   5. 按 tier 表（设计文档 §3.3）分层：`excluded` 丢弃、`confirm` 整轮不写（原子性）；
  *   6. 只保留真正变化的项，并生成 `preview`（人类可读）与 `say` 覆盖（静音话术）。
  *
- * `rgb.Mode` 是唯一不走夹紧的参数：它按 `(current + delta) mod 8` 循环（设计文档 §3.1 表）。
+ * `rgb.Mode` 按寄存器表的档位数循环（设计文档 §3.1 表）。
  *
  * `turnId` 只用于 4.2 的日志关联，本 SubStage 不外显（L2 的 `undoTurn` / `confirmToken` 恒为 `null`）。
  */
@@ -116,7 +116,7 @@ export interface CanonContext {
 export const MUTE_SAY = '已静音，请用界面上的开关恢复';
 
 const EPS = 1e-9;
-/** `rgb.Mode` 的循环区间（0..7），来自寄存器表而不是写死 */
+/** `rgb.Mode` 的循环区间来自寄存器表 */
 const RGB_MODE_ID = 'rgb.Mode';
 /** `confirm` 层：会切断助手自己的耳朵或用户的听觉反馈（设计文档 §3.3） */
 const CONFIRM_PARAMS: readonly string[] = Object.freeze(['mic.mute', 'mic.sigMute', 'hp.OnOff']);
@@ -491,7 +491,7 @@ function finalizeEntry(entry: Entry): number {
     }
   }
   if (!entry.absUsed && entry.id === RGB_MODE_ID) {
-    // 0..7 循环，不是夹紧（设计文档 §3.1 的 rgbMode 行）
+    // 相对调节越过首尾档时回绕。
     const span = Math.round(spec.max - spec.min) + 1;
     requested = (((requested - spec.min) % span) + span) % span + spec.min;
   }

@@ -536,67 +536,40 @@ describe('DfuSession 探测与歧义态', () => {
     expect(h.session.phase()).toBe('failed');
   });
 
-  it('4. 块超时整轮重来（R6-6）：重发信息帧、从第 0 块重来、不补发单块', async () => {
-    const plan = (event: SentFrame): Reply => {
-      if (event.kind === 'enter') return { ack: ACK_NO_ERR };
-      if (event.kind === 'info') return { status: DFU_STATUS_CONTINUE };
-      if (event.round === 1 && event.index === 1) return null;
-      return { status: event.index === BLOCK_TOTAL - 1 ? DFU_STATUS_SUCCESS : DFU_STATUS_CONTINUE };
-    };
-    const h = makeHarness({ plan });
+  it('stops on a missing block ACK, preserving the block and sending no further frames', async () => {
+    const h = makeHarness({ plan: (event) => event.kind === 'block' && event.index === 1 ? null : happyPlan(event) });
     const run = runCaught(h.session, PKG);
     await settle();
     expect(labels(h.device)).toEqual(['enter', 'info', 'block:0', 'block:1']);
-    expect(h.session.phase()).toBe('writing');
 
     await advance(h, TIMING.dfuBlockTimeoutMs);
-    expect(await run).toBeNull();
-    expect(h.session.phase()).toBe('settling');
-    expect(labels(h.device)).toEqual([
-      'enter',
-      'info',
-      'block:0',
-      'block:1',
-      'info',
-      'block:0',
-      'block:1',
-      'block:2',
-      'block:3',
-    ]);
-    // 超时后的下一帧必须是信息帧（复位设备指针），不是同一块的重发
-    expect(h.device.log[4].kind).toBe('info');
-    const sequence = labels(h.device);
-    for (let index = 1; index < sequence.length; index += 1) {
-      expect(sequence[index]).not.toBe(sequence[index - 1]);
-    }
-    expect(h.progress.at(-1)?.round).toBe(2);
-    expect(h.progress.some((item) => item.phase === 'writing' && item.round === 2)).toBe(true);
-    expect(h.diags.some((item) => item.summary.includes('超时') && item.summary.includes('整轮重来'))).toBe(true);
-    expect(h.diags.some((item) => item.summary.includes('上一轮：block 2/4 timeout'))).toBe(true);
-    expect(h.errors).toEqual([]);
+    expect((await run)?.message).toBe('dfu timeout');
+    expect(h.session.phase()).toBe('failed');
+    expect(labels(h.device)).toEqual(['enter', 'info', 'block:0', 'block:1']);
+    expect(h.errors).toEqual([{
+      kind: 'timeout', round: 1, blockIndex: 1,
+      detail: `DFU block 2/4: no status within ${TIMING.dfuBlockTimeoutMs} ms`,
+    }]);
+    expect(h.diags.at(-1)?.summary).toContain('DFU failed timeout block=2/4');
   });
 
-  it('5. 回执丢失（R6-5）：设备收到了块但不回状态帧，同样整轮重来', async () => {
-    const plan = (event: SentFrame): Reply => {
-      if (event.kind === 'enter') return { ack: ACK_NO_ERR };
-      if (event.kind === 'info') return { status: DFU_STATUS_CONTINUE };
-      if (event.round === 1 && event.index === 1) return null;
-      return { status: event.index === BLOCK_TOTAL - 1 ? DFU_STATUS_SUCCESS : DFU_STATUS_CONTINUE };
-    };
-    const h = makeHarness({ plan });
+  it('starts the response timeout after HID finishes sending', async () => {
+    let finishSend!: () => void;
+    const h = makeHarness({
+      send: () => new Promise<void>((resolve) => { finishSend = resolve; }),
+      timing: { requestTimeoutMs: 100 },
+    });
     const run = runCaught(h.session, PKG);
+    await advance(h, 150);
+    finishSend();
     await settle();
-    // 第 2 块确实发出去了（假设备收到了），只是没回执
-    expect(h.device.log.filter((item) => item.kind === 'block' && item.round === 1)).toHaveLength(2);
-
-    await advance(h, TIMING.dfuBlockTimeoutMs);
-    expect(await run).toBeNull();
-    const sequence = labels(h.device);
-    expect(sequence.slice(0, 4)).toEqual(['enter', 'info', 'block:0', 'block:1']);
-    expect(sequence[4]).toBe('info');
-    expect(h.device.log.filter((item) => item.kind === 'block' && item.round === 1).length).toBe(2);
-    expect(h.progress.at(-1)?.round).toBe(2);
+    h.session.handleBytes(encodeFrame(FUNC_ACK, encodeAck(ACK_NO_ERR)));
+    await settle();
+    expect(h.session.phase()).toBe('probing');
     expect(h.errors).toEqual([]);
+    h.session.abort();
+    finishSend();
+    expect((await run)?.message).toBe('dfu aborted');
   });
 
   it('6. 0x02 歧义态：整轮重来', async () => {

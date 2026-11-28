@@ -128,6 +128,8 @@ export class WebHidTransport implements DeviceBoundTransport {
   private _state: TransportState = 'idle';
   private _listening = false;
   private _suspended = false;
+  private _drainingForDfu = false;
+  private _resetting = false;
   /**
    * 挂起期间收到的 `disconnect`（DFU 里设备复位重枚举是这个事件，不算拔线）。
    * 但升级失败后要区分"设备还在"与"句柄已经没了"，否则重试会把帧发到死句柄上。
@@ -257,7 +259,10 @@ export class WebHidTransport implements DeviceBoundTransport {
         const device = this._device;
         const sendReport = device.sendReport;
         if (typeof sendReport !== 'function') throw new Error('设备句柄没有 sendReport');
-        for (const report of reports) await sendReport.call(device, this.reportIds.out, report);
+        for (const report of reports) {
+          if (this._suspended && !this._drainingForDfu) return;
+          await sendReport.call(device, this.reportIds.out, report);
+        }
       },
       reportIds: this.reportIds,
       clock: this._clock,
@@ -338,7 +343,7 @@ export class WebHidTransport implements DeviceBoundTransport {
     }
     const session = this._session;
     if (session === null || pairs.length === 0) return;
-    if (this._suspended) return;
+    if (this._suspended || this._resetting) return;
     this._noteWrite();
     session.write(pairs);
   }
@@ -369,7 +374,7 @@ export class WebHidTransport implements DeviceBoundTransport {
     }
     const session = this._session;
     if (session === null || pairs.length === 0) return;
-    if (this._suspended) return;
+    if (this._suspended || this._resetting) return;
     this._noteWrite();
     session.write(pairs);
   }
@@ -395,6 +400,48 @@ export class WebHidTransport implements DeviceBoundTransport {
   async readAll(): Promise<ParamReadResult> {
     const session = this._session;
     if (session === null) throw new Error('通道尚未打开，无法回读');
+    if (this._resetting || this._suspended) throw new Error('设备参数通道正在切换');
+    return this._readAll(session);
+  }
+
+  async factoryReset(): Promise<ParamReadResult> {
+    const session = this._session;
+    if (
+      session === null ||
+      this._suspended ||
+      this._resetting ||
+      this._state !== 'ready' ||
+      session.phase() !== 'ready'
+    ) {
+      throw new Error('设备参数通道尚未就绪');
+    }
+    this._resetting = true;
+    session.setPolling(false);
+    this._stopWatchdog();
+    this._emit(this._syncListeners, 'syncing');
+    try {
+      try {
+        await session.factoryReset();
+      } catch (error) {
+        if (this._session === session && session.phase() === 'ready') {
+          this._emit(this._syncListeners, 'ready');
+        }
+        throw error;
+      }
+      // 写 ACK 后设备可能仍在保存参数，沿用写入后的静默窗口。
+      await this._wait(this._timing.writeSettleMs);
+      if (this._session !== session || this._state !== 'ready') throw new Error('设备已断开');
+      return await this._readAll(session);
+    } finally {
+      this._resetting = false;
+      if (this._session === session && this._state === 'ready') {
+        session.setPolling(this._levelPolling);
+        if (this._levelPolling) this._startWatchdog();
+      }
+    }
+  }
+
+  private async _readAll(session: ParamSession): Promise<ParamReadResult> {
     const result = await session.sync();
     const preset: Record<string, number> = {};
     for (const [addrText, raw] of Object.entries(result.preset.values)) {
@@ -467,7 +514,7 @@ export class WebHidTransport implements DeviceBoundTransport {
     const session = this._session;
     const target = findParam('enc.Level');
     const register = target ? findRegister(target.addr) : undefined;
-    if (session === null) {
+    if (session === null || this._resetting || this._suspended) {
       return { ok: false, steps: [{ name: 'session', ok: false, detail: '通道尚未打开' }] };
     }
     if (!target || !register) {
@@ -484,6 +531,7 @@ export class WebHidTransport implements DeviceBoundTransport {
 
     let raw = 0;
     try {
+      if (this._resetting || this._suspended || this._session !== session) throw new Error('设备参数通道正在切换');
       const reply = await session.read([target.addr]);
       const entry = reply.entries.find((item) => item.addr === target.addr);
       if (!entry) throw new Error('应答里没有目标地址');
@@ -499,9 +547,11 @@ export class WebHidTransport implements DeviceBoundTransport {
     }
 
     try {
+      if (this._resetting || this._suspended || this._session !== session) throw new Error('设备参数通道正在切换');
       session.write([{ addr: target.addr, raw }]);
       // 写走的是合并节流队列：先让它发出去，再留一次请求超时的余量等应答
       await this._wait(this._timing.writeThrottleMs + this._timing.requestTimeoutMs);
+      if (this._resetting || this._suspended || this._session !== session) throw new Error('设备参数通道正在切换');
       const reply = await session.read([target.addr]);
       const entry = reply.entries.find((item) => item.addr === target.addr);
       const ok = entry !== undefined && entry.raw === raw;
@@ -523,7 +573,13 @@ export class WebHidTransport implements DeviceBoundTransport {
    */
   async suspend(): Promise<void> {
     this._suspended = true;
-    this._session?.setPolling(false);
+    this._stopWatchdog();
+    this._drainingForDfu = true;
+    try {
+      await this._session?.drainForDfu();
+    } finally {
+      this._drainingForDfu = false;
+    }
   }
 
   /**
@@ -571,7 +627,7 @@ export class WebHidTransport implements DeviceBoundTransport {
     if (this._levelPolling === enabled) return;
     this._levelPolling = enabled;
     const session = this._session;
-    if (session === null) return;
+    if (session === null || this._resetting || this._suspended) return;
     session.setPolling(enabled);
     if (!enabled) {
       this._stopWatchdog();
@@ -598,7 +654,7 @@ export class WebHidTransport implements DeviceBoundTransport {
     this._lastInboundAt = this._clock.now();
     // 一路：原始载荷——DFU 期间参数会话不说话，但字节必须照旧派发给订阅者
     this._emit(this._inputListeners, bytes);
-    if (this._suspended) return;
+    if (this._suspended && !this._drainingForDfu) return;
     // 另一路：参数会话（report ID 由 HID 层剥掉，63 B 补位零由 decodeStream 消解，R-1）
     this._session?.handleBytes(bytes);
   };

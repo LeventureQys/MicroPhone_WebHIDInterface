@@ -500,7 +500,7 @@ export function createConsoleView(
   encGroup.append(encSwitch, encLevelRow);
 
   /**
-   * 灯效搬上主界面（2026-11-22 问题单第 5 条）：开关 + 0–7 模式。
+   * 主界面与高级参数共用灯效开关和模式范围。
    *
    * 两项与高级参数里的「灯效」是同一个参数 id（`rgb.OnOff` / `rgb.Mode`），
    * 因此两处天然联动，不需要额外同步；8 个模式按钮等宽铺满一行，
@@ -524,8 +524,12 @@ export function createConsoleView(
   });
   lightSwitch.dataset.param = 'rgb.OnOff';
   lightSwitch.querySelector<HTMLButtonElement>('.param-reset')?.setAttribute('data-reset-param', 'rgb.OnOff');
+  const lightModeSpec = findParam('rgb.Mode')!;
   const lightMode = segmented<number>({
-    options: Array.from({ length: 8 }, (_, value) => ({ value, label: String(value) })),
+    options: Array.from({ length: lightModeSpec.max - lightModeSpec.min + 1 }, (_, index) => {
+      const value = lightModeSpec.min + index;
+      return { value, label: String(value) };
+    }),
     value: state.params['rgb.Mode'] ?? 0,
     onChange: (value) => store.setParam('rgb.Mode', value),
   });

@@ -212,6 +212,31 @@ describe('AutoConnector', () => {
     expect(session.probeCalls).toBe(0);
   });
 
+  it('lets DFU wait for a running attachment and blocks new checks until release', async () => {
+    const { session, link, connector } = build();
+    session.probes = [summary()];
+    let attached!: () => void;
+    let entered!: () => void;
+    const attachmentStarted = new Promise<void>((resolve) => { entered = resolve; });
+    link.attach = async (id) => {
+      link.attachments.push(id);
+      entered();
+      await new Promise<void>((resolve) => { attached = resolve; });
+    };
+    const check = connector.tickOnce();
+    await attachmentStarted;
+    let released = false;
+    const handoff = connector.pauseForDfu().then(() => { released = true; });
+    await connector.tickOnce();
+    expect(released).toBe(false);
+    attached();
+    await Promise.all([handoff, check]);
+    await connector.tickOnce();
+    expect(link.attachments).toHaveLength(1);
+    connector.resumeAfterDfu();
+    expect(released).toBe(true);
+  });
+
   it('keeps a manual disconnect paused until the device is unplugged and comes back', async () => {
     const { session, link, connector } = build();
     session.probes = [summary()];

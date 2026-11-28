@@ -230,7 +230,7 @@ describe('设备侧参数协议栈（SubStage 2.1）', () => {
     expect(registers.get(0x2072)).toBe(1);
     expect(registers.get(0x2073)).toBe(0);
     expect(registers.get(0x2074)).toBe(1);
-    expect(registers.get(0x2075)).toBe(1);
+    expect(registers.get(0x2075)).toBe(0);
     expect(REPORT_ID_IN).toBe(17);
   });
 

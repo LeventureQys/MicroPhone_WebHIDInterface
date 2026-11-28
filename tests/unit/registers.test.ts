@@ -88,16 +88,16 @@ describe('register table', () => {
     expect(findRegister(0x9999)).toBeUndefined();
   });
 
-  it('keeps the V0.3 enable bits writable and default-on', () => {
+  it('uses V0.4 module defaults and lighting limits', () => {
     for (const addr of [NOISEGATE_ENABLE_ADDR, DRC3_ENABLE_ADDR]) {
       const spec = must(addr);
       expect(spec.access).toBe('rw');
       expect(spec.min).toBe(0);
       expect(spec.max).toBe(1);
-      expect(spec.defaultRaw).toBe(1);
+      expect(spec.defaultRaw).toBe(addr === DRC3_ENABLE_ADDR ? 0 : 1);
     }
     expect(must(RGB_ONOFF_ADDR).defaultRaw).toBe(1);
-    expect(must(RGB_MODE_ADDR).max).toBe(7);
+    expect(must(RGB_MODE_ADDR).max).toBe(6);
   });
 
   it('exposes the device info and config layout', () => {
@@ -295,7 +295,7 @@ const APPENDIX_B_CONFIG: readonly AppendixRow[] = [
   { addr: 0x1007, label: '通讯错误 ComErrAck', defaultRaw: 0 },
   { addr: 0x1008, label: '进入升级模式 DFU', defaultRaw: 0 },
   { addr: 0x1009, label: '系统重新初始化 ReInit', defaultRaw: 0 },
-  { addr: 0x100a, label: '恢复出厂设置 Set', defaultRaw: 0 },
+  { addr: 0x100a, label: '恢复出厂设置 Set', max: 1, access: 'rw', defaultRaw: 0 },
   { addr: 0x100b, label: '软件同步数据标志 SyncFlag', defaultRaw: 0 },
   { addr: 0x100c, label: '系统错误状态 1 SysErr1', defaultRaw: 0 },
   { addr: 0x100d, label: '系统错误状态 2 SysErr2', defaultRaw: 0 },
@@ -308,7 +308,7 @@ const APPENDIX_B_PRESET: readonly AppendixRow[] = [
   { addr: 0x2023, label: 'MIC 音量 Gain', min: 0, max: 100, step: 1, unit: '', defaultRaw: 100, access: 'r', scale: 'raw' },
   { addr: 0x2024, label: '降噪开关 OnOff', min: 0, max: 1, step: 1, unit: '', defaultRaw: 0, access: 'rw', scale: 'raw' },
   { addr: 0x2025, label: '降噪强度 Threshold', min: 0, max: 3, step: 1, unit: '', defaultRaw: 0, access: 'rw', scale: 'raw' },
-  { addr: 0x2026, label: 'MIC 均衡器模式 MIC', min: 0, max: 5, step: 1, unit: '', defaultRaw: 1, access: 'rw', scale: 'raw' },
+  { addr: 0x2026, label: 'MIC 均衡器模式 MIC', min: 0, max: 5, step: 1, unit: '', defaultRaw: 5, access: 'rw', scale: 'raw' },
   { addr: 0x204a, label: 'Comp 使能 Enable', min: 0, max: 1, step: 1, unit: '', defaultRaw: 0, access: 'rw', scale: 'raw' },
   { addr: 0x204b, label: 'Comp MakeUpGain', min: 0, max: 60, step: 0.1, unit: 'dB', defaultRaw: 0, access: 'rw', scale: 'linear', mul: 0.1, add: 0 },
   { addr: 0x204c, label: 'Comp Threshold', min: -60, max: 0, step: 0.1, unit: 'dB', defaultRaw: 580, access: 'rw', scale: 'linear', mul: 0.1, add: -60 },
@@ -336,9 +336,9 @@ const APPENDIX_B_PRESET: readonly AppendixRow[] = [
   { addr: 0x2062, label: '3BandDrc 分频点 2 fc2', min: 50, max: 10000, step: 1, unit: 'Hz', defaultRaw: 3000, access: 'rw', scale: 'raw' },
   // 参数表 V0.3 新增（黄色标记）
   { addr: 0x2072, label: 'RGB OnOff', min: 0, max: 1, step: 1, unit: '', defaultRaw: 1, access: 'rw', scale: 'raw' },
-  { addr: 0x2073, label: 'RGB Mode', min: 0, max: 7, step: 1, unit: '', defaultRaw: 0, access: 'rw', scale: 'raw' },
+  { addr: 0x2073, label: 'RGB Mode', min: 0, max: 6, step: 1, unit: '', defaultRaw: 0, access: 'rw', scale: 'raw' },
   { addr: 0x2074, label: 'NoiseGate Enable', min: 0, max: 1, step: 1, unit: '', defaultRaw: 1, access: 'rw', scale: 'raw' },
-  { addr: 0x2075, label: '3BandDrc Enable', min: 0, max: 1, step: 1, unit: '', defaultRaw: 1, access: 'rw', scale: 'raw' },
+  { addr: 0x2075, label: '3BandDrc Enable', min: 0, max: 1, step: 1, unit: '', defaultRaw: 0, access: 'rw', scale: 'raw' },
 ];
 
 function assertAppendixRow(row: AppendixRow): void {
@@ -406,10 +406,10 @@ describe('appendix B cross-check (R2-1)', () => {
 
   it('matches appendix B.3 eq summary rows and the 7-band address table', () => {
     const typeDefault = [4, 3, 0, 0, 0, 0, 0];
-    const freqDefault = [50, 20000, 215, 1000, 2000, 5000, 10000];
+    const freqDefault = [50, 20000, 63, 250, 1000, 4000, 12500];
     const gainDefault = [320, 320, 285, 320, 320, 320, 320];
     const gainDb = [0, 0, -3.5, 0, 0, 0, 0];
-    const qDefault = [7, 7, 8, 15, 10, 10, 7];
+    const qDefault = [7, 7, 7, 7, 7, 7, 7];
     for (let band = 0; band < EQ_BAND_COUNT; band += 1) {
       const enable = must(eqBandAddr(band, 'enable'));
       expect(enable.min).toBe(0);

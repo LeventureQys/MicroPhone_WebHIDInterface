@@ -606,7 +606,7 @@ const DIMENSION_SEEDS: readonly Omit<KbDimension, 'writable'>[] = [
     nameZh: '灯效模式',
     aliases: ['灯效', '灯', '颜色', '氛围灯', '灯的颜色', '灯光', '换灯效', '灯效模式', '灯光模式', '彩灯'],
     directionWord: {
-      // `rgb.Mode` 循环 ±1/±2/±3（0..7 取模）：取模由 SubStage 4.1 的 canonicalize 做
+      // `rgb.Mode` 循环 ±1/±2/±3：取模由 canonicalize 按寄存器范围处理
       more: ['灯效下一个', '换个颜色', '切下一个灯效', '灯效换一换'],
       less: ['灯效上一个', '上一个颜色', '切回上一个灯效', '退一个灯效'],
     },

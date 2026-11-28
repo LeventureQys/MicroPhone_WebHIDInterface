@@ -5,7 +5,7 @@
  * 文案全部走 `t()`，阶段名用会话发来的 `fw.phase.*` 键。
  */
 import type { FirmwareState, FirmwareDeviceMode } from '../../device/dfu/controller';
-import { CLOSE_BLOCKED_DETAIL } from '../../device/dfu/controller';
+import { CLOSE_BLOCKED_DETAIL, requiresReplug } from '../../device/dfu/controller';
 import type { DfuError } from '../../device/dfu/session';
 import { t } from '../../i18n';
 import { switchControl } from '../controls';
@@ -259,14 +259,15 @@ export function createFirmwareView(deps: FirmwareViewDeps): HTMLElement {
     const running = RUNNING_PHASES.has(state.phase);
     // 规格 §7.5：done 之后不允许再点「开始升级」——要重刷必须重新选包（否则等于多刷一遍 Flash）
     const finished = state.phase === 'done';
-    startBtn.disabled = !(state.info !== null && state.confirmed && !running && !finished);
+    const reconnect = requiresReplug(state.error);
+    startBtn.disabled = !(state.info !== null && state.confirmed && !running && !finished && !reconnect);
     const input = confirm.querySelector<HTMLInputElement>('input[type="checkbox"]');
     if (input !== null) {
       input.disabled = running;
       // 控制器可能在别处改 confirmed（重试时自动置 true），开关要跟着状态走
       if (input.checked !== state.confirmed) input.checked = state.confirmed;
     }
-    retryBtn.hidden = !EXIT_PHASES.has(state.phase);
+    retryBtn.hidden = reconnect || !EXIT_PHASES.has(state.phase);
     replugBtn.hidden = !EXIT_PHASES.has(state.phase);
     abortBtn.hidden = !(controller.abort !== undefined && ABORTABLE_PHASES.has(state.phase));
     // 收尾期正在等设备重启：这时候关掉抽屉会让人以为升级结束了（§4.4）
@@ -300,10 +301,14 @@ export function createFirmwareView(deps: FirmwareViewDeps): HTMLElement {
     errorBox.hidden = title === null;
     errorTitle.textContent = title ?? '';
     const error = state.error;
-    const detail =
+    let detail =
       selectionMessage === null && error !== null && error.detail !== undefined && error.detail !== CLOSE_BLOCKED_DETAIL
         ? error.detail
         : '';
+    if (selectionMessage === null && error?.blockIndex !== undefined && state.progress !== null) {
+      const block = t('fw.block', { index: error.blockIndex + 1, total: state.progress.blockTotal });
+      detail = [block, detail].filter(Boolean).join(' · ');
+    }
     errorDetail.textContent = detail;
   }
 

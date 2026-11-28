@@ -17,6 +17,7 @@ import { TIMING } from '../../src/renderer/src/device/proto/timing';
 import { LEVEL_ADDR, PRESET_COUNT, PRESET_START } from '../../src/renderer/src/device/registers';
 import type { LevelFrame, ParamEcho, SyncPhase, TransportError } from '../../src/renderer/src/device/transport';
 import { WebHidTransport } from '../../src/renderer/src/device/webhid-transport';
+import { ParamStack } from '../../tools/vdevice/device-stack.mjs';
 import { FakeHidDevice, bindRegisterDevice, createFakeRegisters } from './helpers/webhid-fakes';
 
 function dbValues(frame: LevelFrame): number[] {
@@ -289,6 +290,53 @@ describe('WebHidTransport', () => {
     expect(transport.state()).toBe('ready');
     expect(transport.kind).toBe('webhid');
     expect(phases).toEqual(['syncing', 'ready']);
+  });
+
+  it('sends a single factory reset and reads the new preset from the virtual device', async () => {
+    const { device, transport } = setup();
+    const stack = new ParamStack({
+      onReplies: (reports) => {
+        for (const report of reports) device.emitInputReport(0x11, [...report]);
+      },
+    });
+    device.responder = (_id, payload) => {
+      stack.feed(payload);
+      return null;
+    };
+    stack.writeRegister(0x1000, 999);
+    stack.writeRegister(0x2026, 1);
+    stack.writeRegister(0x2033, 220);
+    stack.writeRegister(0x2075, 1);
+    transport.setLevelPolling(false);
+    await transport.open();
+    transport.write([{ id: 'rgb.OnOff', value: 0 }]);
+
+    const reset = transport.factoryReset();
+    await vi.advanceTimersByTimeAsync(TIMING.writeGapMs + TIMING.writeSettleMs);
+    const result = await reset;
+    expect(writeFrames(device).map((frame) => [frame.func, ...frame.data])).toEqual([
+      [FUNC_RAND_WRITE, 0x10, 0x0a, 0x00, 0x01],
+    ]);
+    expect(result.preset).toMatchObject({ 'eq.mode': 5, 'drc3.Enable': 0, 'rgb.OnOff': 1 });
+    expect(result.bands).toMatchObject({ 'band3.freq': 63, 'band3.q': 0.7 });
+    expect(stack.readRegister(0x1000)).toBe(700);
+    expect(stack.readRegister(0x100a)).toBe(0);
+    expect(transport.levelPolling()).toBe(false);
+    await transport.close();
+  });
+
+  it('reports a missing factory reset ACK without repeating the write', async () => {
+    const { device, transport } = setup();
+    transport.setLevelPolling(false);
+    await transport.open();
+    device.responder = null;
+
+    const failure = expect(transport.factoryReset()).rejects.toThrow(/超时/);
+    await vi.advanceTimersByTimeAsync(TIMING.writeTimeoutMs);
+    await failure;
+    expect(writeFrames(device)).toHaveLength(1);
+    expect(transport.state()).toBe('error');
+    await transport.close();
   });
 
   it('writes a single EQ field as 0x10 with address 0x202A and raw 285', async () => {

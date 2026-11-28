@@ -92,13 +92,15 @@ $env:MICSTUDIO_USER_DATA = 'D:\WorkShop\MicroPhone_WebHIDInterface\.userdata'
 
 ## Reference truth
 
-Ground truth（地址 / 标定 / 权限 / 默认值，唯一权威）：`Document/Update/hardware/v0.0.6/M001参数表V0.3.xlsx`；`Document/Update/hardware/v0.0.6/usb audio demo buglist_20261116.docx` 是这一轮的界面需求单（黄色 = 上位机改）；`Document/Protocol/效果器参数范围.xlsx` 仅作中文标签与单位参考。
+Ground truth（地址 / 标定 / 权限 / 默认值，唯一权威）：`Document/Update/Alpha/v1.4.0/M001参数表V0.4.xlsx`；`Document/Update/hardware/v0.0.6/usb audio demo buglist_20261116.docx` 是这一轮的界面需求单（黄色 = 上位机改）；`Document/Protocol/效果器参数范围.xlsx` 仅作中文标签与单位参考。
+
+> 2026-11-28 换版：参数表 V0.4 更新 EQ 模式与频段默认值、灯效模式 0–6、三分频动态默认关闭。设置抽屉「恢复出厂设置」写 `0x100A=1`，收到 ACK 后回读设备预设。
 
 > 2026-11-21 换版：参数表 V0.3（表内黄色标记）取代 V0.1 —— `0x2026` 上限 4→5、三分频 `fc1/fc2` 默认 50/50→1000/3000、三区 `preGain` 默认 0→128（=1.28）、新增 `0x2072`–`0x2075`（RGB 开关 / RGB 模式 / NoiseGate 使能 / 3BandDrc 使能），预设区由 114 项变 118 项。V0.1 仍在 `Document/Protocol/` 备查但**已作废**，不要照着它改代码。落地记录见 `Document/Update/hardware/v0.0.6/修复记录-参数表V0.3-20261121.md`。
 
 | 参照 | 本仓 | 备注 |
 |---|---|---|
-| `Document/Update/hardware/v0.0.6/M001参数表V0.3.xlsx` | `src/renderer/src/device/registers.ts`、`src/renderer/src/domain/params.ts`、`tools/vdevice/device-stack.mjs` | 地址 / 原始值域 / 标定 / 读写权限 / 默认值（118 项预设区，止于 `0x2075`） |
+| `Document/Update/Alpha/v1.4.0/M001参数表V0.4.xlsx` | `src/renderer/src/device/registers.ts`、`src/renderer/src/domain/params.ts`、`tools/vdevice/device-stack.mjs` | 地址 / 原始值域 / 标定 / 读写权限 / 默认值（118 项预设区，止于 `0x2075`） |
 | `Document/Protocol/M001参数表V0.1.xlsx` | 同上 | **已作废**，只用于追溯历史结论 |
 | `Document/Protocol/Modbus通讯协议说明_20261026.md` | `src/renderer/src/device/protocol.ts`、`device/proto/**`、`tools/vdevice/device-stack.mjs` | 帧结构 / CRC / 功能码 / Report ID / 0x10 双向复用（2026-10-26 换版，协议层唯一权威；评审见 `协议评审-Modbus协议_20261026.md`） |
 | `Document/Protocol/效果器参数范围.xlsx` | `src/renderer/src/domain/params.ts` | 仅中文标签与单位；数值以寄存器表为准（三分频 preGain 1.28 / fc 1000-3000 与 V0.3 一致） |
@@ -110,13 +112,13 @@ Ground truth（地址 / 标定 / 权限 / 默认值，唯一权威）：`Documen
 | 参照实现 AudioEQ_Visualized_Web（MIT） | `src/renderer/src/eq/**` | 频响算法与 Canvas 分层渲染 |
 | `third_party/web_hid_utils/docs/*.md`、`packages/webhid-kit/README.md` | `src/renderer/src/device/webhid/**` | WebHID 强制约束、桥接协议、套件 API |
 
-裁决：地址 / 标定 / 权限 / 默认值以 `M001参数表V0.3.xlsx` 为准（实现即 `device/registers.ts`）；帧结构 / CRC / 功能码 / Report ID / 上报语义以 `Modbus通讯协议说明_20261026.md` 为准（实现即 `device/proto/**` + `device/protocol.ts`）；中文标签与单位可参考 `效果器参数范围.xlsx`，但数值冲突时以寄存器表为准；曲线渲染细节以参照实现为准并做渲染适配。
+裁决：地址 / 标定 / 权限 / 默认值以 `M001参数表V0.4.xlsx` 为准（实现即 `device/registers.ts`）；帧结构 / CRC / 功能码 / Report ID / 上报语义以 `Modbus通讯协议说明_20261026.md` 为准（实现即 `device/proto/**` + `device/protocol.ts`）；中文标签与单位可参考 `效果器参数范围.xlsx`，但数值冲突时以寄存器表为准；曲线渲染细节以参照实现为准并做渲染适配。
 
 ## Architecture
 
 Electron 主进程只负责窗口、菜单、WebHID 会话策略与 IPC；渲染进程是唯一业务层：`AppStore` 是状态唯一写入口，参数改动经 `Transport` 出站（Alpha 用 `MockTransport`），`EqModel` + `computeCurve` 产出曲线数据、Canvas 分层绘制。主进程不参与业务计算，渲染进程不碰 Node API。
 
-界面是**一屏工作台**（`ui/views/console-view.ts`），没有导航与路由：所有日常逻辑同屏——顶部一键场景（`domain/scenes.ts`，顺序 安静房间 → 游戏 → 播客 → 唱歌 → 自定义，2026-11-22 起「会议」改名「游戏」；每个场景的快速调音与音色改动由 `domain/scene-presets.ts` 自动保存（静音 / 监听 / 灯效是全局开关，不记进场景；换音色也不退出场景），卡片右侧「复位」清回出厂预设，复位前会确认；每个参数 / EQ 段旁还有一枚「恢复」，撤销到场景刚应用时的基准值（设备回读算基准，不算用户改动）），左侧实时电平 + 只读增益 + 设备摘要，中间**噪声门阈值 / 压缩器阈值 / 防爆音**（三行各带模块开关，直接写协议 dB，不再是 0..100 抽象强度）、音色（原声 / 人声增强 / 温暖 / 明亮 / 自定义，启动默认「自定义」）、三个输入开关（麦克风静音 / 监听 / 电平信号静音），右侧 7 段音色曲线，底部环境降噪与**灯效开关 + 0–7 模式**（与高级参数同一组寄存器）。**主界面曲线在任何音色下都可拖 / 滚轮调 Q**，卡头「恢复默认」回当前音色的默认曲线（2026-11-25 起不再有「逐段精调」跳抽屉的按钮）。协议原始参数收进顶栏「高级参数」抽屉（`ui/views/advanced-view.ts`，由 `ui/modal.ts` 承载），设备与设置也以抽屉打开，不切页。`domain/quick-controls.ts` 只保留固定音色表、自定义曲线比较与防爆音使能换算，不再做强度↔阈值映射。
+界面是**一屏工作台**（`ui/views/console-view.ts`），没有导航与路由：所有日常逻辑同屏——顶部一键场景（`domain/scenes.ts`，顺序 安静房间 → 游戏 → 播客 → 唱歌 → 自定义，2026-11-22 起「会议」改名「游戏」；每个场景的快速调音与音色改动由 `domain/scene-presets.ts` 自动保存（静音 / 监听 / 灯效是全局开关，不记进场景；换音色也不退出场景），卡片右侧「复位」清回出厂预设，复位前会确认；每个参数 / EQ 段旁还有一枚「恢复」，撤销到场景刚应用时的基准值（设备回读算基准，不算用户改动）），左侧实时电平 + 只读增益 + 设备摘要，中间**噪声门阈值 / 压缩器阈值 / 防爆音**（三行各带模块开关，直接写协议 dB，不再是 0..100 抽象强度）、音色（原声 / 人声增强 / 温暖 / 明亮 / 自定义，启动默认「自定义」）、三个输入开关（麦克风静音 / 监听 / 电平信号静音），右侧 7 段音色曲线，底部环境降噪与**灯效开关 + 0–6 模式**（与高级参数同一组寄存器）。**主界面曲线在任何音色下都可拖 / 滚轮调 Q**，卡头「恢复默认」回当前音色的默认曲线（2026-11-25 起不再有「逐段精调」跳抽屉的按钮）。协议原始参数收进顶栏「高级参数」抽屉（`ui/views/advanced-view.ts`，由 `ui/modal.ts` 承载），设备与设置也以抽屉打开，不切页。`domain/quick-controls.ts` 只保留固定音色表、自定义曲线比较与防爆音使能换算，不再做强度↔阈值映射。
 
 设备抽屉（`ui/views/device-view.ts`）走 `device/webhid/` 适配层调用第三方套件：只做「发现设备 / 开关设备 / 报告解码」，不参与参数 ↔ 字节映射，因此**不实现** `Transport`，`AppStore` 的 Mock 链路不变。详见 §WebHID 接入。
 
@@ -129,7 +131,7 @@ Electron 主进程只负责窗口、菜单、WebHID 会话策略与 IPC；渲染
 - `src/renderer/src/ui/modal.ts`：抽屉/弹层宿主，Esc、遮罩点击、内容 destroy
 - `src/renderer/src/domain/scenes.ts`：一键场景（场景 → 7 个协议字段 + 7 段 EQ；顺序 安静房间/游戏/播客/唱歌/自定义）
 - `src/renderer/src/domain/scene-presets.ts`：场景的可编辑值（localStorage `micstudio.scenes` / 自定义曲线 `micstudio.customEq`；改一项存一项，复位只清当前场景）
-- `src/renderer/src/domain/defaults.ts`：产品默认值（三分频动态默认关、3–7 段频点 63/250/1k/4k/12.5k —— 与参数表 G 列刻意不同，见注释）
+- `src/renderer/src/domain/defaults.ts`：产品默认值（可调参数和 EQ 默认值从参数表 V0.4 派生）
 - `src/renderer/src/domain/quick-controls.ts`：固定音色表、自定义曲线比较、防爆音使能换算（不再做 0..100 强度映射）
 - `src/renderer/src/device/webhid`：webhid-kit 适配层（`types` 契约 / `kit` 唯一 import / `session` 状态机）
 - `src/renderer/src/device/registers.ts`：寄存器真值表（地址 / 原始值域 / 标定 / 权限 / 默认值）+ `toRaw`/`fromRaw`；`domain/params.ts` 的 46 项由它派生
@@ -532,7 +534,7 @@ Fix（已落盘）：`FirmwareController.start()` 发第一帧前 `link.reacquir
 
 ### 模块与参数字段（中文标签与单位参考 `效果器参数范围.xlsx`；数值真值见 `device/registers.ts`）
 
-> v1.1.0 起，**地址 / 原始值域 / 标定 / 读写权限 / 默认值**一律以 `M001参数表V0.3.xlsx`（`Document/Update/hardware/v0.0.6/`）为准，实现落点是 `device/registers.ts`（原始值）与 `domain/params.ts`（46 项工程量）。本表沿用 v1.0.0 的口径，只当"中文标签 + 单位 + 语义"的索引；下表里的最小/最大/默认/步进凡是与 `PARAMS` 不一致的，以 `PARAMS` 为准。
+> v1.1.0 起，**地址 / 原始值域 / 标定 / 读写权限 / 默认值**一律以 `M001参数表V0.4.xlsx`（`Document/Update/Alpha/v1.4.0/`）为准，实现落点是 `device/registers.ts`（原始值）与 `domain/params.ts`（46 项工程量）。本表沿用 v1.0.0 的口径，只当"中文标签 + 单位 + 语义"的索引；下表里的最小/最大/默认/步进凡是与 `PARAMS` 不一致的，以 `PARAMS` 为准。
 
 | 模块 | 字段 | 含义 | 最小 | 最大 | 默认 | 步进 | 上位机权限 |
 |---|---|---|---|---|---|---|---|
@@ -657,7 +659,7 @@ Fix（已落盘）：
 
 - **场景变成"可编辑 + 自动保存"**：`domain/scene-presets.ts`（localStorage `micstudio.scenes` / `microstudio.customEq` 实际为 `micstudio.customEq`）按场景 id 存**用户改过的项**（sparse，只存差异）。选场景写 `store.setActiveScene(id)`；用户改任意参数（`PARAM_CHANGED_EVENT`）或拖曲线都记到当前场景名下；「复位」= 清掉该场景的覆盖值再按 `SCENES` 出厂预设应用一遍。`applyingScene` 这个闸门**不能删**：应用预设时的 `setParam` 也是用户改动的同一条路径，不挡住就会把出厂值当成"用户刚改的"存下来，复位后永远回不到默认。
 - **场景改名**：`SceneId` 的 `meeting` → `game`（会议 → 游戏，处理链数值不变）。改 id 会牵连 `SCENE_ICON`、i18n `console.scene.game*`、`fulltest-u.mjs` / `ui-e2e-full.mjs` / `verify-buglist-20261113.mjs` 里的场景 id 断言，改的时候一起搜。
-- **产品默认值放在 `domain/defaults.ts`，不要改 `registers.ts`**：参数表 V0.3 是真值来源，产品要求与表不同时用 `PRODUCT_PARAM_DEFAULTS`（三分频动态默认关 `drc3.Enable=0`）与 `PRODUCT_BAND_FREQS`（3–7 段频点 63/250/1k/4k/12.5k）覆盖。设备上电加载的那份预设由固件按表决定：`复位全部参数`/场景会写 0，但开机回读仍是固件的值，除非固件改 G 列。
+- **V0.3 时的产品默认覆盖（V0.4 已收录）**：参数表 V0.3 是真值来源，产品要求与表不同时用 `PRODUCT_PARAM_DEFAULTS`（三分频动态默认关 `drc3.Enable=0`）与 `PRODUCT_BAND_FREQS`（3–7 段频点 63/250/1k/4k/12.5k）覆盖。设备上电加载的那份预设由固件按表决定：`复位全部参数`/场景会写 0，但开机回读仍是固件的值，除非固件改 G 列。
 - **启动默认「自定义」**：`quick-controls.DEFAULT_TONE='custom'` + `AppState.activeScene` 默认 `'custom'`；`domain/scene-presets.ts` 的 `loadCustomEq()` 在 `createConsoleView()` 开头把上次的曲线套到 `bands` 上（`setBands` 在 `sync!=='ready'` 时不发帧，连上设备后仍由回读接管）。
 - **灯效上主页**：`快捷开关` 卡现在是两列——`环境降噪 + 档位` 与 `灯效 + 模式 0–7`（`switch-item--light`、`segmented--modes`：8 个 chip 等分压缩，窄列里每个 ~11–15 px）。与高级参数「灯效」是同一组参数 id（`rgb.OnOff`/`rgb.Mode`），联动同 store。**不要**把它做成跨两列的 `switch-item--wide`：那样中栏会多出 ~70 px，1266×783 下「快速调音」卡会被挤到内部滚动甚至压住下面的卡。
 - **阈值行开关位置**：`.pfield--toggle .macro-toggle { margin-left: 0 }` + 读数 `margin-left:auto`。旧写法把开关顶到右边，读数宽度一变（−80 dB / −4.1 dB）开关就横向跳（问题单第 1 条）。

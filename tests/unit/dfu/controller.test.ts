@@ -235,6 +235,7 @@ class FakeLink implements FirmwareLink {
   onReacquire: (() => void) | null = null;
   reacquires = 0;
   recovers = 0;
+  resyncAfterFailure: boolean | null = null;
   status: LinkState['status'] = 'ready';
 
   constructor(
@@ -293,8 +294,9 @@ class FakeLink implements FirmwareLink {
     return this.channel !== null;
   }
 
-  async recoverAfterDfuFailure(): Promise<void> {
+  async recoverAfterDfuFailure(resync?: boolean): Promise<void> {
     this.recovers += 1;
+    this.resyncAfterFailure = resync ?? true;
     // 失败收场：链路不再停在"升级中"
     this.status = 'error';
   }
@@ -335,10 +337,10 @@ function makeHarness(options: { readonly withChannel?: boolean } = {}): Harness 
       timeline.push(`dfuActive:${active}`);
     },
     autoConnect: {
-      pause: (): void => {
+      pauseForDfu: async (): Promise<void> => {
         autoCalls.push('pause');
       },
-      resume: (): void => {
+      resumeAfterDfu: (): void => {
         autoCalls.push('resume');
       },
     },
@@ -560,8 +562,10 @@ describe('FirmwareController', () => {
     h.timers.advance(TIMING.dfuBlockTimeoutMs);
     await settle();
     await run;
-    expect(h.controller.state().phase).toBe('done');
-    expect(h.controller.state().error).toBeNull();
+    expect(h.controller.state().phase).toBe('failed');
+    expect(h.controller.state().error).toMatchObject({ kind: 'timeout', blockIndex: 1 });
+    expect(h.link.resyncAfterFailure).toBe(false);
+    expect(h.timeline.filter((entry) => entry === 'send:info')).toHaveLength(1);
   });
 
   it('5c. 设备停在 Bootloader（拿不到型号快照）时仍能选包并升级', async () => {

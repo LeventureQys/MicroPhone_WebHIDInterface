@@ -1236,7 +1236,7 @@ class DfuRunner {
   }
 
   async run(options = {}) {
-    const { skipEnter = false, quiesceMs = 0 } = options;
+    const { skipEnter = false } = options;
     if (this.image === null) throw new Error('DFU 会话没有已加载的镜像');
     this.phase = 'entering';
     if (!skipEnter) {
@@ -1261,8 +1261,6 @@ class DfuRunner {
         this.reportFailure({ kind: 'restartExhausted', round: this.round - 1, detail: step.reason });
         return this.snapshot();
       }
-      const waitMs = step.sentAt === undefined ? 0 : Math.max(0, step.sentAt + quiesceMs - Date.now());
-      if (waitMs > 0) await delay(waitMs);
     }
   }
 
@@ -1300,11 +1298,12 @@ class DfuRunner {
     const blocks = this.image.blocks;
     for (let index = 0; index < blocks.length; index += 1) {
       const step = await this.sendBlock(index);
-      if (step.kind === 'timeout' || step.kind === 'ackError' || step.kind === 'failed' || step.kind === 'restart') return step;
-      if (step.kind === 'success') return { kind: 'settled', blockIndex: index };
+      if (step.kind === 'ackError' || step.kind === 'failed' || step.kind === 'restart') return step;
+      if (step.kind === 'success' && index + 1 === blocks.length) return { kind: 'settled', blockIndex: index };
+      if (step.kind === 'success') return { kind: 'failed', error: { kind: 'statusCode', blockIndex: index } };
       if (step.kind !== 'continue') return step;
     }
-    return { kind: 'restart', reason: `${blocks.length} 块发完仍无终态` };
+    return { kind: 'failed', error: { kind: 'statusCode', detail: '未收到终态' } };
   }
 
   async sendBlock(index) {
@@ -1318,7 +1317,9 @@ class DfuRunner {
     const pending = this.waitSlot('status', TIMING.dfuBlockTimeoutMs);
     await this.channel.sendFrame(frame, `DFU block ${index + 1}/${blocks.length}`);
     const result = await pending;
-    if (result.kind === 'timeout') return { kind: 'timeout', sentAt, reason: `block ${index + 1} 超时` };
+    if (result.kind === 'timeout') {
+      return { kind: 'failed', error: { kind: 'timeout', round: this.round, blockIndex: index } };
+    }
     if (result.kind === 'ackError') return { kind: 'ackError', sentAt, reason: `block ${index + 1} ACK 0x${hex4(result.err)}` };
     if (result.value === DFU_STATUS_SUCCESS) return { kind: 'success', sentAt };
     if (result.value === DFU_STATUS_CONTINUE) return { kind: 'continue', sentAt };
@@ -1774,39 +1775,19 @@ const CASES = [
       });
       const channel = await ctx.connect();
       const runner = new DfuRunner(channel);
-      let result;
       try {
         const loaded = runner.load(built.bytes, { deviceModelCode: MODEL_APP });
         assert(loaded.ok, `预检拒绝：${JSON.stringify(loaded.rejection)}`);
-        result = await runner.run();
-        assert(result.phase === 'settling', `DFU 停在 ${result.phase}：${JSON.stringify(result.error)}`);
-        const midStats = await ctx.stats();
-        assert(
-          result.round === 2,
-          `重来轮次为 ${result.round}，应为 2（faultsFired=${midStats.faultsFired} droppedAcks=${midStats.droppedAcks} framesIn=${midStats.framesIn}）`,
-        );
+        const result = await runner.run();
+        assert(result.phase === 'failed' && result.error?.kind === 'timeout', '预期缺回执后中止');
+        assert(result.error.blockIndex === 39, '没有保留第 40 块的失败位置');
+        const infoFrames = result.sends.filter((entry) => entry.kind === 'info').length;
+        assert(infoFrames === 1 && result.sends.at(-1)?.index === 40, '超时后仍发送了信息帧或数据块');
+        const stats = await ctx.stats();
+        assert(stats.mode === 'bootloader' && stats.droppedAcks >= 1, '虚拟设备没有触发丢回执故障');
+        return { blocks: built.info.blocks, stoppedAt: 40, infoFrames, droppedAcks: stats.droppedAcks };
       } finally {
         channel.close();
-      }
-      const verifyChannel = await ctx.connect();
-      const client = new ParamClient(verifyChannel);
-      try {
-        const snapshot = await client.sync();
-        const version = [snapshot.device.firmware.x, snapshot.device.firmware.y, snapshot.device.firmware.z];
-        assert(version.join('.') === '1.2.3', `回读版本 ${version.join('.')}，应为 1.2.3`);
-        const stats = await ctx.stats();
-        assert(stats.droppedAcks >= 1, `droppedAcks=${stats.droppedAcks}，应为 1`);
-        runner.complete({ ok: true });
-        return {
-          blocks: built.info.blocks,
-          round: result.round,
-          droppedAcks: stats.droppedAcks,
-          version: version.join('.'),
-          infoFrames: result.sends.filter((entry) => entry.kind === 'info').length,
-        };
-      } finally {
-        client.dispose();
-        verifyChannel.close();
       }
     },
   },
@@ -1833,47 +1814,18 @@ const CASES = [
       });
       const channel = await ctx.connect();
       const runner = new DfuRunner(channel);
-      let result;
       try {
         const loaded = runner.load(built.bytes, { deviceModelCode: MODEL_APP });
         assert(loaded.ok, `预检拒绝：${JSON.stringify(loaded.rejection)}`);
-        result = await runner.run({ quiesceMs: faultMs + 300 });
-        assert(result.phase === 'settling', `DFU 停在 ${result.phase}：${JSON.stringify(result.error)}`);
-        assert(result.round === 2, `重来轮次为 ${result.round}，应为 2`);
+        const result = await runner.run();
+        assert(result.phase === 'failed' && result.error?.kind === 'timeout', '预期回执延迟后中止');
+        assert(result.round === 1 && result.error.blockIndex === 39, '回执超时后错误地重开会话');
+        await delay(faultMs - TIMING.dfuBlockTimeoutMs + 100);
+        const actual = runner.snapshot();
+        assert(actual.phase === 'failed' && actual.sends.at(-1)?.index === 40, '迟到回执再次触发了刷写');
+        return { blocks: built.info.blocks, stoppedAt: 40, round: result.round };
       } finally {
         channel.close();
-      }
-      const sequence = result.sends;
-      const repeated = [];
-      for (let index = 1; index < sequence.length; index += 1) {
-        const previous = sequence[index - 1];
-        const current = sequence[index];
-        if (previous.kind === 'block' && current.kind === 'block' && previous.index === current.index) {
-          repeated.push({ index, block: current.index, round: current.round });
-        }
-      }
-      assert(repeated.length === 0, `发送序列里出现同块连发：${JSON.stringify(repeated)}`);
-      const afterTimeout = sequence.findIndex(
-        (entry, index) => entry.kind === 'info' && index > 0 && sequence[index - 1].kind === 'block',
-      );
-      assert(afterTimeout > 0, '超时后没有整轮重来的信息帧');
-      const verifyChannel = await ctx.connect();
-      const client = new ParamClient(verifyChannel);
-      try {
-        const snapshot = await client.sync();
-        const version = [snapshot.device.firmware.x, snapshot.device.firmware.y, snapshot.device.firmware.z];
-        assert(version.join('.') === '1.2.3', `回读版本 ${version.join('.')}，应为 1.2.3`);
-        runner.complete({ ok: true });
-        return {
-          blocks: built.info.blocks,
-          round: result.round,
-          repeatedBlocks: repeated.length,
-          restartAfterBlock: sequence[afterTimeout - 1].index,
-          version: version.join('.'),
-        };
-      } finally {
-        client.dispose();
-        verifyChannel.close();
       }
     },
   },
@@ -1954,19 +1906,11 @@ const CASES = [
       try {
         const loaded = runner.load(built.bytes, { deviceModelCode: MODEL_APP });
         assert(loaded.ok, `预检拒绝：${JSON.stringify(loaded.rejection)}`);
-        assert(await runner.enterDfu(), 'EnterDfu 没有拿到 ACK 0x0000');
-        const probe = await runner.probeInfo();
-        assert(probe.kind === 'ok', `信息帧探测失败：${JSON.stringify(probe)}`);
-        for (let index = 0; index < 9; index += 1) {
-          const step = await runner.sendBlock(index);
-          assert(step.kind === 'continue', `第 ${index + 1} 块回执 ${step.kind}，应为 continue`);
-        }
-        const tenth = await runner.sendBlock(9);
-        assert(tenth.kind === 'timeout', `第 10 块回执 ${tenth.kind}，应为 timeout（已断电）`);
-        const framesAtLoss = channel.inFrames;
-        const eleventh = await runner.sendBlock(10);
-        assert(eleventh.kind === 'timeout', `断电后仍收到回执 ${eleventh.kind}`);
-        assert(channel.inFrames === framesAtLoss, `断电后仍收到 ${channel.inFrames - framesAtLoss} 帧`);
+        const result = await runner.run();
+        assert(result.phase === 'failed' && result.error?.kind === 'timeout', '断电后应停止刷新');
+        assert(result.error.blockIndex === 9, '断电时应保留第 10 块的失败位置');
+        const infoFrames = result.sends.filter((entry) => entry.kind === 'info').length;
+        assert(infoFrames === 1 && result.sends.at(-1)?.index === 10, '断电后仍发送了信息帧或数据块');
       } finally {
         channel.close();
       }

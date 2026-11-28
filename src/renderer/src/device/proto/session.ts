@@ -138,6 +138,7 @@ interface Task {
   readonly summary: string;
   /** 轮询任务用 `pollTimeoutMs` 且在超时时丢弃本次而不是重试（S-f） */
   readonly poll: boolean;
+  readonly noRetry?: boolean;
   readonly onOk: (frame: ParamFrame) => void;
   readonly onFail: (error: TransportError) => void;
 }
@@ -513,6 +514,30 @@ export class ParamSession {
     this.startPolling();
     return result;
   }
+
+  /** 复位覆盖尚未发送的调参，已在途的报文仍须等到应答槽释放。 */
+  async factoryReset(): Promise<void> {
+    if (this.disposed || this.phaseValue !== 'ready') throw new Error('参数会话尚未就绪');
+    const drain = this.cancelWork();
+    if (drain !== null) await drain;
+    if (this.disposed || this.phaseValue !== 'ready') throw new Error('参数会话已断开');
+
+    const addr = CONFIG.factoryReset;
+    const raw = 1;
+    return new Promise<void>((resolve, reject) => {
+      this.queue.push(this.createTask({
+        frame: encodeFrame(FUNC_RAND_WRITE, encodeRandWrite([{ addr, raw }])),
+        expect: 'ack',
+        summary: writeSummary(addr, raw),
+        // ACK 丢失时设备可能已在复位，重发会再次擦写参数。
+        noRetry: true,
+        onOk: () => resolve(),
+        onFail: (error) => reject(transportFailure(error)),
+      }));
+      this.pump();
+    });
+  }
+
   /** 写请求；内部按 `writeThrottleMs` 合并窗口，调用方立即返回（S-b） */
   write(entries: readonly WordPair[]): void {
     if (this.disposed) return;
@@ -600,6 +625,12 @@ export class ParamSession {
     else this.stopPolling();
   }
 
+  /** 丢弃还未发出的参数操作，等在途请求交回总线。 */
+  async drainForDfu(): Promise<void> {
+    this.setPolling(false);
+    await this.cancelWork();
+  }
+
   handleBytes(bytes: Uint8Array): void {
     if (this.disposed || bytes.length === 0) return;
     const input = concatBytes(this.inbound, bytes);
@@ -649,6 +680,7 @@ export class ParamSession {
     readonly expect: ReplyExpect;
     readonly summary: string;
     readonly poll?: boolean;
+    readonly noRetry?: boolean;
     readonly onOk: (frame: ParamFrame) => void;
     readonly onFail: (error: TransportError) => void;
   }): Task {
@@ -658,6 +690,7 @@ export class ParamSession {
       expect: options.expect,
       summary: options.summary,
       poll: options.poll ?? false,
+      noRetry: options.noRetry,
       onOk: options.onOk,
       onFail: options.onFail,
     };
@@ -795,6 +828,7 @@ export class ParamSession {
    * 校验错 / 设备地址错说明设备活着，仍按 `requestRetries` 重试。
    */
   private retryLimitFor(task: Task, error: TransportError): number {
+    if (task.noRetry) return 0;
     if (task.expect === 'ack' && error.kind === 'timeout') return this.timing.writeRetries;
     return this.timing.requestRetries;
   }

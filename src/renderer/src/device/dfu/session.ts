@@ -103,7 +103,7 @@ export interface DfuError {
 
 export interface DfuSessionOptions {
   /** 出站：一帧已切好的 63 B 报文按顺序调用；返回 Promise 用于背压，抛错视为通道错误 */
-  readonly send: (reports: readonly Uint8Array[]) => void | Promise<void>;
+  readonly send: (reports: readonly Uint8Array[], signal: AbortSignal) => void | Promise<void>;
   readonly timers?: Timers;
   readonly clock?: Clock;
   readonly timing?: TimingOverrides;
@@ -211,7 +211,7 @@ type ExchangeResult = SlotResult | { readonly kind: 'channel'; readonly detail: 
 
 interface Slot {
   readonly kind: SlotKind;
-  readonly timer: unknown;
+  timer: unknown;
   readonly resolve: (result: SlotResult) => void;
 }
 
@@ -275,6 +275,7 @@ export class DfuSession {
   private settleDone = false;
 
   private slot: Slot | null = null;
+  private outbound: AbortController | null = null;
   private settleTimer: unknown = null;
   private disposed = false;
 
@@ -444,6 +445,7 @@ export class DfuSession {
       return false;
     }
     this.transition('aborted');
+    this.outbound?.abort();
     this.settleSlot({ kind: 'aborted' });
     return true;
   }
@@ -495,6 +497,7 @@ export class DfuSession {
 
   /** 清所有定时器；运行中的会话会被就地中止（`run()` 以 `Error('dfu aborted')` 收场） */
   dispose(): void {
+    this.outbound?.abort();
     this.disposed = true;
     this.clearSettleTimer();
     this.settleSlot({ kind: 'aborted' });
@@ -599,27 +602,31 @@ export class DfuSession {
       const frame = encodeBlockFrame(image.blocks[index]);
       const result = await this.exchange(frame, `DFU block ${index + 1}/${total}`, 'status', this.timing.dfuBlockTimeoutMs);
       if (result.kind === 'aborted') return { kind: 'aborted' };
-      if (result.kind === 'channel') return { kind: 'failed', error: { kind: 'channel', detail: result.detail } };
+      if (result.kind === 'channel') {
+        return {
+          kind: 'failed',
+          error: { kind: 'channel', round: this.round, blockIndex: index, detail: result.detail },
+        };
+      }
       if (result.kind === 'timeout') {
-        // 歧义态：可能没写、也可能写了但回执丢了。补发会让指针与认知错位，只能整轮重来
-        this.diagTimeout(
-          frame,
-          `DFU block ${index + 1}/${total} 超时 ${this.timing.dfuBlockTimeoutMs} ms，整轮重来`,
-        );
-        return { kind: 'restart', reason: `block ${index + 1}/${total} timeout` };
+        // 无法区分 ACK 丢失和 Bootloader 挂死。重发信息帧会再次写入失败标志。
+        const detail = `DFU block ${index + 1}/${total}: no status within ${this.timing.dfuBlockTimeoutMs} ms`;
+        this.diagTimeout(frame, detail);
+        return { kind: 'failed', error: { kind: 'timeout', round: this.round, blockIndex: index, detail } };
       }
       if (result.kind === 'ackError') {
         return { kind: 'restart', reason: `block ${index + 1}/${total} sigma ack ${this.ackText(result.err)}` };
       }
 
-      this.sentBlocks = index + 1;
       const status = result.value;
-      if (status === DFU_STATUS_SUCCESS) {
+      if (status === DFU_STATUS_SUCCESS && index + 1 === total) {
+        this.sentBlocks = index + 1;
         this.emitProgress('writing');
         this.enterSettling();
         return { kind: 'settled' };
       }
       if (status === DFU_STATUS_CONTINUE) {
+        this.sentBlocks = index + 1;
         this.emitProgress('writing');
         continue;
       }
@@ -637,8 +644,10 @@ export class DfuSession {
       }
       return { kind: 'failed', error: { kind: 'statusCode', status, round: this.round, blockIndex: index } };
     }
-    // 块全发完却只收到 0x03：设备没给终态，同样属于歧义
-    return { kind: 'restart', reason: `no final status after ${total} blocks` };
+    return {
+      kind: 'failed',
+      error: { kind: 'statusCode', round: this.round, blockIndex: total - 1, detail: `no final status after ${total} blocks` },
+    };
   }
 
   /** 收到 `0x05` 后：停发一切帧，只等调用方重连 + 回读 + `complete()`（DFU 材料 §6 ⑫） */
@@ -666,11 +675,19 @@ export class DfuSession {
     kind: SlotKind,
     timeoutMs: number,
   ): Promise<ExchangeResult> {
-    const pending = this.awaitSlot(kind, timeoutMs);
+    const pending = this.awaitSlot(kind);
+    const slot = this.slot;
     const sent = await this.sendFrame(frame, summary);
+    if ((this.phaseValue as DfuPhase) === 'aborted') return { kind: 'aborted' };
     if (sent.kind === 'failed') {
       this.settleSlot({ kind: 'aborted' });
       return { kind: 'channel', detail: sent.error.detail ?? 'send failed' };
+    }
+    // HID 分片未发送完时，只计算发送超时。同步到达的 ACK 仍由预先注册的槽接住。
+    if (slot !== null && this.slot === slot) {
+      slot.timer = this.timers.setTimeout(() => {
+        if (this.slot === slot) this.settleSlot({ kind: 'timeout' });
+      }, timeoutMs);
     }
     return pending;
   }
@@ -681,10 +698,14 @@ export class DfuSession {
       throw new Error(`dfu: refused to send in phase ${this.phaseValue}`);
     }
     this.pushDiag('out', hexBytes(frame), summary, 'info');
+    const outbound = new AbortController();
+    this.outbound = outbound;
     try {
-      await this.sendWithinTimeout(this.send(splitFrame(frame, PAYLOAD_BYTES)));
+      await this.sendWithinTimeout(this.send(splitFrame(frame, PAYLOAD_BYTES), outbound.signal), outbound);
     } catch (error) {
       return { kind: 'failed', error: { kind: 'channel', detail: describe(error) } };
+    } finally {
+      this.outbound = null;
     }
     return { kind: 'ok' };
   }
@@ -694,13 +715,14 @@ export class DfuSession {
    * 而会话正 `await` 它 —— `awaitSlot` 的定时器救不了这个 await，界面就永久停在
    * "探测设备 / 正在写入"（2026-11-21 真机 R3 实测 60 s 无变化）。
    */
-  private sendWithinTimeout(send: void | Promise<void>): Promise<void> {
+  private sendWithinTimeout(send: void | Promise<void>, outbound: AbortController): Promise<void> {
     const limit = this.timing.dfuSendTimeoutMs;
     const pending = Promise.resolve(send);
     if (limit <= 0) return pending;
     return new Promise<void>((resolve, reject) => {
       const timer = this.timers.setTimeout(() => {
         reject(new Error(`sendReport did not return in ${limit} ms`));
+        outbound.abort();
       }, limit);
       pending.then(
         () => {
@@ -721,22 +743,16 @@ export class DfuSession {
     });
   }
 
-  private awaitSlot(kind: SlotKind, timeoutMs: number): Promise<SlotResult> {
+  private awaitSlot(kind: SlotKind): Promise<SlotResult> {
     return new Promise<SlotResult>((resolve) => {
-      const timer = this.timers.setTimeout(() => {
-        // 只有"当前这一次等待"自己的定时器才算超时：abort/dispose 会先把 slot 换成 null
-        if (this.slot === null || this.slot.timer !== timer) return;
-        this.slot = null;
-        resolve({ kind: 'timeout' });
-      }, timeoutMs);
-      this.slot = { kind, timer, resolve };
+      this.slot = { kind, timer: null, resolve };
     });
   }
 
   private settleSlot(result: SlotResult): void {
     const slot = this.slot;
     if (slot === null) return;
-    this.timers.clearTimeout(slot.timer);
+    if (slot.timer !== null) this.timers.clearTimeout(slot.timer);
     this.slot = null;
     slot.resolve(result);
   }
@@ -842,6 +858,10 @@ export class DfuSession {
     this.settleSlot({ kind: 'aborted' });
     this.clearSettleTimer();
     this.settleDone = false;
+    if (error.kind !== 'preflight') {
+      const block = error.blockIndex === undefined ? '' : ` block=${error.blockIndex + 1}/${this.blockTotal}`;
+      this.pushDiag('out', '', `DFU failed ${error.kind}${block}: ${error.detail ?? this.phaseValue}`, 'error');
+    }
     this.onErrorCb?.(error);
     this.transition('failed');
   }

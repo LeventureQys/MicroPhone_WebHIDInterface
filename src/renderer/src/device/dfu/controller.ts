@@ -51,7 +51,7 @@ export interface FirmwareLink {
    * 失败 / 中止后的收场：把链路从"升级中"的挂起状态拉回来（清挂起、能同步就重新同步）。
    * 可选：不实现时链路保持原状（单测不关心）。
    */
-  recoverAfterDfuFailure?(): Promise<void>;
+  recoverAfterDfuFailure?(resync?: boolean): Promise<void>;
 }
 
 export interface FirmwareState {
@@ -80,10 +80,9 @@ export interface FirmwareControllerOptions {
   /** 关窗被拦截的通知订阅（`window.micstudio.onDfuCloseBlocked`） */
   readonly onCloseBlocked?: (cb: () => void) => (() => void) | void;
   /**
-   * 后台自动连接：升级期间 `pause()`，收场后 `resume()`。
-   * 不禁用的话，失败后自动重连会和「立即重试」抢同一个句柄（两边都会改 link 状态）。
+   * DFU 接管前停下后台检查并等它交还句柄。
    */
-  readonly autoConnect?: { pause(): void; resume(): void };
+  readonly autoConnect?: { pauseForDfu(): Promise<void>; resumeAfterDfu(reconnect?: boolean): void };
 }
 
 /** 关窗被拦截时 `DfuError.detail` 的标记：phase 不变，界面只提示不中断 */
@@ -128,6 +127,10 @@ export function errorKeyOf(kind: DfuError['kind']): string {
   return `fw.error.${kind}`;
 }
 
+export function requiresReplug(error: DfuError | null): boolean {
+  return error?.blockIndex !== undefined && (error.kind === 'timeout' || error.kind === 'channel');
+}
+
 export const FIRMWARE_CHANGE_EVENT = 'change';
 
 export type SelectFileResult =
@@ -170,6 +173,7 @@ export class FirmwareController extends EventTarget {
    * 失败返回文案键，由视图直接渲染；成功把 phase 推到 `ready` 并保存字节。
    */
   async selectFile(file: File): Promise<SelectFileResult> {
+    if (this._running) return { ok: false, message: 'fw.phase.entering' };
     this.disposeSession();
     this._bytes = null;
     this.patch({ ...EMPTY_STATE, phase: 'idle', fileName: file.name });
@@ -236,6 +240,18 @@ export class FirmwareController extends EventTarget {
     if (!this._state.confirmed) throw new Error('confirmation required');
     if (this._running) throw new Error('dfu already running');
 
+    this._running = true;
+    this.patch({ phase: 'entering', error: null });
+    try {
+      await this.options.autoConnect?.pauseForDfu();
+      await this.runUpgrade(bytes);
+    } finally {
+      this._running = false;
+      this.options.autoConnect?.resumeAfterDfu(!requiresReplug(this._state.error));
+    }
+  }
+
+  private async runUpgrade(bytes: Uint8Array): Promise<void> {
     if (!(await this.reacquireChannel())) {
       this.patch({ phase: 'failed', error: { kind: 'unplugged' } });
       return;
@@ -250,18 +266,15 @@ export class FirmwareController extends EventTarget {
       if (!prepared.ok) return;
     }
 
-    this._running = true;
-    this.patch({ error: null, confirmed: true });
-    const offInput = this.subscribeInput();
+    let offInput = (): void => undefined;
     const offClose = this.subscribeCloseBlocked();
-    // 升级期间别让后台自动连接插进来（失败收场后它会重新武装，见 finally）
-    this.options.autoConnect?.pause();
     /** 挂起已经生效：异常退出必须由 `recoverAfterDfuFailure()` 收场，否则链路会卡在"升级中" */
     let suspended = false;
     try {
       // 顺序是硬约束（R4-7）：先停参数链路，再开主进程守卫，最后才开始发帧
       await this.options.link.suspendForDfu();
       suspended = true;
+      offInput = this.subscribeInput();
       await this.setDfuActive(true);
       await session.run(bytes);
       // run() 在 settling 处返回：设备正在重启，重连并全量回读
@@ -284,17 +297,14 @@ export class FirmwareController extends EventTarget {
     } catch (error) {
       const message = describe(error);
       // abort 是用户动作，不是错误；其余失败由会话的 onError 落进 state.error
-      if (message !== 'dfu aborted' && this._state.error === null) {
-        this.patch({ phase: session.phase(), error: { kind: 'channel', detail: message } });
+      if (message !== 'dfu aborted' && (this._state.error === null || this._state.error.detail === CLOSE_BLOCKED_DETAIL)) {
+        this.patch({ phase: 'failed', error: { kind: 'channel', detail: message } });
       }
     } finally {
       offInput();
       offClose();
-      if (suspended) await this.recoverChannel();
+      if (suspended) await this.recoverChannel(!requiresReplug(this._state.error));
       await this.setDfuActive(false);
-      this._running = false;
-      this.options.autoConnect?.resume();
-      this.patch({ phase: session.phase() });
     }
   }
 
@@ -321,7 +331,7 @@ export class FirmwareController extends EventTarget {
   private createSession(): DfuSession {
     this.disposeSession();
     const session = new DfuSession({
-      send: async (reports: readonly Uint8Array[]): Promise<void> => {
+      send: async (reports: readonly Uint8Array[], signal: AbortSignal): Promise<void> => {
         // 通道每次现取：选文件与开始之间可能发生过 detach/attach
         const channel = this.options.link.transport();
         if (channel === null) throw new Error('device channel is gone');
@@ -331,6 +341,7 @@ export class FirmwareController extends EventTarget {
         // 报告之间留 2 ms 让 Bootloader 取走上一包，否则第 5 包可能被丢、块回执超时。
         const gap = this.options.timing?.dfuReportGapMs ?? TIMING.dfuReportGapMs;
         for (let index = 0; index < reports.length; index += 1) {
+          if (signal.aborted) return;
           await sendReport.call(channel.device, channel.reportIds.out, reports[index]);
           if (index + 1 < reports.length && gap > 0) {
             await new Promise<void>((resolve) => {
@@ -381,11 +392,11 @@ export class FirmwareController extends EventTarget {
   }
 
   /** 失败 / 中止收场：链路挂起必须在这里清掉，否则参数通道静默失效、只能重开 app */
-  private async recoverChannel(): Promise<void> {
+  private async recoverChannel(resync: boolean): Promise<void> {
     const recover = this.options.link.recoverAfterDfuFailure;
     if (recover === undefined) return;
     try {
-      await recover.call(this.options.link);
+      await recover.call(this.options.link, resync);
     } catch {
       // 收场是尽力而为：不能盖住升级本身的结论
     }
@@ -404,6 +415,7 @@ export class FirmwareController extends EventTarget {
       this.options.onCloseBlocked ??
       ((cb: () => void): (() => void) | void => window.micstudio?.onDfuCloseBlocked?.(cb));
     const off = subscribe(() => {
+      if (this._state.error !== null) return;
       this.patch({ error: { kind: 'channel', detail: CLOSE_BLOCKED_DETAIL } });
     });
     return typeof off === 'function' ? off : () => undefined;

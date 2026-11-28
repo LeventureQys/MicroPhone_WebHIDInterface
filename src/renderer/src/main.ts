@@ -70,7 +70,10 @@ async function boot(): Promise<void> {
   channel.onDiag((entry) => hub.push(entry));
   const firmware = new FirmwareController({
     link,
-    onDiag: (entry) => hub.push(entry),
+    onDiag: (entry) => {
+      hub.push(entry);
+      if (entry.summary.startsWith('DFU failed')) console.warn('[dfu]', entry.summary);
+    },
     // 升级期间暂停后台自动连接，收场后再武装
     autoConnect,
   });
@@ -95,7 +98,10 @@ async function boot(): Promise<void> {
         onOpenSettings: () => shellRef?.openPanel('settings'),
       }),
     firmware: () => createFirmwareView({ controller: firmware, onClose: () => shellRef?.closePanel() }),
-    settings: () => createSettingsView(store, { configStore: channelConfig }),
+    settings: () => createSettingsView(store, {
+      configStore: channelConfig,
+      resetDevice: () => link.factoryReset(),
+    }),
   });
   shellRef = shell;
   mount.replaceChildren(shell.root);

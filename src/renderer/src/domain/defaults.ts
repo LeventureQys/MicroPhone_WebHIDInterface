@@ -3,41 +3,12 @@ import { EQ_BAND_TOTAL } from '../eq/types';
 import { defaultOf, EQ_BAND_COUNT, eqBandAddr, findRegister } from '../device/registers';
 import { PARAMS } from './params';
 
-/**
- * 产品默认值覆盖：**不等于**参数表 G 列的出厂值。
- *
- * 参数表（`device/registers.ts`）是协议真值，这里只放"上位机认为的默认状态"：
- * 未连接设备时的显示、模拟通道的回读、设置页「复位全部参数」、场景预设都取这里。
- * 每次覆盖都必须写清来源，否则排查时会以为寄存器表漏改。
- *
- * - `drc3.Enable`：2026-11-22 问题单第 6 条「三分频动态处理器默认先关闭」。
- *   参数表 V0.3 的 0x2075 默认是 1，固件上电预设也按 1 加载；上位机只能保证
- *   自己下发的默认值（复位全部参数 / 场景）是 0，设备自身那份要固件侧改。
- */
-const PRODUCT_PARAM_DEFAULTS: Readonly<Record<string, number>> = Object.freeze({
-  'drc3.Enable': 0,
-});
-
-/** 46 项标量默认值：寄存器表 G 列 + 产品覆盖（未连接设备时的兜底显示） */
+/** 46 项标量默认值取自寄存器表，供演示通道使用 */
 export const DEFAULT_PARAMS: Readonly<Record<string, number>> = Object.freeze(
-  Object.fromEntries(PARAMS.map((item) => [item.id, PRODUCT_PARAM_DEFAULTS[item.id] ?? item.default])),
+  Object.fromEntries(PARAMS.map((item) => [item.id, item.default])),
 );
 
 export const DEFAULT_LANG = 'zh' as const;
-
-/**
- * 可调段 1–7 的默认频点（2026-11-22 问题单第 2、3 条）。
- *
- * 问题单原话：「均衡器的默认频率需要修改，其中 3 到 7 段的默认频点参考下图」，
- * 图里给的 5 个频点是 63 Hz / 250 Hz / 1 kHz / 4 kHz / 12.5 kHz（按听觉特性近似
- * 倍频程分布，不是等间隔）。第 1、2 段分别是 HPF 50 Hz、LPF 20 kHz，不变。
- *
- * 参数表 V0.3 G 列仍是上一版的 215 / 1000 / 2000 / 5000 / 10000，所以这里单独列一份
- * 产品默认：类型 / 增益 / Q 继续取值表，只把频点换成问题单要的这 5 个。
- */
-export const PRODUCT_BAND_FREQS: readonly number[] = Object.freeze([
-  50, 20000, 63, 250, 1000, 4000, 12500,
-]);
 
 const LOW_HZ = 20;
 const HIGH_HZ = 20000;
@@ -54,12 +25,12 @@ function registerDefault(addr: number): number {
   return defaultOf(spec);
 }
 
-/** 可调段 1–7（0x2027–0x2049）：类型 / 增益 / Q 取值表，频点取产品默认表 */
+/** 可调段 1–7（0x2027–0x2049）：默认值统一取自寄存器表 */
 function editableBand(index: number): EqBand {
   return {
     index,
     type: registerDefault(eqBandAddr(index, 'type')) as EqFilterType,
-    freq: PRODUCT_BAND_FREQS[index] ?? registerDefault(eqBandAddr(index, 'freq')),
+    freq: registerDefault(eqBandAddr(index, 'freq')),
     gain: registerDefault(eqBandAddr(index, 'gain')),
     q: registerDefault(eqBandAddr(index, 'q')),
   };
@@ -79,3 +50,7 @@ function buildDefaultBands(): EqBand[] {
 }
 
 export const DEFAULT_BANDS: readonly EqBand[] = Object.freeze(buildDefaultBands());
+
+export const PRODUCT_BAND_FREQS: readonly number[] = Object.freeze(
+  DEFAULT_BANDS.slice(0, EQ_BAND_COUNT).map((band) => band.freq),
+);

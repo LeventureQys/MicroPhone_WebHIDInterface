@@ -453,8 +453,7 @@ export class AppStore extends EventTarget {
    */
   setBypass(module: BypassModule, enabled: boolean): void {
     if (this._state.bypass[module] === enabled) return;
-    this._state = { ...this._state, bypass: { ...this._state.bypass, [module]: enabled } };
-    this._commit();
+    this.applyBypass(module, enabled);
 
     const updates: EqBandWrite[] = Array.from({ length: EQ_BAND_COUNT }, (_, index) => ({
       band: index + 1,
@@ -462,6 +461,13 @@ export class AppStore extends EventTarget {
       value: enabled ? 0 : 1,
     }));
     this._writeOrKeepLocal(updates);
+  }
+
+  /** 回读或固件复位只更新本地旁通状态。 */
+  applyBypass(module: BypassModule, enabled: boolean): void {
+    if (this._state.bypass[module] === enabled) return;
+    this._state = { ...this._state, bypass: { ...this._state.bypass, [module]: enabled } };
+    this._commit();
   }
 
   setLang(lang: Lang): void {

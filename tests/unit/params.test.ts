@@ -16,7 +16,7 @@ const EXPECTED: readonly Expected[] = [
   ['enc.OnOff', 0x2024, 0, 1, 1, '', false, 0],
   ['enc.Level', 0x2025, 0, 3, 1, '', false, 0],
 
-  ['eq.mode', 0x2026, 0, 5, 1, '', false, 1],
+  ['eq.mode', 0x2026, 0, 5, 1, '', false, 5],
 
   ['comp.Enable', 0x204a, 0, 1, 1, '', false, 0],
   ['comp.MakeUpGain', 0x204b, 0, 60, 0.1, 'dB', false, 0],
@@ -39,7 +39,7 @@ const EXPECTED: readonly Expected[] = [
   ['noisegate.knee_width_db', 0x205f, 6, 12, 1, 'dB', false, 6],
   ['noisegate.hp_freq', 0x2060, 60, 200, 1, 'Hz', false, 60],
 
-  ['drc3.Enable', 0x2075, 0, 1, 1, '', false, 1],
+  ['drc3.Enable', 0x2075, 0, 1, 1, '', false, 0],
   ['drc3.fc1', 0x2061, 50, 10000, 1, 'Hz', false, 1000],
   ['drc3.fc2', 0x2062, 50, 10000, 1, 'Hz', false, 3000],
   ['drc3.low.preGain', 0x2063, 0, 4, 0.01, '', false, 1.28],
@@ -59,7 +59,7 @@ const EXPECTED: readonly Expected[] = [
   ['drc3.mid.ratio', 0x2071, 1, 20, 0.1, '', false, 1],
 
   ['rgb.OnOff', 0x2072, 0, 1, 1, '', false, 1],
-  ['rgb.Mode', 0x2073, 0, 7, 1, '', false, 0],
+  ['rgb.Mode', 0x2073, 0, 6, 1, '', false, 0],
 ];
 
 describe('params table', () => {

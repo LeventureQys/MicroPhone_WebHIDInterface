@@ -108,7 +108,8 @@ export class AutoConnector {
   private stopped = true;
   private paused = false;
   private parked = false;
-  private busy = false;
+  private inFlight: Promise<void> | null = null;
+  private pausedForDfu = false;
   private attempts = 0;
   /**
    * 这一轮插着期间链路是否连上过。
@@ -182,6 +183,18 @@ export class AutoConnector {
     if (!this.stopped) this.schedule(0);
   }
 
+  /** DFU 要独占 HID，等已在运行的设备枚举与参数同步退出，再移交句柄。 */
+  async pauseForDfu(): Promise<void> {
+    this.pausedForDfu = true;
+    await this.inFlight;
+  }
+
+  resumeAfterDfu(reconnect = true): void {
+    this.pausedForDfu = false;
+    if (!reconnect) this.paused = true;
+    this.schedule(0);
+  }
+
   state(): AutoConnectState {
     return {
       enabled: !this.stopped,
@@ -194,20 +207,26 @@ export class AutoConnector {
   /** 单次检查。定时循环与单测共用；任何异常都不允许把后台任务带走 */
   async tickOnce(): Promise<void> {
     // 刻意不看 `stopped`：单测与诊断要能单独跑一次检查（`stop()` 只停后续排程）
-    if (this.busy) return;
-    this.busy = true;
+    if (this.inFlight !== null || this.pausedForDfu) return;
+    this.inFlight = this.runStep();
+    try {
+      await this.inFlight;
+    } finally {
+      this.inFlight = null;
+    }
+  }
+
+  // ---- 内部 ---------------------------------------------------------------
+
+  private async runStep(): Promise<void> {
     let delay = this.intervalMs;
     try {
       delay = await this.step();
     } catch (error) {
       delay = this.fail(`检查失败：${error instanceof Error ? error.message : String(error)}`);
-    } finally {
-      this.busy = false;
     }
-    if (!this.stopped) this.schedule(delay);
+    this.schedule(delay);
   }
-
-  // ---- 内部 ---------------------------------------------------------------
 
   /** 一次完整检查；返回下一拍延迟 */
   private async step(): Promise<number> {
@@ -243,7 +262,7 @@ export class AutoConnector {
       this.reset();
       return this.intervalMs;
     }
-    if (this.paused || this.parked) return this.intervalMs;
+    if (this.paused || this.parked || this.pausedForDfu) return this.intervalMs;
 
     if (session.status !== 'ready' || session.mode !== 'native') {
       await this.session.connect('native');
@@ -255,7 +274,7 @@ export class AutoConnector {
     }
 
     const target = this.session.getState().devices.find((item) => this.matches(item));
-    if (target === undefined) return this.intervalMs; // 列表刚变，下一拍再试
+    if (target === undefined || this.pausedForDfu) return this.intervalMs;
 
     this.log(`发现 ${target.productName}（${target.id}），尝试自动连接`);
     await this.link.attach(target.id);
@@ -354,7 +373,7 @@ export class AutoConnector {
   }
 
   private schedule(ms: number): void {
-    if (this.stopped) return;
+    if (this.stopped || this.pausedForDfu) return;
     if (this.timer !== null) this.timers.clearTimeout(this.timer);
     this.timer = this.timers.setTimeout(() => {
       this.timer = null;

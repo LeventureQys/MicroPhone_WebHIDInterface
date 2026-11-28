@@ -1,12 +1,9 @@
 /**
  * M001 参数寄存器真值表。
  *
- * 唯一真值源：`Document/Update/hardware/v0.0.6/M001参数表V0.3.xlsx`
- * （工作表「设备信息」/「设备配置」/「设备当前预设」，与需求文档附录 B 逐行对应）。
- * V0.3 相对 `Document/Protocol/M001参数表V0.1.xlsx` 的变化（表内黄色标记）：
- * ① `0x2026` 均衡器模式上限 4 → 5；② 三分频 `fc1/fc2` 默认 50/50 → 1000/3000；
- * ③ 三区 `preGain` 默认 0 → 128（= 1.28）；④ 新增 `0x2072`–`0x2075`
- * （RGB 开关 / RGB 模式 / 噪声门使能 / 三分频动态使能）。
+ * 真值源：`Document/Update/Alpha/v1.4.0/M001参数表V0.4.xlsx`。
+ * V0.4 更新了 EQ 模式与频段默认值、RGB 模式范围、三分频动态默认值，
+ * 设备配置页明确了 `0x100A` 写 1 触发出厂复位。
  *
  * 本文件刻意不 import 任何模块：`device/**` 与 `domain/**` 共用这张表，
  * 零依赖才能保证没有循环引用（任务书 SubStage 1.2 §5-D1、验收项 B7）。
@@ -204,7 +201,7 @@ const CONFIG_ROWS: readonly RegisterSpec[] = Object.freeze([
   config(0x1007, 'comErrAck', '通讯错误', { min: 1, max: 5, defaultRaw: 0, access: 'r' }),
   config(0x1008, 'enterDfu', '进入升级模式', { defaultRaw: 0, access: 'rw' }),
   config(0x1009, 'reinit', '系统重新初始化', { defaultRaw: 0, access: 'none' }),
-  config(0x100A, 'factoryReset', '恢复出厂设置', { defaultRaw: 0, access: 'none' }),
+  config(0x100A, 'factoryReset', '恢复出厂设置', { max: 1, access: 'rw' }),
   config(0x100B, 'syncFlag', '软件同步数据标志', { min: 0, max: 1, access: 'none' }),
   config(0x100C, 'sysErr1', '系统错误状态记录 1', { defaultRaw: 0, access: 'r' }),
   config(0x100D, 'sysErr2', '系统错误状态记录 2', { defaultRaw: 0, access: 'r' }),
@@ -250,7 +247,7 @@ const PRESET_ROWS: readonly RegisterSpec[] = Object.freeze([
   preset(0x2023, 'micGain', 'MIC 音量', { min: 0, max: 100, defaultRaw: 100, access: 'r' }),
   preset(0x2024, 'encOnOff', '降噪开关', { min: 0, max: 1, access: 'rw' }),
   preset(0x2025, 'encLevel', '降噪强度', { min: 0, max: 3, access: 'rw' }),
-  preset(0x2026, 'eqMode', 'MIC 均衡器模式', { min: 0, max: 5, defaultRaw: 1, access: 'rw' }),
+  preset(0x2026, 'eqMode', 'MIC 均衡器模式', { min: 0, max: 5, defaultRaw: 5, access: 'rw' }),
 
   preset(0x2027, 'band1.enable', 'Band-1 Enable', { min: 0, max: 1, defaultRaw: 1, access: 'rw' }),
   preset(0x2028, 'band1.type', 'Band-1 Type', { min: 0, max: 4, defaultRaw: 4, access: 'rw' }),
@@ -266,31 +263,31 @@ const PRESET_ROWS: readonly RegisterSpec[] = Object.freeze([
 
   preset(0x2031, 'band3.enable', 'Band-3 Enable', { min: 0, max: 1, defaultRaw: 1, access: 'rw' }),
   preset(0x2032, 'band3.type', 'Band-3 Type', { min: 0, max: 4, defaultRaw: 0, access: 'rw' }),
-  preset(0x2033, 'band3.freq', 'Band-3 Freq', { min: 20, max: 20000, unit: 'Hz', defaultRaw: 215, access: 'rw' }),
+  preset(0x2033, 'band3.freq', 'Band-3 Freq', { min: 20, max: 20000, unit: 'Hz', defaultRaw: 63, access: 'rw' }),
   preset(0x2034, 'band3.gain', 'Band-3 Gain', { min: -32, max: 12, step: 0.1, unit: 'dB', defaultRaw: 285, access: 'rw', scale: EQ_GAIN_SCALE }),
-  preset(0x2035, 'band3.q', 'Band-3 Q', { min: 0.1, max: 12, step: 0.1, defaultRaw: 8, access: 'rw', scale: DIV_10 }),
+  preset(0x2035, 'band3.q', 'Band-3 Q', { min: 0.1, max: 12, step: 0.1, defaultRaw: 7, access: 'rw', scale: DIV_10 }),
 
   preset(0x2036, 'band4.enable', 'Band-4 Enable', { min: 0, max: 1, defaultRaw: 1, access: 'rw' }),
   preset(0x2037, 'band4.type', 'Band-4 Type', { min: 0, max: 4, defaultRaw: 0, access: 'rw' }),
-  preset(0x2038, 'band4.freq', 'Band-4 Freq', { min: 20, max: 20000, unit: 'Hz', defaultRaw: 1000, access: 'rw' }),
+  preset(0x2038, 'band4.freq', 'Band-4 Freq', { min: 20, max: 20000, unit: 'Hz', defaultRaw: 250, access: 'rw' }),
   preset(0x2039, 'band4.gain', 'Band-4 Gain', { min: -32, max: 12, step: 0.1, unit: 'dB', defaultRaw: 320, access: 'rw', scale: EQ_GAIN_SCALE }),
-  preset(0x203A, 'band4.q', 'Band-4 Q', { min: 0.1, max: 12, step: 0.1, defaultRaw: 15, access: 'rw', scale: DIV_10 }),
+  preset(0x203A, 'band4.q', 'Band-4 Q', { min: 0.1, max: 12, step: 0.1, defaultRaw: 7, access: 'rw', scale: DIV_10 }),
 
   preset(0x203B, 'band5.enable', 'Band-5 Enable', { min: 0, max: 1, defaultRaw: 1, access: 'rw' }),
   preset(0x203C, 'band5.type', 'Band-5 Type', { min: 0, max: 4, defaultRaw: 0, access: 'rw' }),
-  preset(0x203D, 'band5.freq', 'Band-5 Freq', { min: 20, max: 20000, unit: 'Hz', defaultRaw: 2000, access: 'rw' }),
+  preset(0x203D, 'band5.freq', 'Band-5 Freq', { min: 20, max: 20000, unit: 'Hz', defaultRaw: 1000, access: 'rw' }),
   preset(0x203E, 'band5.gain', 'Band-5 Gain', { min: -32, max: 12, step: 0.1, unit: 'dB', defaultRaw: 320, access: 'rw', scale: EQ_GAIN_SCALE }),
-  preset(0x203F, 'band5.q', 'Band-5 Q', { min: 0.1, max: 12, step: 0.1, defaultRaw: 10, access: 'rw', scale: DIV_10 }),
+  preset(0x203F, 'band5.q', 'Band-5 Q', { min: 0.1, max: 12, step: 0.1, defaultRaw: 7, access: 'rw', scale: DIV_10 }),
 
   preset(0x2040, 'band6.enable', 'Band-6 Enable', { min: 0, max: 1, defaultRaw: 1, access: 'rw' }),
   preset(0x2041, 'band6.type', 'Band-6 Type', { min: 0, max: 4, defaultRaw: 0, access: 'rw' }),
-  preset(0x2042, 'band6.freq', 'Band-6 Freq', { min: 20, max: 20000, unit: 'Hz', defaultRaw: 5000, access: 'rw' }),
+  preset(0x2042, 'band6.freq', 'Band-6 Freq', { min: 20, max: 20000, unit: 'Hz', defaultRaw: 4000, access: 'rw' }),
   preset(0x2043, 'band6.gain', 'Band-6 Gain', { min: -32, max: 12, step: 0.1, unit: 'dB', defaultRaw: 320, access: 'rw', scale: EQ_GAIN_SCALE }),
-  preset(0x2044, 'band6.q', 'Band-6 Q', { min: 0.1, max: 12, step: 0.1, defaultRaw: 10, access: 'rw', scale: DIV_10 }),
+  preset(0x2044, 'band6.q', 'Band-6 Q', { min: 0.1, max: 12, step: 0.1, defaultRaw: 7, access: 'rw', scale: DIV_10 }),
 
   preset(0x2045, 'band7.enable', 'Band-7 Enable', { min: 0, max: 1, defaultRaw: 1, access: 'rw' }),
   preset(0x2046, 'band7.type', 'Band-7 Type', { min: 0, max: 4, defaultRaw: 0, access: 'rw' }),
-  preset(0x2047, 'band7.freq', 'Band-7 Freq', { min: 20, max: 20000, unit: 'Hz', defaultRaw: 10000, access: 'rw' }),
+  preset(0x2047, 'band7.freq', 'Band-7 Freq', { min: 20, max: 20000, unit: 'Hz', defaultRaw: 12500, access: 'rw' }),
   preset(0x2048, 'band7.gain', 'Band-7 Gain', { min: -32, max: 12, step: 0.1, unit: 'dB', defaultRaw: 320, access: 'rw', scale: EQ_GAIN_SCALE }),
   preset(0x2049, 'band7.q', 'Band-7 Q', { min: 0.1, max: 12, step: 0.1, defaultRaw: 7, access: 'rw', scale: DIV_10 }),
 
@@ -348,9 +345,9 @@ const PRESET_ROWS: readonly RegisterSpec[] = Object.freeze([
 
   // V0.3 新增（2026-11-16）：RGB 灯效与两个模块级使能位
   preset(RGB_ONOFF_ADDR, 'rgbOnOff', 'RGB 灯效开关', { min: 0, max: 1, defaultRaw: 1, access: 'rw' }),
-  preset(RGB_MODE_ADDR, 'rgbMode', 'RGB 灯效模式', { min: 0, max: 7, access: 'rw' }),
+  preset(RGB_MODE_ADDR, 'rgbMode', 'RGB 灯效模式', { min: 0, max: 6, access: 'rw' }),
   preset(NOISEGATE_ENABLE_ADDR, 'noisegateEnable', 'NoiseGate 使能', { min: 0, max: 1, defaultRaw: 1, access: 'rw' }),
-  preset(DRC3_ENABLE_ADDR, 'drc3Enable', '3BandDrc 使能', { min: 0, max: 1, defaultRaw: 1, access: 'rw' }),
+  preset(DRC3_ENABLE_ADDR, 'drc3Enable', '3BandDrc 使能', { min: 0, max: 1, defaultRaw: 0, access: 'rw' }),
 ]);
 
 export const REGISTERS: readonly RegisterSpec[] = Object.freeze([

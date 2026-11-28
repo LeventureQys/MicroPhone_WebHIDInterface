@@ -120,20 +120,20 @@ describe('1d 条件动作（端点上顺手关模块）', () => {
   });
 });
 
-describe('1e rgb.Mode 按 0..7 取模（不是夹紧）', () => {
-  it('rgb.Mode=7 + more/slight → 0', () => {
-    const result = planToCommand(plan([tune('rgbMode', 'more', 'slight')]), state({ 'rgb.Mode': 7 }), TURN);
+describe('1e rgb.Mode 按 0..6 取模（不是夹紧）', () => {
+  it('rgb.Mode=6 + more/slight → 0', () => {
+    const result = planToCommand(plan([tune('rgbMode', 'more', 'slight')]), state({ 'rgb.Mode': 6 }), TURN);
     expect(result.writes).toEqual([{ param: 'rgb.Mode', value: 0 }]);
   });
 
-  it('rgb.Mode=0 + less/slight → 7', () => {
+  it('rgb.Mode=0 + less/slight → 6', () => {
     const result = planToCommand(plan([tune('rgbMode', 'less', 'slight')]), state({ 'rgb.Mode': 0 }), TURN);
-    expect(result.writes).toEqual([{ param: 'rgb.Mode', value: 7 }]);
+    expect(result.writes).toEqual([{ param: 'rgb.Mode', value: 6 }]);
   });
 
-  it('rgb.Mode=6 + more/strong（+3）→ 1', () => {
+  it('rgb.Mode=6 + more/strong（+3）→ 2', () => {
     const result = planToCommand(plan([tune('rgbMode', 'more', 'strong')]), state({ 'rgb.Mode': 6 }), TURN);
-    expect(result.writes).toEqual([{ param: 'rgb.Mode', value: 1 }]);
+    expect(result.writes).toEqual([{ param: 'rgb.Mode', value: 2 }]);
   });
 });
 
